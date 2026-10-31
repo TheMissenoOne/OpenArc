@@ -22,8 +22,10 @@ const MESSAGES: Record<string, string> = {
   "OARC-E010": "spec is not statically evaluable",
   "OARC-E011": "duplicate region id",
   "OARC-E012": "marker id has no spec",
+  "OARC-E013": "region configured twice: a field set in more than one of JSDoc @arc tags, arc.configure and defineRegion (detail: field:layers)",
   "OARC-W013": "block spec has no markers: place // @openarc:begin/end around the statements by hand",
   "OARC-E020": "implementation not assignable to spec type F",
+  "OARC-E022": "a code-first region needs an explicit return type (arc.todo() would infer never)",
   "OARC-E030": "unmatched marker",
   "OARC-E031": "crossed marker nesting",
   "OARC-E032": "block region outside a function region",
@@ -35,7 +37,7 @@ const MESSAGES: Record<string, string> = {
   "OARC-W042": "block held back: its function can't be verified until all its blocks exist (kept in the cache, committed by a later run)",
   "OARC-W043": "region keeps a body that does not satisfy its current spec (its recompile failed; shown as stale)",
   "OARC-W044": "thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle)",
-  "OARC-W045": "block unverified: no passing example of its function reaches it (not cached as verified, not committed; add an example that does)",
+  "OARC-W045": "region unverified: no passing example or test reaches it (not cached as verified, not committed; add one that does)",
   "OARC-E041": "refine: \"next\" is unsupported in v0",
   "OARC-E050": "unknown manifest schema",
   "OARC-E051": "invalid openarc.config.json",
@@ -43,6 +45,7 @@ const MESSAGES: Record<string, string> = {
   "OARC-E061": "spec changed on a developer-managed region (openarc resolve <id> --keep|--regen)",
   "OARC-E062": "region markers removed (openarc resolve <id> --unlink)",
   "OARC-E063": "region moved to a different parent",
+  "OARC-E064": "@arc id disagrees with the region's markers (the markers are its identity after the first commit)",
   "OARC-E080": "model backend unavailable",
   "OARC-E082": "repair attempts exhausted",
   "OARC-E090": "example failed",
@@ -487,7 +490,7 @@ async function main(argv: string[]): Promise<number> {
       if (cmd.cmd === "graph") {
         const show = (parent: string | null, depth: number) => {
           for (const r of project.regions.filter((x) => x.parent === parent)) {
-            console.log(`${"  ".repeat(depth)}${r.id.padEnd(34 - depth * 2)} ${r.kind === "function" ? "F" : "B"} ${engine.displayState(project, r).padEnd(10)} ${r.spec.examples.length} ex  ${r.file}`);
+            console.log(`${"  ".repeat(depth)}${r.id.padEnd(34 - depth * 2)} ${r.kind === "function" ? "F" : "B"} ${engine.displayState(project, r).padEnd(10)} ${r.spec.examples.length} ex${r.spec.codeFirst ? ` ${r.spec.codeFirst.tests.length} tests` : ""}  ${r.file}`);
             show(r.id, depth + 1);
           }
         };
@@ -501,7 +504,7 @@ async function main(argv: string[]): Promise<number> {
       }
       const state = engine.displayState(project, r);
       const note = state === "stale" ? { stale: "the spec changed since this body was verified; it may not satisfy the current examples (openarc compile)" } : {};
-      console.log(JSON.stringify({ id: r.id, kind: r.kind, file: r.file, parent: r.parent, state, ownership: r.state, ...note, intent: r.spec.intent, examples: r.spec.examples.length, tokens: project.manifest.regions[r.id]?.provenance.tokens ?? null, manifest: project.manifest.regions[r.id] ?? null }, null, 2));
+      console.log(JSON.stringify({ id: r.id, kind: r.kind, file: r.file, parent: r.parent, state, ownership: r.state, ...note, intent: r.spec.intent, examples: r.spec.examples.length, ...(r.spec.codeFirst ? { declaration: r.spec.codeFirst.declaration, tests: r.spec.codeFirst.tests.map((t) => `${t.kind}${t.hidden ? " (hidden)" : ""}: ${t.name}`) } : {}), tokens: project.manifest.regions[r.id]?.provenance.tokens ?? null, manifest: project.manifest.regions[r.id] ?? null }, null, 2));
       return 0;
     }
     case "freeze":
