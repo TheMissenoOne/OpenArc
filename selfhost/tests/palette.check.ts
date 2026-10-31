@@ -1,4 +1,6 @@
 // The palette (src/palette), no model. Run: node tests/palette.check.ts
+// FROZEN: the bundled palette is deprecated and frozen since 0.9.0. This check stays so it keeps working unchanged;
+// don't extend it. User-defined concepts are covered by tests/own-palette.check.ts.
 // 1. The compiler reads it cleanly: concepts, variants, sketches; each hand-written sketch body is contained in its
 //    sketch (E099) and keeps the per-hole rules; every package fits the default 9B budget.
 // 2. Every region's examples, concept laws included (as the compiler expands them), pass through the harness.
@@ -212,6 +214,7 @@ try {
   const refused = tool(dir);
   assert.equal(refused.status, 1, refused.stderr);
   assert.match(refused.stderr, /would be overwritten \(rerun with --force/);
+  assert.match(refused.stderr, /palette: deprecated: the bundled palette is frozen since 0\.9\.0/);
   assert.equal(readFileSync(authCopy, "utf8"), "// my edit\n", "nothing written");
   assert.equal(tool(dir, "--force").status, 0);
   assert.equal(readFileSync(authCopy, "utf8"), pendingCopy(files["src/palette/auth.ts"]!));

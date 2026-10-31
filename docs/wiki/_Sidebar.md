@@ -4,7 +4,7 @@
 - [[Getting Started]]
 - [[Code First]]
 - [[Writing Specs]]
-- [[Palette]]
+- [[Your own palette|Palette]]
 - [[Configuration]]
 - [[Context Packages]]
 - [[Safety Model]]

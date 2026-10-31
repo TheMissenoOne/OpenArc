@@ -198,4 +198,6 @@ It refuses regions with block children, sketches, UI structures, concept variant
 
 From the design's later phases: laws over every implementation of an interface (`arc.law(arc.implementations<I>(), …)`) with `@arc waive`, `arc.implement<I>()` scaffolding, in-place sketches (`arc.hole` inside an ordinary body), and atomic-design TSX regions with `arc.render`. Until then, sketches, concepts and UI specs work through `defineRegion` (see [[Writing Specs]]).
 
+To build reusable building blocks of your own (concepts with laws, variants, code-first classes and tests, exported from your project or your own package), see [[Your own palette|Palette]].
+
 A full project: [`examples/code-first-demo`](https://github.com/TheMissenoOne/OpenArc/tree/main/examples/code-first-demo).

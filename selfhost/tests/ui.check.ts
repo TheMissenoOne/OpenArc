@@ -1,4 +1,6 @@
 // UI structure specs (SPEC §2.6), no model. Run: node tests/ui.check.ts
+// The mechanism is supported. FROZEN parts: the built-in open-arc/ui vocabulary and the palette's LoginPage are
+// deprecated and frozen since 0.9.0; their cases stay so they keep working unchanged.
 // 1. The `ui:` JSX in a *.spec.tsx is read statically into a tree; spreads, child expressions (.map, conditionals),
 //    computed attributes and words outside the vocabulary are E010. Scaffolding puts the region in the sibling .tsx.
 // 2. The package carries the structure and what its words mean; react is an allowed import.

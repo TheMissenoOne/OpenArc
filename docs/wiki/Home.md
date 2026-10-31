@@ -18,7 +18,7 @@ The hypothesis behind it:
 - [[Getting Started]]: install, init, compile your first region
 - [[Code First]]: the main way since 0.9.0: pending bodies in functions and classes, JSDoc intent, `arc.test`, hidden tests, laws
 - [[Writing Specs]]: code first in brief, then `defineRegion`, examples, blocks, sketches, concepts, TSX UI specs
-- [[Palette]]: reusable concepts that ship with OpenArc (auth, load balancer, p2p protocol, login page)
+- [[Your own palette|Palette]]: build your own reusable concepts: laws, variants, sketches, code-first classes and tests (the bundled palette is deprecated and frozen since 0.9.0)
 - [[Configuration]]: `openarc.config.json`; local Ollama or APIs (OpenAI, OpenRouter, Anthropic…) per region
 - [[Context Packages]]: how much the model sees, and when that grows
 - [[Safety Model]]: what the model can and cannot touch, enforced in code

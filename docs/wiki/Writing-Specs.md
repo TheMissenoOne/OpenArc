@@ -219,7 +219,7 @@ export const apiKeySpec = arc.defineRegion<Strategy<ApiKeyCred>>({
 - `waive` skips a law with a reason; `compile` prints it and the manifest provenance records it.
 - Changing a law recompiles every variant. A region that calls a variant sees its signature and the concept's one-line summary, never its body.
 
-The [[Palette]] is a library of concepts (auth, load balancing, a p2p protocol, a login page) built this way.
+To build a library of your own concepts (a worked `cache` concept with LRU and TTL variants), see [[Your own palette|Palette]]. The bundled palette built this way (auth, load balancing, p2p, a login page) is deprecated and frozen since 0.9.0.
 
 ## UI specs: TSX structure
 
@@ -253,7 +253,7 @@ export const loginPageSpec = arc.defineRegion<LoginPageFn>({
 });
 ```
 
-- **Vocabulary:** `Form`, `Field`, `ErrorText`, `Submit` (from `open-arc/ui`). tsc checks the attributes; the compiler reads the tree without running it. Spreads, `.map`, conditionals, computed attributes and other tags are `OARC-E010` (`ui:*`): repetition and conditions belong in the intent.
+- **Vocabulary:** `Form`, `Field`, `ErrorText`, `Submit` (from `open-arc/ui`). tsc checks the attributes; the compiler reads the tree without running it. Spreads, `.map`, conditionals, computed attributes and other tags are `OARC-E010` (`ui:*`): repetition and conditions belong in the intent. This built-in vocabulary is deprecated and frozen since 0.9.0: it keeps working unchanged, and the mechanism (the static reader, the DOM harness, `ui.dom`) stays supported; project-defined vocabularies come with code-first phase 5.
 - **Checks, in a DOM in the sandbox:** derived structure and accessibility (each Field is an input whose accessible name is its label, with the right name, type, required and autocomplete; an alert for ErrorText; a submit button named by its text), a derived **wiring** example (fill every field, submit, the prop `Form onSubmit` points to is called once with `{ name: value }`, and while it is pending the submit button is disabled and shows `busyText`), then your examples: `script` steps (`fill` by label, `click` by role and name), `dom` assertions (`text`, `notText`, `enabled`, `disabled`) and `fakesAfter`.
 - **`action#<name>`** is a built-in fake: a function that records its calls and returns `init.returns` in order.
 - **Setup:** `"ui": { "dom": "jsdom" }` in `openarc.config.json`, and `jsdom`, `react`, `react-dom` (plus `@types/react` and `"jsx": "react-jsx"` in tsconfig) in the project. Without them a UI region is `OARC-E092` (`dom:not-configured`, `dom:jsdom-missing`, …) before any model call.

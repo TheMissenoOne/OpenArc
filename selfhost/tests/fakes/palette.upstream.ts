@@ -4,6 +4,7 @@
 import { defineFake } from "open-arc";
 import type { Upstream } from "../../src/palette/loadBalancer.ts";
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export default defineFake<Upstream>((init) => {
   const i = (init ?? {}) as { down?: string[]; dead?: string[] };
   const sent: string[] = [];

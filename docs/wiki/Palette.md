@@ -1,91 +1,141 @@
-# Palette
+# Building your own palette
 
-The palette is OpenArc's library of reusable concepts: high-level building blocks such as authentication, a load balancer or a peer-to-peer protocol, written as **structure** (types, laws, examples, sketches, UI trees) instead of prose prompts. It ships with OpenArc in two forms:
+A palette is a library of reusable concepts: building blocks written as **structure** (types, laws, examples, sketches, code-first classes and tests) instead of prose prompts. OpenArc gives you the machinery; the concepts are yours. Write them in your project, or in a package of your own that exports concepts and helpers, and import them like any module.
 
-- **Import it:** `import { password } from "open-arc/palette/auth"` gives you the hand-written implementation, which passes every law and example below.
-- **Copy it:** the sources are in the package under `palette/` (and in `stage0/src/palette/` in the repository). Put a file in your `src/`, its fakes from `palette/fakes/` in your `tests/fakes/`, and OpenArc compiles, checks and lets you extend it like any of your specs. `examples/palette-demo/` is a project that does exactly that.
+Everything on this page is fully supported:
 
-Since 0.8.0. The building blocks it uses (sketches, concepts, UI specs) are described in [[Writing Specs]].
+| Piece | What it gives your palette | Docs |
+|---|---|---|
+| `arc.defineConcept` | one contract (an interface type, an intent, **laws**) that every variant must pass | below, [[Writing Specs]] |
+| Variants | ordinary regions with `concept: "<id>"`, their own `fixtures`, examples and `waive` | below |
+| Sketches, `arc.hole` | the structure of a body as code, with only the gaps left to the model | [[Writing Specs]] |
+| Code-first classes, interfaces, tests | `return arc.todo();` in a member, `arc.test`, `arc.test.hidden` | [[Code First]] |
+| `arc.law` | a property checked on seeded random inputs | [[Code First]] |
+| Fakes | ports a law can count and inspect | [[Fakes]] |
+| Modules | a concept and its helpers are exports: a user of a variant sees its signature and the concept's one-line summary, never its body | [[Context Packages]] |
 
-## Catalogue
+## A worked example: a `cache` concept
 
-| Concept | File | Variants and regions | Laws (every variant runs them) | Ports and fakes |
-|---|---|---|---|---|
-| `auth` (interface `Strategy<C>`) | `auth.ts` | `auth.password` (sketch), `auth.apiKey` (prose), `auth.magicLink` (sketch); helper `auth.splitToken` | a valid credential authenticates · a wrong secret is rejected · an unknown user gets the same answer as a wrong secret · a constant-time compare is used · an unknown user still costs one compare | `AuthPorts`: user store, hasher (`hash`, constant-time `equal`), clock. Fake `palette.auth` counts `equal` calls, so a body that compares with `===` fails a law |
-| `lbStrategy` (interface `Strategy`) | `loadBalancer.ts` | `lb.roundRobin`, `lb.leastConnections`, `lb.weighted` (smooth weighted round-robin), `lb.consistentHash` (sketch); `lb.hash32`, `lb.healthCheck`, `lb.failover` (sketch) | never route to an unhealthy backend · no healthy backend: every request gets null · no backends at all · an empty batch routes nothing · equal backends share requests evenly (waived by consistent-hash) | `Clock` (`palette.clock`), `Upstream` (`palette.upstream`: `down` backends answer an error, `dead` ones reject) |
-| `framing` (interface `Decoder`) | `p2p.ts` | `p2p.decodeLengthPrefixed` (4-byte big-endian), `p2p.decodeVarint` (LEB128); `p2p.encodeLengthPrefixed`, `p2p.encodeVarint`, `p2p.handshake`, `p2p.peerTable`, `p2p.onGossip`, `p2p.broadcast` | whole frames decode in order · a frame split across chunks is reassembled · an incomplete frame is kept as `rest` · an empty message survives · no input, no messages · UTF-8 round trip | `Transport` (`palette.net`: N peers joined by links, FIFO delivery, so multi-peer examples are deterministic) |
-| `ui.loginPage` (UI) | `loginPage.spec.tsx`, `loginPage.tsx` | a React login form: email and password fields, an alert for errors, a submit button with a busy state | derived: structure, accessible names, wiring of the form to `props.onLogin`; examples: wrong password, success, a second attempt | `action#onLogin`, `action#onSuccess`; needs `"ui": {"dom": "jsdom"}` |
-
-Variant-specific examples carry the rest: round-robin is fair over N picks, least-connections picks the minimum, consistent-hash moves only the keys a removed node owned, a locked account is reported only after the password matched, an expired magic link says so only when its secret matched, a magic link signs in at most once (the store's `consumeMagicLink` is an atomic compare-and-set, and a request that loses the claim to a concurrent one gets `invalid`), a varint cut in the middle waits for more bytes, the handshake rejects a version mismatch, gossip delivers each message once per peer and stops at its TTL. `stage0/tests/palette.check.ts` also checks the properties on generated inputs (consistent-hash stability over 2,000 keys and five removals, fairness, least-connections over random states, encode/decode round trips under random chunking) and shows that broken bodies fail the laws.
-
-`examples/palette-demo/` uses them: `app.login` (a sketch around `auth.password` that opens a session), `app.serve` (health checks, consistent-hash routing and failover for one request), `app.connect` (two peers negotiate a version) and `app.gossip3` (a 3-peer broadcast over the fake network).
-
-## Writing your own concept
-
-A concept is an interface (a TypeScript type), an intent and laws. A variant is an ordinary region that names the concept and supplies the fixtures the laws mention:
+A bounded key-value cache with two laws (get after set, eviction bound) and two variants (LRU and TTL). The variants are functions that run a list of operations against a new cache, so the laws can be plain JSON. The same file with hand-written bodies in place of the two pending ones is [`stage0/tests/fixtures/own-palette/src/cache.ts`](https://github.com/TheMissenoOne/OpenArc/blob/main/stage0/tests/fixtures/own-palette/src/cache.ts): `stage0/tests/own-palette.check.ts` type-checks it and runs every law and example against both variants.
 
 ```ts
-export type Strategy<C> = (cred: C, ports: AuthPorts) => Promise<AuthResult>;
+// src/palette/cache.ts
+import * as arc from "open-arc";
 
-export const authConcept = arc.defineConcept({
-  id: "auth",
-  interface: "Strategy",                    // optional: every variant's F must be Strategy<…> (else E020)
-  intent: "Authenticate one credential. An unknown user gets the same answer as a wrong secret.",
+/** One operation on the cache. `tick` advances the cache's clock by `ms`. */
+export type Op = { op: "set"; key: string; value: string } | { op: "get"; key: string } | { op: "size" } | { op: "tick"; ms: number };
+/** What a `get` (the value, or null on a miss) or a `size` (the number of live entries) answers. */
+export type Reply = string | number | null;
+export interface CacheConfig { capacity: number; ttlMs?: number }
+/** The concept's interface: run `ops` in order against a new, empty cache whose clock starts at 0. */
+export type CacheRun = (config: CacheConfig, ops: Op[]) => Reply[];
+
+export const cacheConcept = arc.defineConcept({
+  id: "cache",
+  interface: "CacheRun",            // every variant's F must be CacheRun (else OARC-E020)
+  intent: "A bounded key-value cache: never more than config.capacity live entries; a get answers the last value set for its key unless the entry was evicted or expired.",
   laws: [
-    { name: "wrong secret is rejected", args: ["$fixture:wrong", "$fixture:ports"], expected: { ok: false, reason: "invalid" } },
-    { name: "constant-time compare used", args: ["$fixture:valid", "$fixture:ports"], expected: { ok: true, userId: "u1" },
-      fakesAfter: { "palette.auth": { compares: 1 } } },
+    { name: "get after set returns the value",
+      args: ["$fixture:small", [{ op: "set", key: "a", value: "1" }, { op: "set", key: "a", value: "2" }, { op: "get", key: "a" }]],
+      expected: ["2"] },
+    { name: "eviction bound: never more entries than capacity",
+      args: ["$fixture:small", [{ op: "set", key: "a", value: "1" }, { op: "set", key: "b", value: "2" }, { op: "set", key: "c", value: "3" }, { op: "size" }]],
+      expected: [2] },
   ],
 });
 
-export const pinSpec = arc.defineRegion<Strategy<{ pin: string }>>({
-  id: "auth.pin",
-  concept: "auth",
-  intent: "A 4-digit PIN.",
-  fixtures: { ports: { $fake: "palette.auth", init: { … } }, valid: { pin: "1234" }, wrong: { pin: "0000" } },
-  // waive: { "<a law of auth>": "why it can't apply to a PIN" },   only when a law really can't apply to this variant
+export const lruSpec = arc.defineRegion<CacheRun>({
+  id: "cache.lru",
+  concept: "cache",
+  intent: "Least recently used: when full, a set evicts the entry that was set or read longest ago. Ignores ttlMs.",
+  fixtures: { small: { capacity: 2 } },
+  examples: [
+    { name: "a get makes the entry recent",
+      args: [{ capacity: 2 }, [{ op: "set", key: "a", value: "1" }, { op: "set", key: "b", value: "2" }, { op: "get", key: "a" },
+                               { op: "set", key: "c", value: "3" }, { op: "get", key: "a" }, { op: "get", key: "b" }]],
+      expected: ["1", "1", null] },
+    { name: "a miss is null", args: [{ capacity: 1 }, [{ op: "get", key: "x" }, { op: "size" }]], expected: [null, 0] },
+  ],
+});
+// @openarc:begin cache.lru
+export const lru: CacheRun = (config, ops) => arc.todo("cache.lru");
+// @openarc:end cache.lru
+
+export const ttlSpec = arc.defineRegion<CacheRun>({
+  id: "cache.ttl",
+  concept: "cache",
+  intent: "Time to live: an entry expires ttlMs after it was set (never when ttlMs is absent); when full, a set evicts the oldest entry. A get doesn't refresh an entry.",
+  fixtures: { small: { capacity: 2, ttlMs: 1000 } },
+  examples: [
+    { name: "an entry expires ttlMs after it was set",
+      args: [{ capacity: 2, ttlMs: 100 }, [{ op: "set", key: "a", value: "1" }, { op: "tick", ms: 99 }, { op: "get", key: "a" },
+                                           { op: "tick", ms: 1 }, { op: "get", key: "a" }, { op: "size" }]],
+      expected: ["1", null, 0] },
+    { name: "full: the oldest entry goes, reads don't refresh it",
+      args: [{ capacity: 2, ttlMs: 100 }, [{ op: "set", key: "a", value: "1" }, { op: "set", key: "b", value: "2" }, { op: "get", key: "a" },
+                                           { op: "set", key: "c", value: "3" }, { op: "get", key: "a" }, { op: "get", key: "b" }]],
+      expected: ["1", null, "2"] },
+  ],
+});
+// @openarc:begin cache.ttl
+export const ttl: CacheRun = (config, ops) => arc.todo("cache.ttl");
+// @openarc:end cache.ttl
+```
+
+What happens:
+
+- **Laws become examples.** Each variant gets `law: get after set returns the value` and `law: eviction bound: never more entries than capacity` as its first examples, with `"$fixture:small"` replaced by its own fixture: `{ capacity: 2 }` for LRU, `{ capacity: 2, ttlMs: 1000 }` for TTL. Laws are authoritative, like your own examples.
+- **Laws have teeth.** An LRU body that forgets to evict passes "get after set" but fails `law: eviction bound` (and "a get makes the entry recent"), so it is never committed. `own-palette.check.ts` checks exactly that.
+- **Variant examples carry the rest:** LRU's recency, TTL's expiry and its oldest-first eviction.
+- **A law that can't apply** to a variant gets `waive: { "<law>": "<reason>" }`; the reason is printed when the variant compiles and stored in the manifest.
+- **Users see the contract, not the code.** A region that imports `lru` sees its signature plus `// variant of concept cache: <intent> Laws: …`.
+
+To add a variant, write a region with `concept: "cache"` and the fixtures the laws name; the laws come with it. Make laws about what every variant must do, and give them teeth through fakes when a variant has effects: a fake that counts calls turns "uses a constant-time compare" into an exact expectation (see [[Fakes]]).
+
+## Code-first pieces in your palette
+
+Classes, interfaces and tests in your palette are plain code-first TypeScript (see [[Code First]]): an interface is the contract, a class implements it with `return arc.todo();` in the members you want written, and `arc.test` / `arc.law` check it.
+
+```ts
+/** A bounded cache. */
+export interface Cache {
+  get(key: string): string | null;
+  set(key: string, value: string): void;
+  readonly size: number;
+}
+
+export class LruCache implements Cache {
+  readonly entries = new Map<string, string>();
+  readonly capacity: number;
+  constructor(capacity: number) {
+    this.capacity = capacity;
+  }
+  get size(): number { return this.entries.size; }
+  /** The value, made most recent; null on a miss. */
+  get(key: string): string | null { return arc.todo(); }
+  /** Store the value; when over capacity, drop the least recently used entry. */
+  set(key: string, value: string): void { return arc.todo(); }
+}
+
+arc.law(LruCache, "eviction bound", (C, expect, gen) => {
+  const c = new C(gen.int(1, 4));
+  for (const k of gen.array((g) => g.string({ max: 3 }), { max: 20 })) c.set(k, "v");
+  expect(c.size <= c.capacity).toBe(true);
 });
 ```
 
-- Each law becomes an example of the variant named `law: <name>`, with every `"$fixture:<name>"` replaced by the variant's fixture. Laws are authoritative, like your own examples.
-- Make laws about what every variant must do, and give them teeth through fakes: a fake that counts constant-time compares turns "uses a constant-time compare" into an exact expectation.
-- A law that can't apply needs a `waive` with a reason; the reason is printed when the variant compiles and stored in the manifest.
-- Laws that hold for every variant can be written with literal arguments and no fixtures at all, as the `lbStrategy` laws are.
-- Users of a variant see its signature and the concept's one-line summary in their context package, never its body.
+This class is [`stage0/tests/fixtures/own-palette/src/lruCache.ts`](https://github.com/TheMissenoOne/OpenArc/blob/main/stage0/tests/fixtures/own-palette/src/lruCache.ts) and type-checks as written, pending bodies included. `arc.law` targets one class. Laws over every implementation of an interface (`arc.law(arc.implementations<I>(), …)`) come in a later code-first phase; until then, a law shared by several implementations is a concept's law, as in the worked example.
 
-## Using sketches
+## Sketches in your palette
 
-When you know the shape of a function, write it, and leave holes only where you want the model:
+When you know the shape of a variant, give its region a `sketch:` instead of a pending body: the body as typed code with `arc.hole<T>("…")` where you want the model. The model writes only the fills; the compiler splices them and checks that nothing else changed (`OARC-E099`), and every hole must be reached by a passing example (`OARC-W045`). Laws reach sketch variants like any other. See [[Writing Specs]].
 
-```ts
-sketch: async (cred, ports) => {
-  const email = arc.hole<string>("cred.email trimmed and lower-cased");
-  const user = await ports.users.findByEmail(email);
-  const stored = user?.passwordHash ?? ports.hasher.dummyHash;
-  const match = ports.hasher.equal(await ports.hasher.hash(cred.password, stored), stored);
-  if (user === null || !match) {
-    arc.hole("if the user exists, record the failure for user.id");
-    return { ok: false, reason: "invalid" };
-  }
-  if (arc.hole<boolean>("the account is locked at ports.clock.now()")) return { ok: false, reason: "locked" };
-  return { ok: true, userId: user.id };
-},
-```
+## UI in your palette
 
-The model writes three short fills; the compiler splices them and checks that nothing else changed (E099). Every hole must be reached by a passing example (W045), and an example that fails before any hole is reported at once (E100), because only you can fix it.
+The TSX UI spec mechanism (the static reader, the DOM harness, `"ui": { "dom": "jsdom" }`) is supported. Today it reads only the built-in `open-arc/ui` vocabulary (`Form`, `Field`, `ErrorText`, `Submit`), which is deprecated and frozen since 0.9.0: it keeps working unchanged. Project-defined vocabularies (atomic-design TSX with `arc.render`) come with code-first phase 5. See [[Writing Specs]].
 
-## Using TSX UI specs
+## Bundled palette (deprecated, frozen)
 
-```tsx
-/** @jsxImportSource open-arc/ui */
-ui: (props) => (
-  <Form title="Sign in" onSubmit={props.onLogin} onSuccess={props.onSuccess}>
-    <Field name="email" type="email" label="Email" required autoComplete="username" />
-    <Field name="password" secret label="Password" required autoComplete="current-password" />
-    <ErrorText />
-    <Submit busyText="Signing in…">Sign in</Submit>
-  </Form>
-),
-```
+OpenArc 0.8.0 shipped a palette: `open-arc/palette/auth` (concept `auth`: password, API key, magic link), `loadBalancer` (concept `lbStrategy`: round-robin, least connections, weighted, consistent hash; health checks, failover), `p2p` (concept `framing`: length-prefixed and varint decoders; handshake, peer table, gossip), and the `loginPage` UI spec, with fakes `palette.auth`, `palette.clock`, `palette.upstream`, `palette.net`. `examples/palette-demo/` uses it, and `stage0/tools/palette.ts` writes a pending copy into a project.
 
-The component is compiled into the sibling `.tsx` and checked in a real DOM inside the sandbox: the structure and accessible names, the wiring (fill every field, submit, `props.onLogin` gets `{ email, password }`), and your interaction scripts. Add `"ui": { "dom": "jsdom" }` to `openarc.config.json` and install `jsdom`, `react` and `react-dom` as devDependencies.
+Since 0.9.0 it is **deprecated and frozen**: it keeps working and shipping with no behaviour changes, so code written against 0.8.0 still runs, and every exported symbol carries a JSDoc `@deprecated` tag. It won't grow: build the concepts you need as above. Its sources and laws are documented in [`stage0/src/palette/README.md`](https://github.com/TheMissenoOne/OpenArc/blob/main/stage0/src/palette/README.md).

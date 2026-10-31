@@ -63,7 +63,7 @@ npx openarc compile          # or keep it running: npx openarc watch
 | Sketches | The body as typed code with `arc.hole<T>("…")` gaps; only the holes are generated | [Writing Specs](https://github.com/TheMissenoOne/OpenArc/wiki/Writing-Specs#sketches-structure-as-code) |
 | Concepts | One contract with laws, many variants that must pass them | [Writing Specs](https://github.com/TheMissenoOne/OpenArc/wiki/Writing-Specs#concepts-one-contract-many-variants) |
 | TSX UI specs | A component's rough structure in TSX, checked in a real DOM inside the sandbox | [Writing Specs](https://github.com/TheMissenoOne/OpenArc/wiki/Writing-Specs#ui-specs-tsx-structure) |
-| The palette | Ready concepts: auth (password, API key, magic link), load balancer, p2p protocol, login page | [Palette](https://github.com/TheMissenoOne/OpenArc/wiki/Palette) |
+| **Your own palette** | Concepts with laws, sketches, code-first classes: reusable building blocks you write, in your project or your own package | [Your own palette](https://github.com/TheMissenoOne/OpenArc/wiki/Palette) |
 | Watch mode | `openarc watch` recompiles regions as you save, one at a time | [Watch Mode](https://github.com/TheMissenoOne/OpenArc/wiki/Watch-Mode) |
 | `extract` | Adopt functions you already have as regions (bodies kept); code-first by default, `--style region` for specs | [Adopting Existing Code](https://github.com/TheMissenoOne/OpenArc/wiki/Adopting-Existing-Code) |
 | `migrate` | Turn one `defineRegion` region into code-first form, keeping its id, ownership and provenance | [Code First](https://github.com/TheMissenoOne/OpenArc/wiki/Code-First#migrating-a-defineregion-region) |
@@ -72,6 +72,8 @@ npx openarc compile          # or keep it running: npx openarc watch
 | Providers | Ollama by default; `init --backend openrouter\|openai\|anthropic\|local`; `backends test` sends one request | [Configuration](https://github.com/TheMissenoOne/OpenArc/wiki/Configuration) |
 | Output formats | `outputFormat: "json"` (a JSON body) or `"code"` (a fenced code block) per backend or region | [Configuration](https://github.com/TheMissenoOne/OpenArc/wiki/Configuration) |
 | Throws examples, token accounting | `{ throws: "message" }` examples; prompt and completion tokens per region in the manifest | [Writing Specs](https://github.com/TheMissenoOne/OpenArc/wiki/Writing-Specs#examples-that-throw) |
+
+**Deprecated:** the bundled palette (`open-arc/palette/*`, `examples/palette-demo`) and the built-in `open-arc/ui` vocabulary (`Form`, `Field`, `ErrorText`, `Submit`) are frozen since 0.9.0: they keep working unchanged, and the mechanisms they use stay supported.
 
 **Safety, enforced in code rather than in the prompt:** the model returns a body and never writes files; everything outside the body must stay byte-identical (`OARC-E097`); a `calls` allowlist limits what a body may call (`OARC-E098`); a body counts as verified only if a passing test or example actually runs it (`OARC-W045`); tests and examples run in a sandbox whose strength depends on the OS (below). See [Safety Model](https://github.com/TheMissenoOne/OpenArc/wiki/Safety-Model).
 
@@ -107,7 +109,7 @@ Alpha: the compiler's guarantees (write scope, sandbox, ownership) are tested on
 - [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) Self-hosting: stage 1 and stage 2
 - [#15](https://github.com/TheMissenoOne/OpenArc/issues/15) Known limitations from the benchmark and reviews
 - [#7](https://github.com/TheMissenoOne/OpenArc/issues/7) VS Code extension
-- [#12](https://github.com/TheMissenoOne/OpenArc/issues/12) Palette (done in 0.8.0)
+- [#12](https://github.com/TheMissenoOne/OpenArc/issues/12) Palette (done in 0.8.0; the bundled palette is deprecated and frozen since 0.9.0)
 
 
 ## Requirements

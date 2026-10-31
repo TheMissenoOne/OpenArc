@@ -63,7 +63,7 @@ npx openarc compile          # or keep it running: npx openarc watch
 | Sketches | The body as typed code with `arc.hole<T>("…")` gaps; only the holes are generated | [Writing Specs](docs/wiki/Writing-Specs.md#sketches-structure-as-code) |
 | Concepts | One contract with laws, many variants that must pass them | [Writing Specs](docs/wiki/Writing-Specs.md#concepts-one-contract-many-variants) |
 | TSX UI specs | A component's rough structure in TSX, checked in a real DOM inside the sandbox | [Writing Specs](docs/wiki/Writing-Specs.md#ui-specs-tsx-structure) |
-| The palette | Ready concepts: auth (password, API key, magic link), load balancer, p2p protocol, login page | [Palette](docs/wiki/Palette.md) |
+| **Your own palette** | Concepts with laws, sketches, code-first classes: reusable building blocks you write, in your project or your own package | [Your own palette](docs/wiki/Palette.md) |
 | Watch mode | `openarc watch` recompiles regions as you save, one at a time | [Watch Mode](docs/wiki/Watch-Mode.md) |
 | `extract` | Adopt functions you already have as regions (bodies kept); code-first by default, `--style region` for specs | [Adopting Existing Code](docs/wiki/Adopting-Existing-Code.md) |
 | `migrate` | Turn one `defineRegion` region into code-first form, keeping its id, ownership and provenance | [Code First](docs/wiki/Code-First.md#migrating-a-defineregion-region) |
@@ -72,6 +72,8 @@ npx openarc compile          # or keep it running: npx openarc watch
 | Providers | Ollama by default; `init --backend openrouter\|openai\|anthropic\|local`; `backends test` sends one request | [Configuration](docs/wiki/Configuration.md) |
 | Output formats | `outputFormat: "json"` (a JSON body) or `"code"` (a fenced code block) per backend or region | [Configuration](docs/wiki/Configuration.md) |
 | Throws examples, token accounting | `{ throws: "message" }` examples; prompt and completion tokens per region in the manifest | [Writing Specs](docs/wiki/Writing-Specs.md#examples-that-throw) |
+
+**Deprecated:** the bundled palette (`open-arc/palette/*`, `examples/palette-demo`) and the built-in `open-arc/ui` vocabulary (`Form`, `Field`, `ErrorText`, `Submit`) are frozen since 0.9.0: they keep working unchanged, and the mechanisms they use stay supported.
 
 **Safety, enforced in code rather than in the prompt:** the model returns a body and never writes files; everything outside the body must stay byte-identical (`OARC-E097`); a `calls` allowlist limits what a body may call (`OARC-E098`); a body counts as verified only if a passing test or example actually runs it (`OARC-W045`); tests and examples run in a sandbox whose strength depends on the OS (below). See [Safety Model](docs/wiki/Safety-Model.md).
 
@@ -107,7 +109,7 @@ Alpha: the compiler's guarantees (write scope, sandbox, ownership) are tested on
 - [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) Self-hosting: stage 1 and stage 2
 - [#15](https://github.com/TheMissenoOne/OpenArc/issues/15) Known limitations from the benchmark and reviews
 - [#7](https://github.com/TheMissenoOne/OpenArc/issues/7) VS Code extension
-- [#12](https://github.com/TheMissenoOne/OpenArc/issues/12) Palette (done in 0.8.0)
+- [#12](https://github.com/TheMissenoOne/OpenArc/issues/12) Palette (done in 0.8.0; the bundled palette is deprecated and frozen since 0.9.0)
 
 ## Repository layout
 
@@ -118,7 +120,7 @@ Alpha: the compiler's guarantees (write scope, sandbox, ownership) are tested on
 | `selfhost/` | OpenArc as an OpenArc project: the same hand-written files, with regions compiled by OpenArc itself |
 | `examples/code-first-demo/` | code-first: load balancer classes, a p2p framing and gossip peer, a login adapter, with tests, a hidden test and laws |
 | `examples/demo/` | the smallest `defineRegion` project |
-| `examples/palette-demo/` | the palette in use: a login flow and page, a load-balanced service, a 3-peer gossip network |
+| `examples/palette-demo/` | the bundled palette in use (deprecated, frozen): a login flow and page, a load-balanced service, a 3-peer gossip network |
 | `bench/` | the benchmark harness (on the draft PR [#5](https://github.com/TheMissenoOne/OpenArc/pull/5) branch) |
 | `vscode-extension/` | a VS Code extension: regions, states and commands in the editor ([#7](https://github.com/TheMissenoOne/OpenArc/issues/7)) |
 | `docs/wiki/` | the wiki's source |
@@ -129,7 +131,7 @@ Alpha: the compiler's guarantees (write scope, sandbox, ownership) are tested on
 ```bash
 cd stage0 && npm i && npx tsc -p . && node tools/run-examples.ts --strict   # 43/43 classic regions (24 compiler + 19 palette)
 (cd tests/fixtures/ui && npm i)                                              # optional: jsdom + react, so ui.check runs the DOM
-for f in tests/*.check.ts; do node $f; done                                   # 19 checks, no model; several run the real sandbox
+for f in tests/*.check.ts; do node $f; done                                   # 20 checks, no model; several run the real sandbox
 node tools/build.ts && (cd build && npm pack)                                # build/open-arc-x.y.z.tgz
 cd ../selfhost && npm i && npx openarc compile --keep-going                  # OpenArc compiling OpenArc
 ```

@@ -7,13 +7,17 @@ import * as arc from "open-arc";
 import { ErrorText, Field, Form, Submit } from "open-arc/ui";
 import type { PasswordCred } from "./auth.ts";
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export type LoginOutcome = { ok: true } | { ok: false; error: string };
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export type LoginPageProps = {
   onLogin: (cred: PasswordCred) => Promise<LoginOutcome>;
   onSuccess: (result: LoginOutcome) => void;
 };
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export type LoginPageFn = (props: LoginPageProps) => unknown;
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const loginPageSpec = arc.defineRegion<LoginPageFn>({
   id: "ui.loginPage",
   symbol: "LoginPage",
