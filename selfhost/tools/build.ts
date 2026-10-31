@@ -15,6 +15,10 @@ writeFileSync(`${root}/build/package.json`, JSON.stringify({
   description: "Compile typed specs into verified TypeScript with small local models: per-function context, sandboxed examples, never overwrites your edits.",
   type: "module",
   license: "MIT",
+  repository: { type: "git", url: "git+https://github.com/TheMissenoOne/OpenArc.git" },
+  homepage: "https://github.com/TheMissenoOne/OpenArc/wiki",
+  bugs: "https://github.com/TheMissenoOne/OpenArc/issues",
+  keywords: ["llm", "compiler", "typescript", "codegen", "ollama", "local-llm", "spec", "verification"],
   bin: { openarc: "dist/src/main.js" },
   exports: {
     ".": { types: "./dist/core/index.d.ts", default: "./dist/core/index.js" },

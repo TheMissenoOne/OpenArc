@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // `openarc` CLI entry point. Hand-written: the real ports plus command dispatch.
 import { mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, watch } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -11,6 +11,8 @@ import { run } from "./compile.ts";
 import { commit, planJournal } from "./txn.ts";
 import * as engine from "./engine.ts";
 import { DEFAULT_CONFIG, hostOf } from "./config.ts";
+import { clearStaleLock, releaseOwnLock } from "./lock.ts";
+import { createWatcher, type RegionKey } from "./watcher.ts";
 
 const MESSAGES: Record<string, string> = {
   "OARC-W001": "'@openarc:' text that is not a valid marker",
@@ -87,7 +89,9 @@ export function realPorts(root: string): Ports {
       async createExclusive(rel) {
         await mkdir(dirname(p(rel)), { recursive: true });
         try {
-          await (await open(p(rel), "wx")).close();
+          const h = await open(p(rel), "wx");
+          await h.writeFile(String(process.pid)); // lock.ts tells a held lock from one left by a crash
+          await h.close();
           return true;
         } catch {
           return false;
@@ -180,7 +184,7 @@ async function main(argv: string[]): Promise<number> {
 
   switch (cmd.cmd) {
     case "usage":
-      console.error(`openarc: ${cmd.reason}\n\nusage: openarc init | scaffold | compile [--keep-going] [ids...] | graph | inspect <id>\n       openarc freeze|release <id> | resolve <id> --keep|--regen|--unlink\n       openarc extract <file> [--function <name>] [--id <id>]`);
+      console.error(`openarc: ${cmd.reason}\n\nusage: openarc init | scaffold | compile [--keep-going] [ids...] | watch [--debounce <ms>] | graph | inspect <id>\n       openarc freeze|release <id> | resolve <id> --keep|--regen|--unlink\n       openarc extract <file> [--function <name>] [--id <id>]`);
       return 2;
     case "init": {
       const wrote: string[] = [];
@@ -194,7 +198,7 @@ async function main(argv: string[]): Promise<number> {
       await put("tsconfig.json", JSON.stringify(TSCONFIG, null, 2) + "\n");
       await put(manifestPath, '{\n  "schema": 1,\n  "regions": {}\n}\n');
       await put(".openarc/harness.mjs", 'import { main } from "openarc/harness";\nawait main("/work", process.argv[2]);\n');
-      await put(".openarc/.gitignore", "lock\nsandbox/\ntxn/\n");
+      await put(".openarc/.gitignore", "lock\nsandbox/\ntxn/\nwatch-history.jsonl\n");
       console.log(wrote.length ? `created: ${wrote.join(", ")}` : "already initialised");
       return 0;
     }
@@ -206,6 +210,7 @@ async function main(argv: string[]): Promise<number> {
       return diagnostics.some((d) => d.code.startsWith("OARC-E")) ? 1 : 0;
     }
     case "compile": {
+      clearStaleLock(root, (l) => console.error(l));
       const pre: Diagnostic[] = [];
       const project = await engine.parse(ports, request(root, null, []), pre);
       const t0 = Date.now();
@@ -225,6 +230,7 @@ async function main(argv: string[]): Promise<number> {
       for (const n of res.skipped) console.log(`already a region: ${n}`);
       for (const r of res.refused) console.error(`refused ${r.name}: ${r.reason}`);
       if (res.files.length) {
+        clearStaleLock(root, (l) => console.error(l));
         if (!(await ports.fs.createExclusive(".openarc/lock"))) {
           console.error(fmt({ code: "OARC-E095" }));
           return 1;
@@ -239,6 +245,66 @@ async function main(argv: string[]): Promise<number> {
         console.log(`extracted (developer-owned): ${res.extracted.join(", ")}\nreview the [inferred] intents, add examples, then \`openarc release <id>\` to hand a region to the compiler`);
       } else if (!res.refused.length) console.log("nothing to extract");
       return res.refused.length ? 1 : 0;
+    }
+    case "watch": {
+      // spec §15. One worker: analysis never overlaps a compile, so at most one model is resident.
+      let config = DEFAULT_CONFIG;
+      const w = createWatcher({
+        fs: ports.fs,
+        print: (l) => console.log(l),
+        debounceMs: cmd.debounceMs,
+        backendProblem: () => engine.backendProblem(ports, config),
+        async analyze() {
+          const ds: Diagnostic[] = [];
+          const project = await engine.parse(ports, request(root, null, []), ds);
+          config = project.config;
+          const req = request(root, project, []);
+          await engine.analyze(ports, req, project, ds); // fingerprints when the backend answers /api/tags (no model load)
+          // Backend down: no fingerprints, so fall back to the spec hash to notice edited specs of compiler regions.
+          for (const r of project.regions)
+            if (r.state === "compiler" && !r.fingerprint && project.manifest.regions[r.id]?.specHash !== r.specHash) r.stale = true;
+          const rootOf = (id: string) => project.regions.find((r) => r.id === id)!.root; // blocks are verified with their function
+          const targets = [...new Set(engine.plan(project, req, ds).map(rootOf))];
+          const keys: Record<string, RegionKey> = {};
+          const examples: Record<string, number> = {};
+          for (const id of targets) {
+            const tree = project.regions.filter((r) => r.root === id);
+            keys[id] = { spec: tree.map((r) => r.specHash).join(","), fp: tree.every((r) => r.fingerprint) ? tree.map((r) => r.fingerprint).join(",") : "" };
+            examples[id] = project.specs.get(id)?.examples.length ?? 0;
+          }
+          return { targets, keys, examples };
+        },
+        async compile(id) {
+          clearStaleLock(root, (l) => console.error(`[watch] ${l}`));
+          const project = await engine.parse(ports, request(root, null, []), []);
+          return run(ports, { ...request(root, project, [id]), keepGoing: true });
+        },
+      });
+      clearStaleLock(root, (l) => console.error(`[watch] ${l}`));
+      // ponytail: src/ and tests/fakes/ recursively plus the root for the config, not the whole tree: a recursive
+      // watch of node_modules costs one inotify watch per directory. A src/ created after start needs a restart.
+      const dirs = ["src", "tests/fakes"].filter((d) => existsSync(`${root}/${d}`));
+      const watchers = [
+        watch(root, (_e, f) => f && w.onChange(f)),
+        ...dirs.map((d) => watch(`${root}/${d}`, { recursive: true }, (_e, f) => f && w.onChange(`${d}/${f.split(sep).join("/")}`))),
+      ];
+      console.log(`[watch] watching ${[...dirs.map((d) => `${d}/`), "openarc.config.json"].join(", ")} (debounce ${cmd.debounceMs} ms, Ctrl+C to stop)`);
+      return await new Promise<number>((done) => {
+        let sigints = 0;
+        process.on("SIGINT", () => {
+          if (++sigints > 1) {
+            console.log("[watch] aborted");
+            releaseOwnLock(root); // the transaction journal makes the half-done compile safe; the lock must not linger
+            process.exit(130);
+          }
+          void w.stop().then(() => {
+            watchers.forEach((x) => x.close());
+            console.log("[watch] stopped");
+            done(0);
+          });
+        });
+        void w.start();
+      });
     }
     case "graph":
     case "inspect": {

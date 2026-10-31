@@ -45,6 +45,8 @@ npx openarc init          # openarc.config.json, tsconfig.json, .openarc/
 npx openarc scaffold      # adds markers + typed placeholders (deterministic, no model)
 npx openarc compile       # generates, verifies and commits every pending/stale region
 npx openarc graph         # region tree with ownership states
+npx openarc watch         # nodemon-style: recompiles regions as you edit specs (one at a time)
+npx openarc extract src/x.ts   # adopt existing functions as regions (bodies kept as-is)
 ```
 
 | Command | Effect |
@@ -113,4 +115,4 @@ Functions that take ports (filesystem, HTTP, …) are tested with developer-writ
 
 ## Status
 
-0.2.0. OpenArc compiles parts of itself; see `SPEC-phase0.md` §14 (bootstrap).
+0.5.0 (alpha). OpenArc compiles parts of itself; see the [wiki](https://github.com/TheMissenoOne/OpenArc/wiki) and [`SPEC-phase0.md`](https://github.com/TheMissenoOne/OpenArc/blob/main/SPEC-phase0.md).

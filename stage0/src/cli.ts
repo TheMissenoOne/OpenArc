@@ -8,9 +8,10 @@ export const parseArgvSpec = arc.defineRegion<ParseArgv>({
   id: "cli.parseArgv",
   intent: [
     "argv excludes 'node' and the script. Commands: init | compile [ids...] | scaffold | freeze <id> | release <id> | inspect <id> | graph",
-    "| resolve <id> --keep|--regen|--unlink | extract <file> [--function <name>] [--id <id>] (flags in any order after the file; omit absent flags).",
+    "| resolve <id> --keep|--regen|--unlink | extract <file> [--function <name>] [--id <id>] (flags in any order after the file; omit absent flags)",
+    "| watch [--debounce <ms>] (debounceMs defaults to 300; the value must be a non-negative integer).",
     "Missing id -> usage missing-id; resolve without a mode -> usage resolve-needs-mode; extract without a file -> usage missing-file;",
-    "extract with an unknown flag or a flag without a value -> usage bad-flag; anything else -> usage unknown-command.",
+    "extract or watch with an unknown flag or a flag without a valid value -> usage bad-flag; anything else -> usage unknown-command.",
   ],
   examples: [
     { args: [["compile"]], expected: { cmd: "compile", ids: [] } },
@@ -29,6 +30,11 @@ export const parseArgvSpec = arc.defineRegion<ParseArgv>({
     { args: [["extract"]], expected: { cmd: "usage", reason: "missing-file" } },
     { args: [["extract", "src/a.ts", "--function"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["extract", "src/a.ts", "--bogus", "x"]], expected: { cmd: "usage", reason: "bad-flag" } },
+    { args: [["watch"]], expected: { cmd: "watch", debounceMs: 300 } },
+    { args: [["watch", "--debounce", "50"]], expected: { cmd: "watch", debounceMs: 50 } },
+    { args: [["watch", "--debounce"]], expected: { cmd: "usage", reason: "bad-flag" } },
+    { args: [["watch", "--debounce", "soon"]], expected: { cmd: "usage", reason: "bad-flag" } },
+    { args: [["watch", "--bogus", "1"]], expected: { cmd: "usage", reason: "bad-flag" } },
   ],
 });
 
@@ -64,6 +70,11 @@ export const parseArgv: ParseArgv = (argv) => {
         else out.id = v;
       }
       return out;
+    }
+    case "watch": {
+      if (rest.length === 0) return { cmd: "watch", debounceMs: 300 };
+      const ms = rest[1] !== undefined && /^\d+$/.test(rest[1]) ? Number(rest[1]) : NaN;
+      return rest[0] === "--debounce" && rest.length === 2 && !Number.isNaN(ms) ? { cmd: "watch", debounceMs: ms } : { cmd: "usage", reason: "bad-flag" };
     }
     default:
       return { cmd: "usage", reason: "unknown-command" };

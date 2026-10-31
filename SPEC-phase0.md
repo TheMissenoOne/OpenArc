@@ -335,7 +335,7 @@ At startup, every `openarc` command checks `.openarc/txn/*/journal.json`. If one
 
 ### 8.3 Concurrency
 
-`.openarc/lock` is taken with an exclusive create (`O_EXCL`) for the whole run. If it's held: `OARC-E095`.
+`.openarc/lock` is taken with an exclusive create (`O_EXCL`) for the whole run and holds the creator's PID. If it's held: `OARC-E095`. Before taking it, `compile`, `extract` and `watch` remove a **stale** lock, one whose PID is not a running process (`kill(pid, 0)` fails with ESRCH), with a warning. A lock without a PID is stale only once it is 10 s old.
 
 ### 8.4 Model request
 
@@ -610,11 +610,23 @@ The configuration sits at the project root, like `package.json`, and selects the
 
 ## 14. Bootstrap [F12]
 
-1. **Stage 0** is `selfhost/` with every region body written by hand, outside OpenArc. Those regions are `developer`-owned. Its acceptance test is the self-hosted examples (`node tools/run-examples.ts --strict`: 21/21). It is built into the npm package `openarc` (`node tools/build.ts`).
+1. **Stage 0** is `selfhost/` with every region body written by hand, outside OpenArc. Those regions are `developer`-owned. Its acceptance test is the self-hosted examples (`node tools/run-examples.ts --strict`: 24/24). It is built into the npm package `openarc` (`node tools/build.ts`).
 2. **Stage 1:** stage 0, installed as the devDependency `openarc-stage0`, compiles a pristine `selfhost/` scaffold (`selfhost-scaffold.tgz`). Its output is `compiler`-owned regions.
 3. **Stage 2:** the package built from stage 1 compiles the scaffold again, with stage 1's cache. That run must make **zero** model calls and produce a byte-identical tree and manifest (excluding `provenance.at`). Fingerprints use `COMPILER_VERSION`, not a build hash, so stages share cache keys.
 
 Stage 0 stays installed as the known-good compiler. A broken stage N is never needed to repair itself.
+
+## 15. Watch mode
+
+`openarc watch [--debounce <ms>]` (default 300) keeps regions compiled while the developer edits. The queue logic is the regions `watch.classifyPath`, `watch.enqueue` and `watch.takeNext`; the loop is hand-written (`src/watcher.ts`).
+
+1. **Events.** `src/` and `tests/fakes/` are watched recursively and the project root non-recursively. Every changed path is classified by `watch.classifyPath`; an `ignore` path MUST have no effect (no analysis). A `source`, `fakes` or `config` path sets a dirty flag and (re)starts the debounce timer.
+2. **Single worker.** At most one `compile.run` is in flight. Analysis MUST NOT run while a compile is in flight; it runs when the worker is idle and the flag is dirty, and once after every run (with `running` still set, so a region edited during its own run lands in `rerun`).
+3. **Analysis.** PARSE + ANALYZE + PLAN as in §8.1, with fingerprints when the backend answers its digest call (§8.4, no model is loaded). If it doesn't, a `compiler` region whose `specHash` differs from the manifest is treated as stale. Every block target is replaced by its enclosing function region (blocks are only verified jointly, §8.10). Targets are queued with `watch.enqueue`, in plan order.
+4. **Dispatch.** Before each `watch.takeNext`, the default backend is checked: Ollama's `/api/tags` must list the model; a hosted backend needs its `apiKeyEnv` set. On failure the worker prints one line and pauses for 5 s, 10 s, 30 s, then 60 s per retry, resetting after a success. The queue MUST NOT be dropped. A relevant change during a pause retries immediately. Each region is `compile.run(ports, {…req, ids: [id], keepGoing: true})`.
+5. **Failed regions.** A run with exit 1 records the region's key: the `specHash`es of the function and its blocks, and their fingerprints (empty when unknown). The region MUST NOT be queued again while its key is unchanged (fingerprints are compared only when both are known). A `config` or `fakes` change clears all keys. A run that fails with `OARC-E080` or `OARC-E095` is not a failure: the region goes back to the front of the queue and the worker pauses as in 4.
+6. **History.** Each dispatch appends `{at, id, state, ms, detail}` to `.openarc/watch-history.jsonl`, `state` ∈ `running | done | failed | interrupted`; the file keeps its last 1000 lines. At start, a region whose last entry is `running` is reported and recorded `interrupted`. The history never decides what to compile.
+7. **Signals.** The first SIGINT stops dispatch and exits after the running region (printing `finishing <id>, Ctrl+C again to abort`). The second exits immediately after removing `.openarc/lock` if this process holds it; the open transaction is recovered at the next start (§8.2). Stale locks: §8.3.
 
 ---
 

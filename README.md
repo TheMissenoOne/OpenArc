@@ -22,6 +22,7 @@ export const normalizeTitleSpec = arc.defineRegion<NormalizeTitle>({
 ```bash
 npm i -D openarc && npx openarc init
 npx openarc scaffold && npx openarc compile
+npx openarc watch    # or keep it running: recompiles regions as you save, one at a time
 ```
 
 **Documentation:** [Wiki](https://github.com/TheMissenoOne/OpenArc/wiki) (source in [`docs/wiki/`](docs/wiki)) · [Specification](SPEC-phase0.md)
@@ -39,7 +40,7 @@ npx openarc scaffold && npx openarc compile
 ## Develop
 
 ```bash
-cd stage0 && npm i && npx tsc -p . && node tools/run-examples.ts --strict   # 21/21 regions
+cd stage0 && npm i && npx tsc -p . && node tools/run-examples.ts --strict   # 24/24 regions
 node tools/build.ts && (cd build && npm pack)                                # openarc-x.y.z.tgz
 cd ../selfhost && npm i && npx openarc compile --keep-going                  # OpenArc compiling OpenArc
 ```

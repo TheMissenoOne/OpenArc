@@ -6,6 +6,7 @@
 | `openarc scaffold` | add markers and typed placeholders for specs without a region; deterministic, no model |
 | `openarc compile [ids…]` | generate and verify pending/stale regions in one transaction |
 | `openarc compile --keep-going` | commit what passed; failed regions stay pending; exit 1. Blocks whose function can't pass its examples yet (a sibling failed) are held back (W042). Stops calling the backend after 3 consecutive E080s |
+| `openarc watch [--debounce <ms>]` | keep running: on each relevant save, analyse, queue stale regions and compile them one at a time (one model in memory). Failed regions wait for their spec to change; an unreachable backend pauses the queue. See [[Watch Mode]] |
 | `openarc graph` | region tree: kind, state, number of examples, file |
 | `openarc inspect <id>` | spec, state, manifest entry and provenance (model, context level, attempts, checks) |
 | `openarc freeze <id>` | make a region developer-owned |
@@ -23,7 +24,8 @@
 | `.openarc/manifest.json` | yes | ownership, hashes, fingerprints, provenance |
 | `.openarc/cache/` | optional | verified bodies by fingerprint; makes rebuilds free and reproducible |
 | `.openarc/harness.mjs` | yes | sandbox entry point |
-| `.openarc/sandbox/`, `txn/`, `lock` | no | runtime only (`.openarc/.gitignore`) |
+| `.openarc/sandbox/`, `txn/`, `lock` | no | runtime only (`.openarc/.gitignore`). `lock` holds the PID of its holder; a lock whose holder is gone is removed with a warning |
+| `.openarc/watch-history.jsonl` | no | `openarc watch` dispatch log, last 1000 entries (`.openarc/.gitignore`) |
 
 ## Diagnostics
 

@@ -4,7 +4,7 @@
 
 | Stage | What | Status |
 |---|---|---|
-| **0** | `stage0/`: every region hand-written, then built into the `openarc` npm package | done: 21/21 regions pass their examples |
+| **0** | `stage0/`: every region hand-written, then built into the `openarc` npm package | done: 24/24 regions pass their examples |
 | **1** | stage 0 (installed as `openarc-stage0`) compiles the pristine `selfhost/` scaffold | in progress: 8/29 regions verified after the correction below (first run 14/29, second run claimed 16/29) |
 | **2** | the package built from stage 1 recompiles the scaffold with stage 1's cache: 0 model calls, byte-identical output | pending: after stage 1 completes |
 

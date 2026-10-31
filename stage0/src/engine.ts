@@ -412,7 +412,7 @@ function backendFor(p: Project, id: string, stage: 0 | 1): BackendConfig & { nam
   return { ...p.config.backends[name]!, name };
 }
 
-async function modelDigest(ports: Ports, p: Project, b: BackendConfig, diagnostics: Diagnostic[]): Promise<string | null> {
+async function modelDigest(ports: Ports, p: Pick<Project, "digests">, b: BackendConfig, diagnostics: Diagnostic[]): Promise<string | null> {
   // Hosted models have no digest and can change silently behind the same id. That's acceptable: cached bodies are
   // re-verified (STATIC + SANDBOX) on every use. Never call the network here.
   if (b.provider !== "ollama") return `${b.provider}:${baseUrlOf(b)}:${b.model}`;
@@ -431,6 +431,15 @@ async function modelDigest(ports: Ports, p: Project, b: BackendConfig, diagnosti
     diagnostics.push(err("OARC-E080", { detail: `unreachable:${hostOf(b)}` }));
     return null;
   }
+}
+
+/** Watch mode's pre-dispatch check (spec §15): null when the default backend can take a call, else why not.
+ *  Ollama: /api/tags answers and lists the model (modelDigest, no model is loaded). Hosted: its key env var is set. */
+export async function backendProblem(ports: Ports, config: OpenArcConfig, env: Record<string, string | undefined> = process.env): Promise<string | null> {
+  const b = config.backends[config.compilation.defaultBackend]!;
+  if (b.provider !== "ollama") return b.apiKeyEnv && !env[b.apiKeyEnv] ? `env ${b.apiKeyEnv} is not set` : null;
+  const ds: Diagnostic[] = [];
+  return (await modelDigest(ports, { digests: new Map() }, b, ds)) === null ? (ds[0]?.detail ?? "unreachable") : null;
 }
 
 // ───────────────────────────── context builder ─────────────────────────────

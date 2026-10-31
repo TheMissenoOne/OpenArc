@@ -133,6 +133,7 @@ export type Command =
   | { cmd: "resolve"; id: string; mode: "keep" | "regen" | "unlink" }
   | { cmd: "graph" }
   | { cmd: "extract"; file: string; fn?: string; id?: string } // spec §10; absent flags are omitted
+  | { cmd: "watch"; debounceMs: number } // spec §15
   | { cmd: "usage"; reason: "unknown-command" | "missing-id" | "resolve-needs-mode" | "missing-file" | "bad-flag" };
 
 // ---------- ports: every effect arrives through a parameter (spec §7.5) ----------
