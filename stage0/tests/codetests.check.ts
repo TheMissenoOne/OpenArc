@@ -254,7 +254,7 @@ try {
 
   // a member no passing test reaches: W045 for it, W042 for its sibling, nothing of the class committed
   const shown = FIXTURE["tests/balancer.test.ts"]!;
-  const noMarkDown = shown.replace(/arc\.test\(RoundRobin, "markDown[\s\S]*?\n\}\);\n/g, "");
+  const noMarkDown = shown.replace(/arc\.test\(RoundRobin, "markDown[\s\S]*?\r?\n\}\);\r?\n/g, "") // CRLF on a Windows checkout;
   reset("json", { "tests/balancer.test.ts": noMarkDown });
   c = await cli(proj, "compile", "lb.roundRobin.pick", "lb.roundRobin.markDown");
   assert.match(c.out, /OARC-W045 lb\.roundRobin\.markDown {2}.*unreached:lb\.roundRobin\.markDown/, c.out);
