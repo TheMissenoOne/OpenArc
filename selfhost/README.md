@@ -1,5 +1,7 @@
 # OpenArc
 
+[npm: open-arc](https://www.npmjs.com/package/open-arc) · [GitHub](https://github.com/TheMissenoOne/OpenArc) · [Wiki](https://github.com/TheMissenoOne/OpenArc/wiki)
+
 Compile typed specs into verified TypeScript with **small local models**.
 
 You write the contract: a function type, an intent and examples. OpenArc builds a minimal context package for that one function, the way a unit test isolates code. It asks a local model for the body, then verifies the result:
@@ -10,7 +12,7 @@ You write the contract: a function type, an intent and examples. OpenArc builds 
 Only then does it splice the body in. Your hand edits are never overwritten.
 
 ```ts
-import * as arc from "@openarc/core";
+import * as arc from "open-arc";
 
 type NormalizeTitle = (title: string) => string;
 
@@ -39,7 +41,7 @@ export const normalizeTitle: NormalizeTitle = (title) => {
 ## Use
 
 ```bash
-npm i -D @openarc/core
+npm i -D open-arc
 npx openarc init          # openarc.config.json, tsconfig.json, .openarc/
 # write defineRegion specs in src/*.ts
 npx openarc scaffold      # adds markers + typed placeholders (deterministic, no model)
@@ -85,7 +87,7 @@ npx openarc extract src/x.ts   # adopt existing functions as regions (bodies kep
 "claude": { "provider": "anthropic", "apiKeyEnv": "ANTHROPIC_API_KEY", "model": "claude-opus-5-5", "maxContextTokens": 64000, "outputReserveTokens": 16000 }
 ```
 
-Ollama backends unload the model after `keepAlive` (default `"2m"`) so two local models don't sit in RAM together. All fields: [docs/wiki/Configuration.md](../docs/wiki/Configuration.md).
+Ollama backends unload the model after `keepAlive` (default `"2m"`) so two local models don't sit in RAM together. A reply cut at the output cap (`outputReserveTokens`, default 3072) is retried with double the cap. All fields: [docs/wiki/Configuration.md](../docs/wiki/Configuration.md).
 
 **Context levels** (each includes the one before):
 - **L0, the contract:** signature, the types it references (verbatim), intent and examples.
@@ -99,7 +101,9 @@ The budget follows the backend's `maxContextTokens`. A missing-name error expand
 These are enforced by the compiler, not by the prompt:
 
 - The model returns a body string. It never writes files.
-- The body must parse as one function body. It can't close its braces to escape, and it can't contain `@openarc:` markers.
+- The body must parse as one function body. It can't close its braces to escape, and it can't contain `@openarc:` markers (a comment that merely mentions the prefix is stripped).
+- With `calls: ["engine.parse", "ports.fs.*"]` on a spec, the body may call only those imported or port functions (`OARC-E098`).
+- A block counts as verified only if a passing example of its function actually runs it; otherwise it is unverified (`OARC-W045`) and not committed.
 - After splicing, everything outside the region must be byte-identical. The only exception is added imports from the spec's `deps`.
 - Spec statements (`defineRegion`/`defineBlock`) must be byte-identical before a run commits. Tests and fakes are never written.
 - Examples reach the sandbox from the compiler's static parse of your spec. A body can't weaken its own tests at runtime.
@@ -116,4 +120,4 @@ Functions that take ports (filesystem, HTTP, …) are tested with developer-writ
 
 ## Status
 
-0.5.0 (alpha). OpenArc compiles parts of itself; see the [wiki](https://github.com/TheMissenoOne/OpenArc/wiki) and [`SPEC-phase0.md`](https://github.com/TheMissenoOne/OpenArc/blob/main/SPEC-phase0.md).
+0.6.3 (alpha). OpenArc compiles parts of itself; see the [wiki](https://github.com/TheMissenoOne/OpenArc/wiki) and [`SPEC-phase0.md`](https://github.com/TheMissenoOne/OpenArc/blob/main/SPEC-phase0.md).

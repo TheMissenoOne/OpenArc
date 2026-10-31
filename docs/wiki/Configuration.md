@@ -74,7 +74,8 @@ Then export the key in your shell (`export OPENROUTER_API_KEY=...`) and point `c
 | Field | Meaning |
 |---|---|
 | `backends.*.maxContextTokens` | the size of the context budget (see [[Context Packages]]); Ollama also gets it as `num_ctx` |
-| `backends.*.outputReserveTokens` | tokens kept free for the answer (default 2048), and the output cap: Ollama gets it as `num_predict`, hosted APIs as `max_tokens` |
+| `backends.*.outputReserveTokens` | tokens kept free for the answer (default 3072), and the output cap: Ollama gets it as `num_predict`, hosted APIs as `max_tokens`. A reply cut at the cap is retried with double the cap, up to `maxContextTokens` minus the prompt, and logged |
+| `backends.*.ollamaCompat` | `openai` provider only: the endpoint is Ollama's `/v1`, so also send `keep_alive` (from `keepAlive`) and `reasoning_effort: "none"`. Default: true when `baseUrl` ends in `:11434/v1` |
 | `backends.*.seed` | default 1; sent to Ollama and OpenAI-compatible APIs (Anthropic has no seed) |
 | `backends.*.temperature` | default 0; sent to Ollama and OpenAI-compatible APIs. A retry whose prompt is byte-identical to the previous attempt's is sent with temperature 0.4, then 0.7, and seed + attempt − 1, because a deterministic resend can only repeat the same body; `provenance.sampling` records it |
 | `backends.*.think` | Ollama: `false` turns off reasoning on thinking models; structured output is enough |

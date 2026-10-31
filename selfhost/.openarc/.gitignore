@@ -1,3 +1,5 @@
 lock
 sandbox/
 txn/
+attempts/
+watch-history.jsonl

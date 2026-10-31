@@ -1,10 +1,10 @@
 // Model backends: one bounded interface, request in, raw `{body, imports}` JSON text out (spec §13).
 // Hand-written. The ollama path goes through the model.buildRequest and model.call regions (dogfooding).
 // Hosted APIs use plain fetch through HttpPort; no SDK dependencies.
-import type { Json } from "@openarc/core";
-import type { Ports } from "./types.ts";
+import type { Json } from "open-arc";
+import type { HttpPort, Ports } from "./types.ts";
 import type { BackendConfig } from "./config.ts";
-import { hostOf } from "./config.ts";
+import { DEFAULT_OUTPUT_RESERVE, hostOf } from "./config.ts";
 import { MODEL_OUTPUT_SCHEMA, buildRequest, call } from "./model.ts";
 
 export const ANTHROPIC_VERSION = "2026-10-21";
@@ -44,8 +44,26 @@ const isConnectionError = (e: unknown) => {
   return CONNECTION_CODES.has(String(x?.code)) || CONNECTION_CODES.has(String(x?.cause?.code));
 };
 
-/** One request; on a connection error, wait `retryDelayMs` and retry ONCE (Ollama restarts after an OOM kill). */
+/** One completion. A reply cut at the output cap (Ollama done_reason "length", OpenAI finish_reason "length", Anthropic
+ *  stop_reason "max_tokens") is retried with double the cap, up to the context window minus the prompt (~3.5 chars/token). */
 export async function complete(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined> = process.env, retryDelayMs = 10_000): Promise<string> {
+  const room = b.maxContextTokens - Math.ceil((system.length + user.length) / 3.5);
+  for (let cur = b; ; ) {
+    const r = await withReconnect(ports, cur, system, user, env, retryDelayMs);
+    const cap = cur.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE;
+    if (!r.truncated) return r.text;
+    const next = Math.min(cap * 2, room);
+    if (next <= cap) {
+      ports.log(`  backend ${b.provider} ${b.model}: output truncated at ${cap} tokens; no room left in the ${b.maxContextTokens}-token context`);
+      return r.text;
+    }
+    ports.log(`  backend ${b.provider} ${b.model}: output truncated at ${cap} tokens, retrying with ${next}`);
+    cur = { ...cur, outputReserveTokens: next };
+  }
+}
+
+/** One request; on a connection error, wait `retryDelayMs` and retry ONCE (Ollama restarts after an OOM kill). */
+async function withReconnect(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined>, retryDelayMs: number): Promise<Reply> {
   try {
     return await completeOnce(ports, b, system, user, env);
   } catch (e) {
@@ -56,10 +74,15 @@ export async function complete(ports: Ports, b: BackendConfig, system: string, u
   }
 }
 
-async function completeOnce(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined>): Promise<string> {
+type Reply = { text: string; truncated: boolean };
+
+/** Ollama's OpenAI-compatible /v1 (explicit `ollamaCompat`, else a baseUrl on port 11434 ending in /v1). */
+export const isOllamaCompat = (b: BackendConfig): boolean => b.ollamaCompat ?? /:11434\/v1$/.test(baseUrlOf(b));
+
+async function completeOnce(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined>): Promise<Reply> {
   const seed = b.seed ?? 1;
   const temperature = b.temperature ?? 0;
-  const maxTokens = b.outputReserveTokens ?? 2048;
+  const maxTokens = b.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE;
   if (b.provider === "ollama") {
     const cfg = { host: hostOf(b), model: b.model, seed, numCtx: b.maxContextTokens };
     const req = buildRequest(system, user, cfg, OUTPUT_SCHEMA);
@@ -67,7 +90,11 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
     req.options = { ...req.options, temperature, num_predict: maxTokens };
     if (b.think !== undefined) req.think = b.think;
     req.keep_alive = b.keepAlive ?? "2m";
-    return call(ports.http, cfg, req);
+    // model.call (a region) returns only message.content: keep the raw reply to read done_reason.
+    let raw = "";
+    const http: HttpPort = { ...ports.http, postJson: async (url, body, headers) => (raw = await ports.http.postJson(url, body, headers)) };
+    const text = await call(http, cfg, req);
+    return { text, truncated: (JSON.parse(raw) as { done_reason?: string }).done_reason === "length" };
   }
   const key = apiKey(b, env);
   try {
@@ -81,6 +108,8 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
         seed,
         max_tokens: maxTokens,
         response_format,
+        // Ollama's /v1 ignores keep-alive config and may think: pass both explicitly (unknown fields are ignored there).
+        ...(isOllamaCompat(b) ? { keep_alive: b.keepAlive ?? "2m", reasoning_effort: "none" } : {}),
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
@@ -88,10 +117,14 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
       };
       const headers: Record<string, string> = { ...b.headers };
       if (key) headers.authorization = `Bearer ${key}`;
-      const res = JSON.parse(await ports.http.postJson(`${baseUrlOf(b)}/chat/completions`, body, headers)) as { choices?: { message?: { content?: string | null } }[] };
+      const res = JSON.parse(await ports.http.postJson(`${baseUrlOf(b)}/chat/completions`, body, headers)) as { choices?: { finish_reason?: string; message?: { content?: string | null } }[] };
       const content = res.choices?.[0]?.message?.content;
-      if (typeof content !== "string") throw new Error("openai: no message content");
-      return content;
+      const truncated = res.choices?.[0]?.finish_reason === "length";
+      if (typeof content !== "string") {
+        if (truncated) return { text: "", truncated };
+        throw new Error("openai: no message content");
+      }
+      return { text: content, truncated };
     }
     // anthropic: structured outputs (output_config.format). Forced tool_choice is rejected by current models
     // (Opus 5.5, Sonnet 5.5), and API version 2026-10-21 rejects temperature/top_p/top_k, so no sampling fields.
@@ -105,10 +138,14 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
     };
     const headers: Record<string, string> = { ...b.headers, "x-api-key": key!, "anthropic-version": ANTHROPIC_VERSION };
     const res = JSON.parse(await ports.http.postJson(`${baseUrlOf(b)}/messages`, body, headers)) as { stop_reason?: string; content?: { type: string; text?: string }[] };
-    if (res.stop_reason === "refusal" || res.stop_reason === "max_tokens") throw new Error(`anthropic: stop_reason ${res.stop_reason}`);
+    if (res.stop_reason === "refusal") throw new Error(`anthropic: stop_reason ${res.stop_reason}`);
+    const truncated = res.stop_reason === "max_tokens"; // thinking counts against max_tokens: a truncated reply may have no text yet
     const text = res.content?.find((c) => c.type === "text")?.text;
-    if (typeof text !== "string") throw new Error("anthropic: no text block");
-    return text;
+    if (typeof text !== "string") {
+      if (truncated) return { text: "", truncated };
+      throw new Error("anthropic: no text block");
+    }
+    return { text, truncated };
   } catch (e) {
     // ponytail: providers sometimes echo the key in error bodies; scrub it before it reaches diagnostics or logs.
     const msg = (e as Error).message;

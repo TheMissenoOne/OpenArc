@@ -9,7 +9,12 @@ export interface Outcome {
   name: string;
   ok: boolean;
   actual?: Json;
+  /** Coverage probe (spec §8.10): ids of the probed blocks this passing example executed. */
+  hits?: string[];
 }
+
+/** The compiler stages block bodies with `globalThis.__openarcHit?.("<id>")` as their first statement (never on disk). */
+type HitHost = { __openarcHit?: (id: string) => void };
 
 const isFakeRef = (v: unknown): v is FakeRef =>
   typeof v === "object" && v !== null && !Array.isArray(v) && typeof (v as FakeRef).$fake === "string";
@@ -76,6 +81,9 @@ export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyF
     const name = ex.name ?? `#${i + 1}`;
     const fakes = new Map<string, FakeInstance<unknown>>();
     const eq: EqualOptions = { tolerance: ex.tolerance ?? spec.tolerance, exact: ex.exact };
+    const hits = new Set<string>();
+    (globalThis as HitHost).__openarcHit = (id) => void hits.add(id);
+    const passed = (): Outcome => (hits.size ? { name, ok: true, hits: [...hits].sort() } : { name, ok: true });
     try {
       const args: unknown[] = [];
       for (const a of decodeTokens(ex.args) as unknown[]) {
@@ -103,7 +111,7 @@ export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyF
         after[fake] = got;
         if (!valuesEqual(JSON.parse(JSON.stringify(got)), decodeTokens(want), eq)) fakesOk = false; // snapshots compare as JSON
       }
-      out.push(fakesOk ? { name, ok: true } : { name, ok: false, actual: { fakesAfter: after } });
+      out.push(fakesOk ? passed() : { name, ok: false, actual: { fakesAfter: after } });
     } catch (e) {
       if (e instanceof OpenArcTodoError) out.push({ name, ok: false, actual: { pending: e.id } });
       else out.push({ name, ok: false, actual: { throws: e instanceof Error ? e.message : String(e) } });

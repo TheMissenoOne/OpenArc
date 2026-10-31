@@ -33,6 +33,7 @@ const MESSAGES: Record<string, string> = {
   "OARC-W042": "block held back: its function can't be verified until all its blocks exist (kept in the cache, committed by a later run)",
   "OARC-W043": "region keeps a body that does not satisfy its current spec (its recompile failed; shown as stale)",
   "OARC-W044": "thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle)",
+  "OARC-W045": "block unverified: no passing example of its function reaches it (not cached as verified, not committed; add an example that does)",
   "OARC-E041": "refine: \"next\" is unsupported in v0",
   "OARC-E050": "unknown manifest schema",
   "OARC-E051": "invalid openarc.config.json",
@@ -49,6 +50,7 @@ const MESSAGES: Record<string, string> = {
   "OARC-E095": "another openarc process holds .openarc/lock",
   "OARC-E096": "the file changed on disk during the compile; nothing was written (run again)",
   "OARC-E097": "write-scope violation: generated code may only change its own region (specs, tests and other code are compiler-protected)",
+  "OARC-E098": "call not allowed by spec (its `calls` list)",
 };
 
 const fmt = (d: Diagnostic) =>
@@ -235,7 +237,7 @@ async function main(argv: string[]): Promise<number> {
       await put("openarc.config.json", JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n");
       await put("tsconfig.json", JSON.stringify(TSCONFIG, null, 2) + "\n");
       await put(manifestPath, '{\n  "schema": 1,\n  "regions": {}\n}\n');
-      await put(".openarc/harness.mjs", 'import { main } from "@openarc/core/harness";\nawait main("/work", process.argv[2]);\n');
+      await put(".openarc/harness.mjs", 'import { main } from "open-arc/harness";\nawait main("/work", process.argv[2]);\n');
       const ignore = ["lock", "sandbox/", "txn/", "watch-history.jsonl", "attempts/"];
       const had = await ports.fs.read(".openarc/.gitignore");
       const missing = ignore.filter((l) => !(had ?? "").split("\n").includes(l));

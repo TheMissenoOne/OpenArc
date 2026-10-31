@@ -1,4 +1,4 @@
-import * as arc from "@openarc/core";
+import * as arc from "open-arc";
 import type { Diagnostic } from "./types.ts";
 
 // ── ids.isValidId ─────────────────────────────────────────────── spec §2.3
@@ -22,7 +22,9 @@ export const isValidIdSpec = arc.defineRegion<IsValidId>({
 });
 
 // @openarc:begin ids.isValidId
-export const isValidId: IsValidId = (id) => arc.todo("ids.isValidId");
+export const isValidId: IsValidId = (id) => {
+  return id === '' ? false : /^[a-z][a-zA-Z0-9]*(?:\.[a-z][a-zA-Z0-9]*)*$/.test(id);
+};
 // @openarc:end ids.isValidId
 
 // ── ids.findDuplicateIds ──────────────────────────────────────── spec §2.3, OARC-E011
@@ -50,13 +52,13 @@ export const findDuplicateIdsSpec = arc.defineRegion<FindDuplicateIds>({
 
 // @openarc:begin ids.findDuplicateIds
 export const findDuplicateIds: FindDuplicateIds = (occurrences) => {
-  const seen = new Map<string, number>();
+  const seen = new Map<string, string>();
   return occurrences.reduce((diagnostics, occurrence) => {
-    const { id } = occurrence;
+    const { id, file } = occurrence;
     if (seen.has(id)) {
-      diagnostics.push({ code: 'OARC-E011', file: occurrence.file, id });
+      diagnostics.push({ code: "OARC-E011", file, id });
     } else {
-      seen.set(id, occurrences.indexOf(occurrence));
+      seen.set(id, file);
     }
     return diagnostics;
   }, [] as Diagnostic[]);

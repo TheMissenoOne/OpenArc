@@ -1,6 +1,6 @@
 // Project configuration: openarc.config.json at the project root (like package.json/tsconfig.json).
 // Hand-written. It picks which backend compiles which region and how much context each one gets.
-import type { Json } from "@openarc/core";
+import type { Json } from "open-arc";
 
 /** Context levels, cumulative (spec §8.4, adaptive context):
  *  0 contract: signature, the type closure of the signature, intent, examples, effects/deps, rules
@@ -16,7 +16,7 @@ export interface BackendConfig {
   provider: Provider;
   model: string;
   maxContextTokens: number; // the context budget = this minus outputReserveTokens; Ollama also gets it as num_ctx
-  outputReserveTokens?: number; // default 2048; the output cap: Ollama num_predict, hosted max_tokens
+  outputReserveTokens?: number; // default 3072 (DEFAULT_OUTPUT_RESERVE); the output cap: Ollama num_predict, hosted max_tokens. A truncated reply is retried with double the cap (backends.complete)
   seed?: number; // default 1 (ollama, openai)
   temperature?: number; // default 0 (ollama, openai); a retry with a byte-identical prompt raises it (engine.retrySampling)
   // ollama
@@ -28,7 +28,10 @@ export interface BackendConfig {
   apiKeyEnv?: string; // NAME of the env var that holds the key; keys never live in the config file
   headers?: Record<string, string>; // extra headers, e.g. OpenRouter's HTTP-Referer / X-Title
   structuredOutput?: "json_schema" | "json_object"; // openai only, default json_schema
+  ollamaCompat?: boolean; // openai only: the endpoint is Ollama's /v1 (default: baseUrl ends in :11434/v1). Sends keep_alive and reasoning_effort "none"
 }
+
+export const DEFAULT_OUTPUT_RESERVE = 3072;
 
 export interface OpenArcConfig {
   version: 1;

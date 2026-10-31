@@ -1,0 +1,1 @@
+{"body":"const r = await engine.generate(ports, req, project, id, diagnostics);\n  candidate = r.candidate;\n  modelCalls += r.modelCalls;","imports":[]}

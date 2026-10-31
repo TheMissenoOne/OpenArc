@@ -11,12 +11,12 @@ It returns `{"body": string, "imports": [...]}` as data, constrained by a JSON s
 | Check | Rejects |
 |---|---|
 | **Containment:** the body must parse, with no syntax errors, as exactly one statement inside `async function __region() { … }` | `}; export const fooSpec = …; function q() {` (escaping the braces) |
-| **No markers:** a body containing `@openarc:` is rejected | forging `// @openarc:end` to move region boundaries |
+| **No markers:** a marker-shaped line, or a comment still mentioning `@openarc:`, is rejected. A comment that merely mentions the prefix (`// matches @openarc: markers`) is stripped first, and the strip is logged | forging `// @openarc:end` to move region boundaries |
 | **Splice:** outside the region, the file must be byte-identical, except for added `import {…} from "<dep>"` lines | any edit to other code |
 | **Spec integrity:** at commit, only `src/` files may change, and every `defineRegion`/`defineBlock` statement must be byte-identical | weakening a spec or an example |
 | **Static examples:** the harness receives examples from the compiler's parse of the spec, not from the module at runtime | a body that does `fooSpec.examples.length = 0` when called |
 
-All violations are `OARC-E097`. The guards are tested in `selfhost/tests/write-scope.check.ts`.
+All violations are `OARC-E097`. A spec's `calls` list adds one more structural check: the body may call only the listed imported or port functions (`OARC-E098`, see [[Writing Specs]]). The guards are tested in `selfhost/tests/write-scope.check.ts`, the call allowlist and the coverage probe in `selfhost/tests/v063.check.ts`.
 
 ## 3. Generated code runs only in a sandbox
 

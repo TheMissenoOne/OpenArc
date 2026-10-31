@@ -1,0 +1,1 @@
+{"body":"const seen = new Map<string, string>();\nreturn occurrences.reduce((diagnostics, occurrence) => {\n  const { id, file } = occurrence;\n  if (seen.has(id)) {\n    diagnostics.push({ code: \"OARC-E011\", file, id });\n  } else {\n    seen.set(id, file);\n  }\n  return diagnostics;\n}, [] as Diagnostic[]);","imports":[]}

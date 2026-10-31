@@ -1,4 +1,4 @@
-import * as arc from "@openarc/core";
+import * as arc from "open-arc";
 import type { HarnessSummary, SandboxConfig } from "./types.ts";
 
 // ── sandbox.buildArgv ─────────────────────────────────────────── spec §9.2
@@ -44,47 +44,8 @@ export const buildArgvSpec = arc.defineRegion<BuildArgv>({
 
 // @openarc:begin sandbox.buildArgv
 export const buildArgv: BuildArgv = (cfg) => {
-  return [
-    'bwrap',
-    '--unshare-all',
-    '--die-with-parent',
-    '--new-session',
-    '--ro-bind',
-    cfg.stageDir,
-    '/work',
-    '--ro-bind',
-    '/usr',
-    '/usr',
-    '--ro-bind',
-    cfg.nodePrefix,
-    cfg.nodePrefix,
-    '--symlink',
-    'usr/lib64',
-    '/lib64',
-    '--symlink',
-    'usr/lib',
-    '/lib',
-    '--symlink',
-    'usr/bin',
-    '/bin',
-    '--tmpfs',
-    '/tmp',
-    '--proc',
-    '/proc',
-    '--dev',
-    '/dev',
-    '--chdir',
-    '/work',
-    'prlimit',
-    '--as=' + cfg.addressSpaceBytes,
-    '--cpu=' + cfg.cpuSeconds,
-    cfg.nodeBin,
-    '--permission',
-    '--allow-fs-read=/work',
-    '--max-old-space-size=' + cfg.heapMb,
-    '/work/.openarc/harness.mjs',
-    cfg.regionId
-  ];
+  const args: string[] = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session", "--ro-bind", cfg.stageDir, "/work", "--ro-bind", "/usr", "/usr", "--ro-bind", cfg.nodePrefix, cfg.nodePrefix, "--symlink", "usr/lib64", "/lib64", "--symlink", "usr/lib", "/lib", "--symlink", "usr/bin", "/bin", "--tmpfs", "/tmp", "--proc", "/proc", "--dev", "/dev", "--chdir", "/work", "prlimit", "--as=" + cfg.addressSpaceBytes, "--cpu=" + cfg.cpuSeconds, cfg.nodeBin, "--permission", "--allow-fs-read=/work", "--max-old-space-size=" + cfg.heapMb, "/work/.openarc/harness.mjs", cfg.regionId];
+  return args;
 };
 // @openarc:end sandbox.buildArgv
 

@@ -47,7 +47,9 @@ Anything else is `OARC-E071`. `"default": "x"` asks for a default import (`impor
 | last attempt | capability problem | `fallbackBackend`, if configured |
 | a retry prompt byte-identical to the previous one | determinism problem | same prompt, temperature 0.4 then 0.7 and a new seed (Ollama, OpenAI-compatible) |
 
-The hash of the context package is part of the fingerprint. If any type a region depends on changes, the cached body is invalid.
+The hash of the context package is part of the fingerprint. If any type a region depends on changes, the cached body is invalid. The hash is taken over a stable view of the package: other regions of the file appear by signature whether they are pending or implemented, and type closures come from signatures, never bodies. So compiling one region doesn't change its siblings' fingerprints (before 0.6.3 it did, and watch mode re-queued them).
+
+If the spec has `calls`, the package also says "You may call exactly: …" (see [[Writing Specs]]).
 
 ## Why
 

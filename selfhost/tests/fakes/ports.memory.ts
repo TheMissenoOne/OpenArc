@@ -1,7 +1,9 @@
 // Authoritative fake. All Ports in memory.
-// init: { files?, http?: string[], proc?: [{ code, stdout, timedOut }] }
+// init: { files?, http?: string[], proc?: [{ code, stdout, timedOut }], view?: string[] }
 // snapshot(): { files, requests, runs } (requests never include postJson headers). now() is fixed; newTxId() yields tx1, tx2, ...
-import { defineFake, type Json } from "@openarc/core";
+// With `view` (paths), snapshot() is a summary for end-to-end examples whose caches/manifests/sandbox paths vary by
+// version: { files: only the listed paths that exist, requests: their urls, runs: each argv's program }.
+import { defineFake, type Json } from "open-arc";
 import type { Ports, ProcPort } from "../../src/types.ts";
 import { memoryFs, sortedFiles } from "./fs.memory.ts";
 import { stubHttp } from "./http.stub.ts";
@@ -9,7 +11,7 @@ import { stubHttp } from "./http.stub.ts";
 type ProcResult = Awaited<ReturnType<ProcPort["run"]>>;
 
 export default defineFake<Ports>((init) => {
-  const i = (init ?? {}) as { files?: Record<string, string>; http?: string[]; proc?: ProcResult[] };
+  const i = (init ?? {}) as { files?: Record<string, string>; http?: string[]; proc?: ProcResult[]; view?: string[] };
   const { fs, files } = memoryFs({ files: i.files ?? {} });
   const { http, requests } = stubHttp({ responses: i.http ?? [] });
   const procQueue = [...(i.proc ?? [])];
@@ -30,5 +32,11 @@ export default defineFake<Ports>((init) => {
     newTxId: () => `tx${++tx}`,
     log: () => {},
   };
-  return { instance: ports, snapshot: () => ({ files: sortedFiles(files), requests, runs }) };
+  const view = i.view;
+  const summary = (v: string[]) => ({
+    files: Object.fromEntries(v.filter((f) => files.has(f)).sort().map((f) => [f, files.get(f)!])),
+    requests: requests.map((r) => r.url),
+    runs: runs.map((a) => a[0] ?? ""),
+  });
+  return { instance: ports, snapshot: () => (view ? summary(view) : { files: sortedFiles(files), requests, runs }) };
 });

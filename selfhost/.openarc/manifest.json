@@ -30,12 +30,35 @@
       "file": "src/compile.ts",
       "symbol": "run",
       "ownership": "developer",
-      "hash": "sha256:dd76f267bfc0a306c6a84e47625ba65c35c3647146130627fc9cc1828692729d",
+      "hash": "sha256:1ce4bb0a0f4554b498aa1d81355c6dbd66d8f9cafb053fb2d5e346dd93072e4e",
       "specHash": "sha256:3b8291d3588c47b388eeb61b6d34c579ca90b11ccec5effcb43e09a26a3401d4",
       "fingerprint": null,
       "provenance": {
         "source": "extracted",
         "at": "2026-10-31T17:41:14.678Z"
+      }
+    },
+    "ids.isValidId": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/ids.ts",
+      "symbol": "isValidId",
+      "ownership": "compiler",
+      "hash": "sha256:c3bd46160478b24a0f8ee2c39d7a16f2516094b84eef61650e9e003e907a8edb",
+      "specHash": "sha256:8c4fdfff046c98c5b5e45d8f5bccb832be6f16f45c6b6f0ed8f685deb8fe55a2",
+      "fingerprint": "sha256:84c8a9d445858c73fc1e5c2049d4a28fd0d9947f0512c417f12e2cb65ec44f8a",
+      "provenance": {
+        "source": "generated",
+        "backend": "local",
+        "model": "qwen3.5:9b",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:9/9"
+        ],
+        "at": "2026-10-31T19:45:08.431Z"
       }
     },
     "ids.findDuplicateIds": {
@@ -44,9 +67,9 @@
       "file": "src/ids.ts",
       "symbol": "findDuplicateIds",
       "ownership": "compiler",
-      "hash": "sha256:6c5a25d2f783a66cf10f75167b715e5b8dbb1844834021986f1f7872bf31b694",
+      "hash": "sha256:9546f70a786653d3676fda6e4677f097795a15910bc0228520e1c434783546ca",
       "specHash": "sha256:1a063e28a84dd6a6ec760c166e9c4bb0034335a840c123fe75dc430f9a23c8af",
-      "fingerprint": "sha256:cd94522a0523a61571c8cd1352e985048cbfe34f7eaf50ce0bc27580e4b8223e",
+      "fingerprint": "sha256:8e02b23d5ac84e33243b39034e785f9661c350257f71eddfb1c833ca010affd4",
       "provenance": {
         "source": "generated",
         "backend": "local",
@@ -58,7 +81,7 @@
           "static",
           "examples:3/3"
         ],
-        "at": "2026-10-31T17:41:14.709Z"
+        "at": "2026-10-31T19:45:08.431Z"
       }
     },
     "model.buildRequest": {
@@ -67,9 +90,9 @@
       "file": "src/model.ts",
       "symbol": "buildRequest",
       "ownership": "compiler",
-      "hash": "sha256:c056105a9bccf7d88b9ff42851a45590e0927db51d88cbb06368dd43a817bd0b",
+      "hash": "sha256:bf6f19409cf8d9412797e3ebf5216d9fc677f2650434d5ba786fc207125312d9",
       "specHash": "sha256:dfe36e3c1603646e753511ffd6153470466b9fdf6b40770fa44313ee81cff1dd",
-      "fingerprint": "sha256:53841c68b5ff7c70ca8799b66b457818eeef464c5bdda9ab99d95c34a48c18ea",
+      "fingerprint": "sha256:c12bff3eac6b3fec3eebbfa33125fa71205fb8864bb1182843babf3512abff7f",
       "provenance": {
         "source": "generated",
         "backend": "local",
@@ -81,7 +104,7 @@
           "static",
           "examples:1/1"
         ],
-        "at": "2026-10-31T18:14:05.596Z"
+        "at": "2026-10-31T19:45:08.431Z"
       }
     },
     "model.call": {
@@ -113,9 +136,9 @@
       "file": "src/ownership.ts",
       "symbol": "detect",
       "ownership": "compiler",
-      "hash": "sha256:aef2e14fc2ec355e188775a849860a42ea960295838eef4f0a398b611bf571cd",
+      "hash": "sha256:c515cfae61db2477226faa1e124f06c76bbd5f7a9f9d6fc5a84188cfbf587655",
       "specHash": "sha256:eaa1eb383ca21154a24d9b139e95647ba00e9998acf7409ce2de151732521ccf",
-      "fingerprint": "sha256:ac988276dcaa806b55e11e11d99ab574ad7014d4b9d1e8f691ac584688b9f00f",
+      "fingerprint": "sha256:ca4fc813988bd7c2046f98887fd902de91aed391c3f351d945cda40380661d4c",
       "provenance": {
         "source": "generated",
         "backend": "local",
@@ -127,7 +150,7 @@
           "static",
           "examples:9/9"
         ],
-        "at": "2026-10-31T17:41:14.720Z"
+        "at": "2026-10-31T19:45:08.431Z"
       }
     },
     "sandbox.buildArgv": {
@@ -136,9 +159,9 @@
       "file": "src/sandbox.ts",
       "symbol": "buildArgv",
       "ownership": "compiler",
-      "hash": "sha256:61fb85b87c37faf658c3ce62b12ac9580b16e74603e4ccea6e423a3250651d52",
+      "hash": "sha256:7d2268ac2fc711f64c82fb5e12503619c3b477eb37346d4c545c53cf9077e55f",
       "specHash": "sha256:eb1a13ac29acb1066608eae014904d51873ffb578e3a9e0ed11d9303c94ee0ee",
-      "fingerprint": "sha256:5d53170613a61572a375d376aa929a41f4d992dba11e4e445cc7aa6e71549623",
+      "fingerprint": "sha256:773d92d2bd865fbe17f9defffb2a990e538e5392c1bbafd767dcbae7e4f0f193",
       "provenance": {
         "source": "generated",
         "backend": "local",
@@ -150,7 +173,7 @@
           "static",
           "examples:1/1"
         ],
-        "at": "2026-10-31T17:41:14.721Z"
+        "at": "2026-10-31T19:45:08.431Z"
       }
     },
     "txn.planJournal": {
@@ -159,9 +182,9 @@
       "file": "src/txn.ts",
       "symbol": "planJournal",
       "ownership": "compiler",
-      "hash": "sha256:4abccd4a7f6bbb187f3c925fa5d87c9d768be227bf2d4cf4889e4075df17674a",
+      "hash": "sha256:457fed34c73dec2bd661b3856f3e3c5656f3fd6d8c5315e4a8a5613c9834a5a2",
       "specHash": "sha256:0e1bbc7f5c2f78af998f59201c1b298916e96aecd8c02e7e742604f82d74849b",
-      "fingerprint": "sha256:521b58e4892e754b8a2acacc638a63b59fad3a8d942ed210ffc82075d040976c",
+      "fingerprint": "sha256:5905385f0f95cfeeaa0f86bfc5175c51b68dc4d0fd9578e464280e9d3a61a475",
       "provenance": {
         "source": "generated",
         "backend": "local",
@@ -173,7 +196,7 @@
           "static",
           "examples:2/2"
         ],
-        "at": "2026-10-31T18:14:05.598Z"
+        "at": "2026-10-31T19:45:08.431Z"
       }
     },
     "txn.commit": {
@@ -182,9 +205,32 @@
       "file": "src/txn.ts",
       "symbol": "commit",
       "ownership": "compiler",
-      "hash": "sha256:f4a1f4a891893e80cb536f0e91e5adeafc14d931ab6b049e79066f992b6b3208",
+      "hash": "sha256:b8e01341a984b21c9c3597312021d459c6f0b9ab6db339a34baccc5ff5ae4a4c",
       "specHash": "sha256:7cec40b2df589239724d039326410384222dc5fb9ac014b076af30c2cf93c44f",
-      "fingerprint": "sha256:dca03e2d6314ef1e8c1dfa078ecc02fb1341ba31e7766dd3364cf6cefa1b5340",
+      "fingerprint": "sha256:0d5cf8ffd23d4ef3b859a4b7b49f4508afee0cea98cf7817810c539f8c8628c3",
+      "provenance": {
+        "source": "generated",
+        "backend": "local",
+        "model": "qwen3.5:9b",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:1/1"
+        ],
+        "at": "2026-10-31T19:45:08.431Z"
+      }
+    },
+    "watch.enqueue": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/watch.ts",
+      "symbol": "enqueue",
+      "ownership": "compiler",
+      "hash": "sha256:39ab9757d46e3f88b095b3aa6e1870f5008557d176abb16455572ce1e60dc81b",
+      "specHash": "sha256:82231f36861f57cf364c3d66dfea4698c740d243daf04c729278bae3661f602f",
+      "fingerprint": "sha256:3e5fccf44cf8bf920dd09e285cabdc64e6fb65a6a36ae6ae6f5a1360943f31c5",
       "provenance": {
         "source": "generated",
         "backend": "local",
@@ -194,9 +240,9 @@
         "verifiedBy": [
           "tsc",
           "static",
-          "examples:1/1"
+          "examples:4/4"
         ],
-        "at": "2026-10-31T18:14:05.599Z"
+        "at": "2026-10-31T19:45:08.431Z"
       }
     }
   }

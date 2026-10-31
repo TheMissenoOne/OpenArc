@@ -5,13 +5,13 @@
 // 3. Context packages show the project's canonical import form for package deps.
 // 4. --keep-going never commits a block whose sibling failed: it can't pass the joint check (F14), so it's held back.
 import assert from "node:assert";
-import type { Json } from "@openarc/core";
+import type { Json } from "open-arc";
 import type { CompileRequest, Ports } from "../src/types.ts";
 import fakePorts from "./fakes/ports.memory.ts";
 import { run } from "../src/compile.ts";
 import * as engine from "../src/engine.ts";
 
-const root = process.cwd(); // the stage0 checkout, so "@openarc/core" and "typescript" resolve for the type checker
+const root = process.cwd(); // the stage0 checkout, so "open-arc" and "typescript" resolve for the type checker
 const req: CompileRequest = { root, ids: [], model: { host: "http://h", model: "m", seed: 1, numCtx: 8192 }, sandbox: { nodeBin: "/n/bin/node", nodePrefix: "/n", heapMb: 256, addressSpaceBytes: 2 ** 32, cpuSeconds: 10 } };
 const M = ".openarc/manifest.json";
 type Snap = { files: Record<string, string>; requests: { url: string; body: Json }[] };
@@ -19,7 +19,7 @@ type Snap = { files: Record<string, string>; requests: { url: string; body: Json
 // ── 1. W060 persisted when there are no targets
 {
   const src = (intent: string) => [
-    'import * as arc from "@openarc/core";',
+    'import * as arc from "open-arc";',
     "type Inc = (n: number) => number;",
     `export const incSpec = arc.defineRegion<Inc>({ id: "fixture.inc", intent: "${intent}", examples: [{ args: [1], expected: 2 }] });`,
     "// @openarc:begin fixture.inc",
@@ -59,7 +59,7 @@ type Snap = { files: Record<string, string>; requests: { url: string; body: Json
     `export const f${n}Spec = arc.defineRegion<F${n}>({ id: "fixture.f${n}", intent: "length", deps: ["typescript"], examples: [{ args: ["ab"], expected: 2 }] });`,
   ].join("\n");
   const files = {
-    "src/fixture.ts": ['import * as arc from "@openarc/core";', ...[1, 2, 3, 4, 5].map(spec), ""].join("\n"),
+    "src/fixture.ts": ['import * as arc from "open-arc";', ...[1, 2, 3, 4, 5].map(spec), ""].join("\n"),
     "src/other.ts": 'import ts from "typescript";\nexport const k = ts.SyntaxKind.Identifier;\n',
     "src/third.ts": 'import ts from "typescript";\nimport type { Node } from "typescript";\nexport const n = (x: Node) => ts.isIdentifier(x);\n',
     [M]: '{"schema":1,"regions":{}}',
@@ -78,7 +78,7 @@ type Snap = { files: Record<string, string>; requests: { url: string; body: Json
 // ── 4. a generated block whose sibling failed is held back, not committed
 {
   const src = [
-    'import * as arc from "@openarc/core";',
+    'import * as arc from "open-arc";',
     "type Run = (n: number) => number;",
     'export const runSpec = arc.defineRegion<Run>({ id: "fixture.run", intent: "double, then add one", examples: [{ args: [1], expected: 3 }] });',
     'export const aSpec = arc.defineBlock({ id: "fixture.run.a", intent: "x = n * 2" });',
@@ -120,7 +120,7 @@ const chat = (content: string) => JSON.stringify({ message: { role: "assistant",
 // ── 5. a file saved during the compile is not overwritten: the commit aborts with E096 and writes nothing
 {
   const src = (tail: string) => [
-    'import * as arc from "@openarc/core";',
+    'import * as arc from "open-arc";',
     "type Inc = (n: number) => number;",
     'export const incSpec = arc.defineRegion<Inc>({ id: "fixture.inc", intent: "add one" });',
     "// @openarc:begin fixture.inc",
@@ -155,7 +155,7 @@ const chat = (content: string) => JSON.stringify({ message: { role: "assistant",
 // ── 6. after the 3-E080 stop, a region whose body is in the cache still compiles (no model call needed)
 {
   const spec = (n: number) => `export const f${n}Spec = arc.defineRegion<(s: string) => number>({ id: "fixture.f${n}", intent: "a number" });`;
-  const files: Record<string, string> = { "src/fixture.ts": ['import * as arc from "@openarc/core";', ...[1, 2, 3, 4].map(spec), ""].join("\n"), [M]: '{"schema":1,"regions":{}}' };
+  const files: Record<string, string> = { "src/fixture.ts": ['import * as arc from "open-arc";', ...[1, 2, 3, 4].map(spec), ""].join("\n"), [M]: '{"schema":1,"regions":{}}' };
   const probe = fakePorts({ files, http: [TAGS] }).instance as Ports;
   const pp = await engine.parse(probe, req, []);
   await engine.analyze(probe, req, pp, []);
@@ -171,7 +171,7 @@ const chat = (content: string) => JSON.stringify({ message: { role: "assistant",
 // ── 7. a held-back block leaves no import behind: its file goes back to the pre-run text
 {
   const src = [
-    'import * as arc from "@openarc/core";',
+    'import * as arc from "open-arc";',
     "type Run = (n: number) => number;",
     'export const runSpec = arc.defineRegion<Run>({ id: "fixture.run", intent: "double, then add one", examples: [{ args: [1], expected: 3 }] });',
     'export const aSpec = arc.defineBlock({ id: "fixture.run.a", intent: "x = n * TWO", deps: ["./two.ts"] });',

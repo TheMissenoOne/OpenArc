@@ -2,10 +2,10 @@
 // Each block in compile.ts is one or two calls into this module, which keeps the blocks small enough
 // for a small model to regenerate. Regionizing the engine itself is the next self-hosting step.
 import ts from "typescript";
-import type { Json } from "@openarc/core";
+import type { Json } from "open-arc";
 import type { Candidate, ChildSpan, CompileRequest, Diagnostic, ImportDecl, ManifestView, Ports, RegionState, StagedFile } from "./types.ts";
 import type { BackendConfig, ContextLevel, OpenArcConfig } from "./config.ts";
-import { hostOf, parseConfig } from "./config.ts";
+import { DEFAULT_OUTPUT_RESERVE, hostOf, parseConfig } from "./config.ts";
 import { scanMarkers, buildRegionTree } from "./markers.ts";
 import { findDuplicateIds, isValidId } from "./ids.ts";
 import { canonicalJson, normalizeOwnedText, sha256Tagged } from "./hash.ts";
@@ -43,6 +43,7 @@ export interface SpecInfo {
   effects: string[];
   examples: Json[];
   intent: string;
+  calls?: string[]; // allowlist of imported/port functions the body may call (§7 rule 6); absent: unrestricted
   typeText: string; // F as written, e.g. "IsValidId"
   signature: string; // printed call signature, e.g. "(id: string) => boolean"
   params: string[];
@@ -250,6 +251,7 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           effects: (literal.effects as string[] | undefined) ?? [],
           examples: (literal.examples as Json[] | undefined) ?? [],
           intent: intentText(literal.intent),
+          ...(Array.isArray(literal.calls) ? { calls: literal.calls.filter((c): c is string => typeof c === "string") } : {}),
           typeText, signature, params, isAsync, typeNode,
         });
       }
@@ -285,7 +287,7 @@ export function scaffoldInMemory(p: Project, diagnostics: Diagnostic[]): string[
     const lines = linesOf(text);
     lines.splice(endLine + 1, 0, "", ...scaffoldLines(s));
     let out = lines.join("\n");
-    if (!/import \* as arc from "@openarc\/core"/.test(out)) out = `import * as arc from "@openarc/core";\n${out}`;
+    if (!/import \* as arc from "open-arc"/.test(out)) out = `import * as arc from "open-arc";\n${out}`;
     p.files.set(s.file, out);
     done.push(s.id);
   }
@@ -378,8 +380,13 @@ export async function analyze(ports: Ports, req: CompileRequest, p: Project, dia
     if (digest === null) return;
     r.context0 = buildContext(p, r, initialLevel(p, r), backend);
     const parentSpecHash = r.kind === "block" ? (p.regions.find((x) => x.id === r.root)?.specHash ?? null) : null;
+    // The fingerprint hashes the STABLE view of the context (§4.3): sibling regions by signature whether pending or not,
+    // never their bodies. Otherwise committing one region would re-queue its siblings.
+    const shown = new Map(r.typeImports);
+    const stable = buildContext(p, r, initialLevel(p, r), backend, { stable: true });
+    r.typeImports = shown;
     r.fingerprint = sha256Tagged(canonicalJson({
-      specHash: r.specHash, parentSpecHash, context: sha256Tagged(r.context0),
+      specHash: r.specHash, parentSpecHash, context: sha256Tagged(stable),
       backend: { provider: backend.provider, model: backend.model, digest, seed: backend.seed ?? 1, maxContextTokens: backend.maxContextTokens },
       promptTemplate: PROMPT_TEMPLATE_VERSION, compiler: COMPILER_VERSION, typescript: ts.version,
     }));
@@ -491,6 +498,10 @@ function typeClosure(p: Project, checker: ts.TypeChecker, roots: ts.Node[]): Clo
   return out;
 }
 
+/** The type-bearing parts of a function (type parameters, parameters, return type), never its body: the type closure
+ *  must not change when a body does (§4.3). */
+const sigNodes = (f: ts.SignatureDeclarationBase): ts.Node[] => [...(f.typeParameters ?? []), ...f.parameters, ...(f.type ? [f.type] : [])];
+
 /** Value signatures of a local module (helpers a region may call), skipping specs. Other modules: exported values only.
  *  The region's own file (`sameFile`): every top-level value, minus `skip` (the region itself and pending regions). */
 function moduleSignatures(sf: ts.SourceFile, checker: ts.TypeChecker, sameFile?: { skip: Set<string> }): { lines: string[]; nodes: ts.Node[] } {
@@ -503,14 +514,15 @@ function moduleSignatures(sf: ts.SourceFile, checker: ts.TypeChecker, sameFile?:
       if (sameFile?.skip.has(st.name.text)) continue;
       const sig = checker.getSignatureFromDeclaration(st);
       lines.push(`function ${st.name.text}${sig ? checker.signatureToString(sig, undefined, ts.TypeFormatFlags.NoTruncation) : "(…)"}`);
-      nodes.push(st);
+      nodes.push(...sigNodes(st));
     } else if (ts.isVariableStatement(st)) {
       for (const d of st.declarationList.declarations) {
         if (!ts.isIdentifier(d.name) || sameFile?.skip.has(d.name.text)) continue;
         if (d.initializer && ts.isCallExpression(d.initializer) && /define(Region|Block)$/.test(d.initializer.expression.getText(sf))) continue;
         const t = d.type ? d.type.getText(sf) : checker.typeToString(checker.getTypeAtLocation(d.name), undefined, ts.TypeFormatFlags.NoTruncation);
         lines.push(`const ${d.name.text}: ${t}`);
-        nodes.push(d);
+        const fn = d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer)) ? d.initializer : null;
+        nodes.push(...(d.type ? [d.type] : fn ? sigNodes(fn) : [d]));
       }
     }
   }
@@ -556,12 +568,12 @@ const RULES = [
   "\"imports\" may name: specifiers under 'Allowed new imports', modules the file already imports, and the file of a type shown under 'Types' (marked 'not in scope').",
   "For a default import use {\"from\": \"x\", \"names\": [], \"default\": \"x\"}.",
   "Never use: process, globalThis, eval, Function, fetch, require, dynamic import(), setTimeout, setInterval.",
-  "Date.now()/new Date()/performance need effect 'clock' (Date.parse and new Date(value) don't); Math.random/crypto need 'random'; console needs 'log'.",
+  "Date.now()/new Date()/performance need effect 'clock' (Date.parse and new Date(value) don't); Math.random and crypto.getRandomValues/randomUUID/randomBytes need 'random'; console needs 'log'.",
   "Deterministic output; no I/O except through parameters.",
 ].join("\n");
 
 /** Deterministic context package for one region at one level (adaptive context, see config.ts). */
-export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, backend: BackendConfig): string {
+export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, backend: BackendConfig, opts: { stable?: boolean } = {}): string {
   const checker = p.program!.getTypeChecker();
   const s = r.spec;
   const sf = p.program!.getSourceFile(abs(p, r.file))!;
@@ -581,7 +593,10 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   if (importLines.length) sections.push(["Imports already in the file", importLines.join("\n")]);
   let sameFileLines: string[] = [];
   if (r.kind === "function") {
-    const skip = new Set([s.symbol, ...p.regions.filter((x) => x.file === r.file && x.pending && x.kind === "function").map((x) => x.spec.symbol)]);
+    // The prompt omits pending siblings (nothing to call yet); the stable view (fingerprint) lists them all, so a
+    // sibling going from pending to implemented doesn't change it.
+    const pendingSiblings = opts.stable ? [] : p.regions.filter((x) => x.file === r.file && x.pending && x.kind === "function").map((x) => x.spec.symbol);
+    const skip = new Set([s.symbol, ...pendingSiblings]);
     const own = moduleSignatures(sf, checker, { skip });
     sameFileLines = own.lines;
     typeRoots.push(...own.nodes);
@@ -624,6 +639,7 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   if (sameFileLines.length) sections.push([`Already in ${r.file} (call these, don't re-implement them)`, sameFileLines.join("\n")]);
   if (helperLines.length) sections.push(["Helpers you may call", helperLines.join("\n\n")]);
   sections.push(["Intent", s.intent || "(none)"]);
+  if (s.calls) sections.push(["Calls allowed", `You may call exactly: ${s.calls.join(", ") || "nothing"}. Any other call on an import or a port is rejected (OARC-E098); calls on local variables and on functions you define in the body are fine.`]);
   if (r.kind === "function") {
     sections.push(["Effects allowed", s.effects.join(", ") || "none"]);
     sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
@@ -633,11 +649,11 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
     sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
     sections.push(["Enclosing function (your block is at <<<HERE>>>)", enclosingSource(p, r)]);
   }
-  if (level >= 2) sections.push([`Full file ${r.file}`, p.files.get(r.file)!]);
+  if (level >= 2 && !opts.stable) sections.push([`Full file ${r.file}`, p.files.get(r.file)!]); // ponytail: holds sibling bodies, so not in the fingerprint
   sections.push(["Rules", RULES]);
 
   // Budget: drop optional sections (from the end of the optional list) until the package fits.
-  const budget = (backend.maxContextTokens - (backend.outputReserveTokens ?? 2048)) * 3.5; // ~3.5 chars/token
+  const budget = (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5; // ~3.5 chars/token
   const render = () => sections.map(([h, b]) => `## ${h}\n${b}`).join("\n\n");
   let text = render();
   for (const optional of [`Full file ${r.file}`, "Helpers you may call", `Already in ${r.file} (call these, don't re-implement them)`, "Imports already in the file"]) {
@@ -752,8 +768,8 @@ export function unwrapBody(body: string, kind: "function" | "block"): string {
   return `return ${fn.body.getText(sf)};`;
 }
 
-/** Names bound at module level in a file (imports and top-level declarations). */
-function fileBindings(text: string): Set<string> {
+/** Names bound at module level in a file (imports and top-level declarations; only imports with `importsOnly`). */
+function fileBindings(text: string, importsOnly = false): Set<string> {
   const sf = ts.createSourceFile("f.ts", text, ts.ScriptTarget.Latest, true);
   const out = new Set<string>();
   for (const st of sf.statements) {
@@ -763,27 +779,73 @@ function fileBindings(text: string): Set<string> {
       if (c.namedBindings && ts.isNamespaceImport(c.namedBindings)) out.add(c.namedBindings.name.text);
       if (c.namedBindings && ts.isNamedImports(c.namedBindings)) c.namedBindings.elements.forEach((e) => out.add(e.name.text));
     }
+    if (importsOnly) continue;
     if (ts.isVariableStatement(st)) st.declarationList.declarations.forEach((d) => ts.isIdentifier(d.name) && out.add(d.name.text));
     if ((ts.isFunctionDeclaration(st) || ts.isClassDeclaration(st)) && st.name) out.add(st.name.text);
   }
   return out;
 }
 
+/** A spec's `calls` allowlist (§7 rule 6) and the root names it governs: the file's import bindings (with the requested
+ *  imports) and the enclosing function's parameters typed `Ports`. */
+export interface CallPolicy {
+  calls: string[];
+  restricted: Set<string>;
+}
+
+/** The call policy of region `r`, or undefined when its spec has no `calls`. `requested`: the candidate's imports. */
+export function callPolicy(p: Project, r: RegionInfo, requested: ImportDecl[] = []): CallPolicy | undefined {
+  if (!r.spec.calls) return undefined;
+  const restricted = fileBindings(p.accepted.get(r.file) ?? p.files.get(r.file)!, true);
+  for (const i of requested) [...i.names, ...(i.default ? [i.default] : [])].forEach((n) => restricted.add(n));
+  const root = p.specs.get(r.root);
+  const checker = p.program?.getTypeChecker();
+  const sig = root?.typeNode && checker ? checker.getTypeFromTypeNode(root.typeNode).getCallSignatures()[0] : undefined;
+  for (const s of sig?.getParameters() ?? []) if (checker!.typeToString(checker!.getTypeOfSymbol(s)) === "Ports") restricted.add(s.name);
+  return { calls: r.spec.calls, restricted };
+}
+
+/** `a.b.c` for a callee made of identifiers and property accesses (`x[i]` prints as `x[]`), or null. */
+function calleePath(e: ts.Expression): { root: string; path: string } | null {
+  if (ts.isIdentifier(e)) return { root: e.text, path: e.text };
+  if (ts.isParenthesizedExpression(e) || ts.isNonNullExpression(e) || ts.isAsExpression(e)) return calleePath(e.expression);
+  const base = ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e) ? calleePath(e.expression) : null;
+  if (!base) return null;
+  return { root: base.root, path: `${base.path}${ts.isPropertyAccessExpression(e) ? `.${e.name.text}` : "[]"}` };
+}
+
+const callAllowed = (calls: string[], path: string) => calls.some((c) => c === path || c === "*" || (c.endsWith(".*") && path.startsWith(c.slice(0, -1))));
+
+const RANDOM_MEMBERS = new Set(["getRandomValues", "randomUUID", "randomBytes"]);
+
 /** Static rules (§7) on a candidate body. Best-effort: the sandbox is the real boundary. */
-export function staticCheck(body: string, effects: string[], fileBound: Set<string> = new Set()): { diag: Diagnostic; message: string }[] {
+export function staticCheck(body: string, effects: string[], fileBound: Set<string> = new Set(), policy?: CallPolicy): { diag: Diagnostic; message: string }[] {
   const sf = ts.createSourceFile("c.ts", `async function __w() {\n${body}\n}`, ts.ScriptTarget.Latest, true);
   const out: { diag: Diagnostic; message: string }[] = [];
-  const declared = new Set<string>(fileBound); // a file import named `crypto` is not the global
+  const local = new Set<string>(); // names the body itself declares: calls on them are never restricted
   const collect = (n: ts.Node) => {
-    if ((ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isFunctionDeclaration(n) || ts.isBindingElement(n)) && n.name && ts.isIdentifier(n.name)) declared.add(n.name.text);
+    if ((ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isFunctionDeclaration(n) || ts.isBindingElement(n)) && n.name && ts.isIdentifier(n.name)) local.add(n.name.text);
     n.forEachChild(collect);
   };
   collect(sf);
+  const declared = new Set<string>([...fileBound, ...local]); // a file import named `crypto` is not the global
   const forbidden = new Set(["process", "globalThis", "global", "window", "self", "eval", "Function", "fetch", "XMLHttpRequest", "WebSocket", "Deno", "Bun", "setTimeout", "setInterval", "queueMicrotask", "require"]);
-  const gated: Record<string, string> = { Date: "clock", performance: "clock", crypto: "random", console: "log" };
+  const gated: Record<string, string> = { Date: "clock", performance: "clock", console: "log" };
   const visit = (n: ts.Node) => {
     if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword)
       out.push({ diag: err("OARC-E072"), message: "dynamic import() is not allowed" });
+    // §7 rule 6: a call rooted at an import or a port must be on the spec's `calls` list.
+    // ponytail: calls only. An alias (`const f = engine.parse; f()`) or a passed reference (`xs.map(engine.parse)`) is not
+    // traced; the allowlist stops a model that wanders into the wrong step, not an adversary (the sandbox is the boundary).
+    if (policy && ts.isCallExpression(n)) {
+      const c = calleePath(n.expression);
+      if (c && policy.restricted.has(c.root) && !local.has(c.root) && !callAllowed(policy.calls, c.path))
+        out.push({ diag: err("OARC-E098", { detail: c.path }), message: `call not allowed by spec: ${c.path} (allowed: ${policy.calls.join(", ") || "none"})` });
+    }
+    // Randomness: Math.random and crypto.getRandomValues/randomUUID/randomBytes (global crypto or an import named crypto).
+    // Any other use of crypto (createHash from node:crypto, say) is pure.
+    if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "crypto" && RANDOM_MEMBERS.has(n.name.text) && !effects.includes("random"))
+      out.push({ diag: err("OARC-E074", { detail: `crypto.${n.name.text}` }), message: `crypto.${n.name.text} requires effect 'random'` });
     if (ts.isIdentifier(n) && !declared.has(n.text)) {
       const parent = n.parent;
       const isPropName = (ts.isPropertyAccessExpression(parent) && parent.name === n) || (ts.isPropertyAssignment(parent) && parent.name === n);
@@ -809,6 +871,38 @@ export function staticCheck(body: string, effects: string[], fileBound: Set<stri
 // ───────────────────────────── write scope (structural, not instructions) ─────────────────────────────
 // The model never writes files. It returns a body string; the compiler is the only writer, and it
 // enforces that a body can only ever land between its own region's markers.
+
+/** A comment that merely mentions the marker prefix ("// matches @openarc: markers") is removed before splicing: a safe,
+ *  non-semantic normalisation (§8.7). A marker-SHAPED comment (`// @openarc:begin|end …`) is kept, so guardBody rejects it. */
+export function stripMarkerComments(body: string): { body: string; stripped: number } {
+  if (!body.includes("@openarc:")) return { body, stripped: 0 };
+  const pre = "async function __region() {\n";
+  const text = `${pre}${body}\n}\n`;
+  const sf = ts.createSourceFile("s.ts", text, ts.ScriptTarget.Latest, true);
+  const drop = new Map<number, number>(); // body offsets: start -> end, so a comment seen twice counts once
+  const walk = (n: ts.Node): void => {
+    const kids = n.getChildren(sf);
+    if (kids.length) return kids.forEach(walk);
+    for (const r of [...(ts.getLeadingCommentRanges(text, n.pos) ?? []), ...(ts.getTrailingCommentRanges(text, n.end) ?? [])]) {
+      const c = text.slice(r.pos, r.end);
+      if (c.includes("@openarc:") && !/^\/\/\s*@openarc:(begin|end)\b/.test(c)) drop.set(r.pos - pre.length, r.end - pre.length);
+    }
+  };
+  walk(sf);
+  if (!drop.size) return { body, stripped: 0 };
+  const gone = new Array<boolean>(body.length).fill(false);
+  for (const [from, to] of drop) gone.fill(true, from, to);
+  const out: string[] = [];
+  let at = 0;
+  for (const line of linesOf(body)) {
+    let kept = "", touched = false;
+    for (let i = 0; i < line.length; i++) gone[at + i] ? (touched = true) : (kept += line[i]);
+    at += line.length + 1;
+    if (!touched) out.push(line);
+    else if (kept.trim()) out.push(kept.trimEnd()); // a line that was only the comment goes away entirely
+  }
+  return { body: out.join("\n"), stripped: drop.size };
+}
 
 /** The body must parse as exactly one function body: it cannot close its braces and escape the region. */
 export function guardBody(body: string): string | null {
@@ -1036,11 +1130,23 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       imports = parsed.imports.map((im, i) => (split.defaults.has(i) ? { ...im, default: split.defaults.get(i)! } : im));
     }
     body = unwrapBody(body, r.kind);
+    const clean = stripMarkerComments(body);
+    if (clean.stripped) {
+      ports.log(`  ${id}: stripped ${clean.stripped} comment${clean.stripped === 1 ? "" : "s"} mentioning @openarc: (markers belong to the compiler)`);
+      body = clean.body;
+    }
     const result = await verify(ports, req, p, r, body, imports);
     if (result.ok) {
-      if (!(attempt === 1 && cached)) await ports.fs.write(cachePath, JSON.stringify({ body, imports, ...(sampling ? { sampling } : {}) }));
+      // A block that no passing example reaches is never cached or counted as verified (W045); the joint check at STAGE
+      // holds it back. One reached by none YET, while sibling blocks are still pending, is provisional: cached, and
+      // committed only once the joint check sees a passing example reach it.
+      if (!(attempt === 1 && cached) && !result.unverified) await ports.fs.write(cachePath, JSON.stringify({ body, imports, ...(sampling ? { sampling } : {}) }));
       p.provenance.set(id, { source: "generated", backend: at.backend.name, model: at.backend.model, contextLevel: at.level, attempts: attempt, verifiedBy: result.verifiedBy, ...(sampling ? { sampling } : {}) });
-      ports.log(`  ${id}: ✓ ${result.verifiedBy.join(", ")}`);
+      if (result.unverified) {
+        diagnostics.push(err("OARC-W045", { id, detail: `unreached:${r.root}` }));
+        ports.log(`  ${id}: unverified: no passing example of ${r.root} reaches this block (${result.verifiedBy.join(", ")})`);
+      } else if (result.verifiedBy.includes("unreached")) ports.log(`  ${id}: provisional: ${result.verifiedBy.join(", ")} (no passing example reaches it while siblings are pending; the joint check decides)`);
+      else ports.log(`  ${id}: ✓ ${result.verifiedBy.join(", ")}`);
       return { candidate: { id, body, imports, verifiedBy: result.verifiedBy }, modelCalls };
     }
     ports.log(`  ${id}: ✗ ${result.problems[0]?.slice(0, 160)}`);
@@ -1060,6 +1166,7 @@ interface Verified {
   problems: string[];
   verifiedBy: string[];
   missingContext: boolean;
+  unverified?: boolean; // a block that passing examples never reach while every example was conclusive (W045)
 }
 
 /** Specifiers a file imports from. */
@@ -1071,14 +1178,17 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   const base = p.accepted.get(r.file) ?? p.files.get(r.file)!;
   // static. Allowed (§7.2, matching RULES): deps, openarc, modules the file already imports, and type-only imports of
   // closure types the context showed as "not in scope" (from their own file).
-  const allowed = new Set([...r.spec.deps, "@openarc/core", ...importedSpecifiers(base)]);
+  const allowed = new Set([...r.spec.deps, "open-arc", ...importedSpecifiers(base)]);
   const shownType = (i: ImportDecl) => !i.default && i.names.length > 0 && i.names.every((n) => r.typeImports.get(n) === i.from);
   const bad = imports.filter((i) => !allowed.has(i.from) && !shownType(i));
   if (bad.length) return fail(bad.map((i) => `OARC-E071 import "${i.from}" is not allowed (allowed: ${[...allowed].join(", ")}, or a type shown as not in scope from its own file)`));
   // Closure types the body names but the file doesn't import: the compiler adds the type-only import (§8.8).
   const autoTypes = [...r.typeImports].filter(([name]) => new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}(?![\\w$])`).test(body));
   imports = [...imports, ...autoTypes.map(([name, from]) => ({ from, names: [name] }))];
-  const st = staticCheck(body, r.spec.effects, fileBindings(base));
+  // Requested imports are file bindings too: `import crypto from "node:crypto"` makes `crypto` a binding, not the global.
+  const bound = fileBindings(base);
+  for (const i of imports) [...i.names, ...(i.default ? [i.default] : [])].forEach((n) => bound.add(n));
+  const st = staticCheck(body, r.spec.effects, bound, callPolicy(p, r, imports));
   if (st.length) return fail(st.map((s) => `${s.diag.code} ${s.message}`));
   if (r.kind === "block") {
     const rs = checkRestrictions(body, p.specs.get(r.root)?.isAsync ?? false, []);
@@ -1113,7 +1223,7 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   // examples in the sandbox: the region's own (function) or its enclosing function's (block)
   const rootSpec = p.specs.get(r.root)!;
   if (rootSpec.examples.length) {
-    const res = await runSandbox(ports, req, p, r.root, overlay);
+    const res = await runSandbox(ports, req, p, r.root, overlay, undefined, r.kind === "block" ? [r.id] : []);
     const pendingSiblings = (o: { actual?: Json }) =>
       typeof o.actual === "object" && o.actual !== null && !Array.isArray(o.actual) && typeof o.actual.pending === "string" && r.kind === "block";
     const real = res.failed.filter((o) => !pendingSiblings(o));
@@ -1122,6 +1232,13 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
       return fail(real.map((o) => `OARC-E090 example "${o.name}" failed: got ${showValue(o.actual)}; expected ${showValue(exampleExpected(rootSpec, o.name))}`).concat(res.complete ? [] : ["OARC-E090 harness output incomplete (process exited early?)"]));
     verifiedBy.push(`examples:${res.passed}/${rootSpec.examples.length}${res.failed.length ? ` (${res.failed.length} inconclusive: sibling blocks pending)` : ""}`);
     if (r.kind === "block") verifiedBy.push(`via:${r.root}`);
+    if (r.kind === "block" && !res.hits.has(r.id)) {
+      verifiedBy.push("unreached");
+      if (!res.failed.length) {
+        p.accepted.set(r.file, text);
+        return { ok: true, problems: [], verifiedBy, missingContext: false, unverified: true };
+      }
+    }
   }
   p.accepted.set(r.file, text);
   return { ok: true, problems: [], verifiedBy, missingContext: false };
@@ -1140,7 +1257,39 @@ function exampleExpected(spec: SpecInfo, name: string): Json {
 
 // ───────────────────────────── sandbox ─────────────────────────────
 
-async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId: string, overlay: Map<string, string>, oracle?: { module: string; export: string; inputs: Json[][] }): Promise<{ complete: boolean; passed: number; failed: { name: string; actual?: Json }[]; error?: string }> {
+/** The coverage probe (§8.10): `globalThis.__openarcHit?.("<id>")` as the first statement of each block in `ids`. Only
+ *  ever applied to the sandbox's staged copy, never to text that is committed. */
+function probed(p: Project, overlay: Map<string, string>, ids: string[]): Map<string, string> {
+  const out = new Map(overlay);
+  for (const id of ids) {
+    const r = p.regions.find((x) => x.id === id)!;
+    const lines = linesOf(out.get(r.file)!);
+    const at = lines.findIndex((l) => l.trim() === `// @openarc:begin ${id}`);
+    if (at < 0) continue;
+    lines.splice(at + 1, 0, `${r.indent}globalThis.__openarcHit?.(${JSON.stringify(id)});`);
+    out.set(r.file, lines.join("\n"));
+  }
+  return out;
+}
+
+/** Probed block ids that passing examples reached (the harness adds `hits` to passing outcome lines). */
+function harnessHits(stdout: string): Set<string> {
+  const hits = new Set<string>();
+  for (const line of stdout.split("\n")) {
+    try {
+      const v = JSON.parse(line) as { ok?: unknown; hits?: unknown };
+      if (v?.ok === true && Array.isArray(v.hits)) for (const h of v.hits) hits.add(String(h));
+    } catch {
+      // not an outcome line
+    }
+  }
+  return hits;
+}
+
+type SandboxResult = { complete: boolean; passed: number; failed: { name: string; actual?: Json }[]; hits: Set<string>; error?: string };
+
+async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId: string, overlay: Map<string, string>, oracle?: { module: string; export: string; inputs: Json[][] }, probe: string[] = []): Promise<SandboxResult> {
+  const none = new Set<string>();
   const dir = p.sandboxDir ?? (p.sandboxDir = `.openarc/sandbox/${Date.now().toString(36)}`);
   if ((await ports.fs.read(`${dir}/package.json`)) === null) {
     for (const f of ["package.json", "tsconfig.json", ".openarc/harness.mjs", ...SOURCE_DIRS.map((d) => `${d}/package.json`)]) {
@@ -1148,9 +1297,9 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
       if (t !== null) await ports.fs.write(`${dir}/${f}`, t);
     }
     const cp = await ports.proc.run(["cp", "-al", `${p.root}/node_modules`, `${p.root}/${dir}/node_modules`], 60_000);
-    if (cp.code !== 0) return { complete: false, passed: 0, failed: [], error: `OARC-E092 could not stage node_modules: ${cp.stdout}` };
+    if (cp.code !== 0) return { complete: false, passed: 0, failed: [], hits: none, error: `OARC-E092 could not stage node_modules: ${cp.stdout}` };
   }
-  for (const [rel, text] of overlay) await ports.fs.write(`${dir}/${rel}`, text);
+  for (const [rel, text] of probe.length ? probed(p, overlay, probe) : overlay) await ports.fs.write(`${dir}/${rel}`, text);
   const spec = p.specs.get(rootId)!;
   // Examples are passed from the compiler's STATIC extraction: a body that mutates spec.examples at runtime cannot weaken its own tests.
   const tolerance = typeof spec.literal.tolerance === "number" ? { tolerance: spec.literal.tolerance } : {};
@@ -1162,8 +1311,8 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
     cpuSeconds: sb.cpuSeconds ?? req.sandbox.cpuSeconds, regionId: rootId,
   });
   const res = await ports.proc.run(argv, ((sb.cpuSeconds ?? req.sandbox.cpuSeconds) + 20) * 1000);
-  if (res.timedOut) return { complete: false, passed: 0, failed: [], error: "OARC-E091 sandbox timed out" };
-  const summary = readHarnessOutput(res.stdout);
+  if (res.timedOut) return { complete: false, passed: 0, failed: [], hits: none, error: "OARC-E091 sandbox timed out" };
+  const summary = { ...readHarnessOutput(res.stdout), hits: harnessHits(res.stdout) };
   if (!summary.complete && summary.passed === 0 && summary.failed.length === 0)
     return { ...summary, error: `OARC-E090 harness crashed (exit ${res.code}): ${res.stdout.slice(-600)}` };
   return summary;
@@ -1201,11 +1350,21 @@ export async function stage(ports: Ports, req: CompileRequest, p: Project, candi
     for (const r of genBlocks.filter((b) => b.root === rootId)) diagnostics.push(err("OARC-W042", { id: r.id, detail: `waiting:${rootId}` }));
   }
   for (const rootId of roots.filter((id) => !waiting.includes(id))) {
-    const res = await runSandbox(ports, req, p, rootId, overlay);
+    const mine = genBlocks.filter((b) => b.root === rootId);
+    const res = await runSandbox(ports, req, p, rootId, overlay, undefined, mine.map((b) => b.id));
     if (res.error || res.failed.length || !res.complete) {
       diagnostics.push(err("OARC-E090", { id: rootId, detail: `joint:${res.error ?? res.failed.map((f) => f.name).join(",")}` }));
       if (!req.keepGoing) return [];
       hold(rootId);
+      continue;
+    }
+    // Coverage (§8.10): every generated block must be reached by at least one passing example, else none is committed.
+    const unreached = mine.filter((b) => !res.hits.has(b.id)).map((b) => b.id);
+    if (unreached.length) {
+      hold(rootId);
+      for (const b of mine)
+        if (!unreached.includes(b.id)) diagnostics.push(err("OARC-W042", { id: b.id, detail: `unreached:${unreached.join(",")}` }));
+        else if (!diagnostics.some((d) => d.code === "OARC-W045" && d.id === b.id)) diagnostics.push(err("OARC-W045", { id: b.id, detail: `unreached:${rootId}` }));
     }
   }
   if (p.sandboxDir) await ports.fs.remove(p.sandboxDir);
@@ -1428,7 +1587,7 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
     usedIds.add(id);
   }
   if (!inserts.length) return res;
-  if (bound.has("arc") && !/import \* as arc from "@openarc\/core"/.test(text)) return refuse(rel, "the name `arc` is already bound; specs need `import * as arc from \"@openarc/core\"`"), res;
+  if (bound.has("arc") && !/import \* as arc from "open-arc"/.test(text)) return refuse(rel, "the name `arc` is already bound; specs need `import * as arc from \"open-arc\"`"), res;
 
   for (const ins of inserts.sort((a, b) => b.from - a.from)) {
     const ind = /^\s*/.exec(lines[ins.from]!)![0];
@@ -1436,7 +1595,7 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
     lines.splice(ins.from, 0, `${ind}// @openarc:begin ${ins.id}`);
     lines.splice(ins.specAt, 0, ...ins.spec);
   }
-  if (!/import \* as arc from "@openarc\/core"/.test(text)) lines.splice(lines[0]?.startsWith("#!") ? 1 : 0, 0, 'import * as arc from "@openarc/core";');
+  if (!/import \* as arc from "open-arc"/.test(text)) lines.splice(lines[0]?.startsWith("#!") ? 1 : 0, 0, 'import * as arc from "open-arc";');
   const out = lines.join("\n");
 
   // The result must type-check no worse than before, and analyze as developer-owned function regions.

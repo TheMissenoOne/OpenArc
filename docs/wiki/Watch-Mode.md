@@ -44,7 +44,7 @@ A relevant change marks the project dirty. Once the worker is idle, OpenArc anal
 | `openarc.config.json` (e.g. a new model) | regions whose fingerprint changed are queued; failed regions get another try |
 | `tests/fakes/*.ts` | re-analysed; failed regions get another try. Compiled regions are queued only if their fingerprint changed |
 | a hand edit inside a region | the region becomes `developer` and is **not** queued (your edit wins) |
-| OpenArc's own write of a compiled file | re-analysed, finds nothing: `src/x.ts changed: nothing new to compile` |
+| OpenArc's own write of a compiled file | re-analysed, finds nothing: `src/x.ts changed: nothing new to compile`. A region's fingerprint covers its siblings' signatures, never their bodies, so compiling one region doesn't re-queue the others in its file |
 
 Analysis asks Ollama for `/api/tags` (the model digest is part of the fingerprint). That's a list call: it never loads a model. When the backend is down, analysis falls back to comparing spec hashes, so edited specs are still noticed; type and config changes are picked up once the backend answers again.
 
@@ -80,6 +80,16 @@ Before each region, watch checks that the backend that region compiles with (its
 
 A compile that fails with `OARC-E080` (backend died mid-run) or `OARC-E095` (another `openarc` holds the lock) is shown as failed but put back at the front and paused the same way; it isn't remembered as a failed region.
 
+A compile that ends with `OARC-E096` is not the region's fault: it may well have passed, but you saved the file during the compile (often while editing another region of the same file), so nothing was written. It goes back to the front of the queue at once, with no pause, and isn't remembered as failed:
+
+```
+[watch] text.slugify  ✗ 1 attempt · OARC-E096 · 2.8s · re-queued (file changed during compile)
+```
+
+Before 0.6.3 it said `still pending` and was remembered as failed, so a region that had just passed could be stranded until its own spec changed.
+
+A compile that held back a block with `OARC-W045` (no example reaches it) is remembered as failed, `held back: an example must reach every block (W045)`, until the spec or its examples change.
+
 ## History
 
 Every dispatch is appended to `.openarc/watch-history.jsonl` (git-ignored by `openarc init`), capped at the last 1000 lines:
@@ -89,7 +99,7 @@ Every dispatch is appended to `.openarc/watch-history.jsonl` (git-ignored by `op
 {"at":"2026-10-31T18:32:03.517Z","id":"tasks.slugify","state":"done","ms":165,"detail":"1 attempt"}
 ```
 
-`state` is `running`, `done`, `failed` (detail: the first error) or `interrupted`. If watch starts and a region's last entry is `running`, the previous watch died mid-compile: it's reported, recorded as `interrupted`, and the region is simply re-planned. The history is never trusted for what to compile; analysis decides.
+`state` is `running`, `done`, `failed` (detail: the first error), `requeued` (`OARC-E096`) or `interrupted`. If watch starts and a region's last entry is `running`, the previous watch died mid-compile: it's reported, recorded as `interrupted`, and the region is simply re-planned. The history is never trusted for what to compile; analysis decides.
 
 ## Stopping
 

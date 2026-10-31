@@ -12,6 +12,7 @@ export const fooSpec = arc.defineRegion<F>({
   deps: ["./helpers.ts", "node:crypto"],     // the only imports a body may add
   examples: [{ name?: "…", args: [...], expected: …, tolerance?: 1e-6, exact?: false }],
   tolerance: 1e-9,                           // optional: the default numeric tolerance of every example
+  calls: ["helpers.slug", "ports.fs.read"],  // optional: the only imported/port functions the body may call
 });
 ```
 
@@ -85,9 +86,23 @@ export async function run(db: Db, req: Req): Promise<Result> {
 ```
 
 Rules for blocks:
+- **Say which functions it may call.** `calls: ["loadRows"]` (see below). A block is verified only through its function's examples, so `calls` is the cheapest way to pin down what it does.
 - **No escaping control flow:** no `return`/`break`/`continue` out of the block, and no `this`, `arguments` or `super`. Arrow functions are transparent to `this` and `arguments`, so those are caught inside arrows too.
 - **Communicate through `let` variables declared above the block.** The parent owns all control flow.
-- **They're verified through the enclosing function's examples.** Sibling blocks are jointly re-verified before commit.
+- **They're verified through the enclosing function's examples.** Sibling blocks are jointly re-verified before commit, and **some passing example must reach each block**: a block that every example returns before is unverified (`OARC-W045`), not cached as verified and not committed. Add an example that goes all the way through.
+
+## `calls`: what a body may call
+
+`calls` is an optional allowlist, on `defineRegion` and `defineBlock`, of the imported or port functions the body may call:
+
+```ts
+export const unlockSpec = arc.defineBlock({ id: "compile.run.unlock", intent: "await ports.fs.remove('.openarc/lock').", calls: ["ports.fs.remove"] });
+export const parseStepSpec = arc.defineBlock({ id: "compile.run.parse", intent: "project = await engine.parse(ports, req, diagnostics);", calls: ["engine.parse"] });
+```
+
+Every call in the body whose root is one of the file's imports (or a requested import), or a parameter of type `Ports`, must match an entry exactly or a `prefix.*` entry (`"engine.*"`). Anything else is `OARC-E098 call not allowed by spec: <path> (allowed: …)`, and the model gets another attempt. Calls on locals (`diagnostics.push`, `rows.map`), on functions the body defines, and on globals (governed by `effects`) are never restricted. The prompt says "You may call exactly: …".
+
+Why: in OpenArc's own self-compile, three `compile.run` blocks were cached as verified while doing the wrong thing: `unlock` released the lock and then re-ran parse through commit, `recover` ran a commit, and `analyze` parsed twice. Their function's only conclusive example returned before reaching them. With `calls`, all three are rejected before any example runs.
 
 ## Ownership states
 

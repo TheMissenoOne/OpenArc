@@ -32,7 +32,7 @@ export type Json = null | boolean | number | string | Json[] | { [k: string]: Js
 
 export type Effect =
   | "clock"   // Date, performance.now
-  | "random"  // Math.random, crypto.getRandomValues
+  | "random"  // Math.random, crypto.getRandomValues / randomUUID / randomBytes
   | "log";    // console.*
 
 export type NumberToken = "$NaN" | "$Infinity" | "$-Infinity";
@@ -56,6 +56,7 @@ export interface RegionSpec<F extends (...a: any[]) => any> {
   examples?: Example<F>[];    // authoritative tests, default []
   tolerance?: number;         // default numeric tolerance of every example, default 1e-9 (§9.3)
   refine?: "concrete" | "next"; // default "concrete"; "next" is reserved, v0 rejects it (OARC-E041)
+  calls?: string[];           // allowlist of imported or port functions the body may call (§7 rule 6); default: unrestricted
 }
 
 export interface BlockSpec {
@@ -63,6 +64,7 @@ export interface BlockSpec {
   intent: string | string[];
   effects?: Effect[];
   deps?: string[];
+  calls?: string[];           // as in RegionSpec
 }
 
 export function defineRegion<F extends (...a: any[]) => any>(spec: RegionSpec<F>): RegionSpec<F>;
@@ -72,6 +74,8 @@ export function pending(id: string): void;  // pending BLOCK body; throws too, b
 ```
 
 Convention: import as `import * as arc from "open-arc"`. The rest of this document writes `arc.todo` and so on.
+
+`calls` lists callee paths such as `"engine.parse"`, `"ports.fs.remove"` or `"recover"`; an entry ending in `.*` allows every path under that prefix (`"engine.*"`). It is the structural half of an intent: a block whose intent is "release the lock" can be held to `["ports.fs.remove"]`, so a body that also re-runs the pipeline is rejected before any example runs (§7 rule 6). It matters most for blocks, whose examples run through their function and often never reach them (§8.10).
 
 At runtime, `defineRegion` and `defineBlock` return their argument unchanged. Removing them from production builds is a later build transform (not v0). Implementations MUST NOT rely on tree shaking.
 
@@ -216,6 +220,8 @@ fingerprint = sha256(canonicalJson({
 }))
 ```
 
+The implementation also hashes `context`: the hash of the stable view of the initial context package (§8.8), which shows sibling regions by signature and never by body, so committing one region does not change its siblings' fingerprints.
+
 ---
 
 ## 5. Manifest
@@ -310,8 +316,9 @@ Static rules are applied to the owned text of each **candidate** body, and to th
 1. `tsc --noEmit` on the staged program, with the project tsconfig, MUST produce zero errors (`OARC-E070`).
 2. Imports: every requested import `{from, names, default?}` MUST name a specifier in `spec.deps`, `openarc`, or a module the file already imports; or be a type-only import of closure types the context package marked "not in scope", from the file that declares them (§8.8) (`OARC-E071`). Dynamic `import()` and `require` are always rejected (`OARC-E072`, `OARC-E073`); the `require` message tells the model to use `imports` instead.
 3. Forbidden free identifiers, unless allowed by `effects`: `process`, `globalThis`, `global`, `window`, `self`, `eval`, `Function`, `fetch`, `XMLHttpRequest`, `WebSocket`, `Deno`, `Bun`, `setTimeout`, `setInterval`, `queueMicrotask` (`OARC-E073`).
-4. Effect-gated identifiers: `Date`, `performance` need `clock`; `Math.random` and `crypto` need `random`; `console` needs `log` (`OARC-E074`). The pure uses of `Date` are exempt: `Date.parse(…)`, `Date.UTC(…)`, `new Date(<at least one argument>)`, and `Date` as a type. `Date.now()` and `new Date()` with no argument read the clock and stay gated.
+4. Effect-gated identifiers: `Date`, `performance` need `clock`; `Math.random` and `crypto.getRandomValues`, `crypto.randomUUID`, `crypto.randomBytes` need `random`; `console` needs `log` (`OARC-E074`). Any other use of `crypto` is pure: `createHash` on `crypto` imported from `node:crypto` needs no effect. A name the file binds (its imports and top-level declarations, **plus the candidate's requested imports**) is not the global of the same name. Before 0.6.3 the requested imports were not counted, so `import crypto from "node:crypto"` requested by the model still read as the global and `hash.sha256Tagged` failed three times with `'crypto' requires effect 'random'`. The pure uses of `Date` are exempt: `Date.parse(…)`, `Date.UTC(…)`, `new Date(<at least one argument>)`, and `Date` as a type. `Date.now()` and `new Date()` with no argument read the clock and stay gated.
 5. Any other capability (DB, network, filesystem, env) MUST arrive as a parameter of `F` (ports or injected dependencies). There is no effect token for it. This is what lets examples run against fakes.
+6. Call allowlist, only when the spec has `calls` (§2.1). For every call expression in the body, the compiler computes the callee path from identifiers and property accesses (`engine.parse`, `ports.fs.remove`, `recover`; an element access prints as `x[]`). If the path's root identifier is **restricted**, the path MUST equal an entry of `calls` or fall under one of its `prefix.*` entries (`OARC-E098`, detail = the path; message `call not allowed by spec: <path> (allowed: …)`). Restricted roots are the file's import bindings (named, default and namespace, plus the candidate's requested imports) and the parameters of the enclosing function whose type is `Ports`. Calls on locals (`diagnostics.push`, `staged.map`), on functions the body declares, and on globals (governed by rules 3 and 4) are not restricted. Only calls are checked: an alias (`const f = engine.parse; f()`) is not traced. The rule stops a model that wanders into the wrong step; the sandbox remains the security boundary.
 
 ---
 
@@ -354,6 +361,8 @@ Function regions: the compiler prints the signature from `F` (the parameter name
 
 Request: `POST {OLLAMA_HOST}/api/chat`, `stream: false`, `options: {temperature: <cfg, default 0>, seed: <cfg>, num_ctx: <cfg>, num_predict: <outputReserveTokens>}`, `format:` the JSON schema below, `keep_alive` from config. `num_predict` caps the output: without it a confused model generated for about three minutes and still returned truncated JSON. Hosted providers send the same schema in their own structured-output field (§13).
 
+**Truncation.** A reply cut at the cap (Ollama `done_reason: "length"`, OpenAI-compatible `finish_reason: "length"`, Anthropic `stop_reason: "max_tokens"`) is retried with double the cap, up to the backend's `maxContextTokens` minus the prompt (estimated at 3.5 characters per token), and each retry is logged. A reply still cut at that ceiling goes on to `model.parseOutput` as it is. In selfhost-compile-3, `block.checkRestrictions` lost all three attempts to invalid JSON cut at 2048 tokens; the default cap is now 3072.
+
 ```json
 {
   "type": "object",
@@ -391,7 +400,7 @@ At temperature 0 with a fixed seed, a retry prompt that is byte-identical to the
 
 The model never writes files. It returns `{body, imports}` as data, and the compiler is the only writer. The following are enforced **in code, independent of any prompt**:
 
-1. **Containment.** `body` must parse, with no syntax errors, as exactly one statement when wrapped as `async function __region() {\n<body>\n}`. A body that closes its braces to escape (`}; export const xSpec = …; function q() {`) is rejected. A body containing `@openarc:` is rejected, because markers belong to the compiler. → `OARC-E097`
+1. **Containment.** `body` must parse, with no syntax errors, as exactly one statement when wrapped as `async function __region() {\n<body>\n}`. A body that closes its braces to escape (`}; export const xSpec = …; function q() {`) is rejected. Markers belong to the compiler: a marker-shaped line (`// @openarc:begin …` or `// @openarc:end …`, even inside a template literal) and any comment still mentioning `@openarc:` are rejected. Before these checks the compiler **strips** every comment whose text contains `@openarc:` but is not marker-shaped (`// matches @openarc: markers`), a non-semantic normalisation it logs (`stripped n comment(s) mentioning @openarc:`); the prefix inside strings, regexes and templates is inert and kept. In selfhost-compile-3, `markers.scanMarkers` lost all three attempts to such comments. → `OARC-E097`
 2. **Splice.** After splicing, every line outside the region's markers is byte-identical to before. The only exception is added import lines (`import { … } from "…"`, `import type { … } from "…"`, `import x from "…"`, `import x, { … } from "…"`), which the compiler writes for imports that passed §7.2. → `OARC-E097`
 3. **Spec integrity.** At STAGE, only files under `src/` may change, never tests, fakes or core. In every changed file, the text of every `defineRegion`/`defineBlock` statement is byte-identical to the file on disk. → `OARC-E097` (detail `spec-integrity`), and nothing is written.
 4. **Examples are static.** The harness receives the examples from the compiler's static extraction (§2.2) through `harness-plan.json`, not from the module's runtime `spec.examples`. A body that mutates its spec object at runtime cannot weaken its own tests. The sandbox mounts the stage read-only.
@@ -418,7 +427,9 @@ Under "Allowed new imports", each package (non-relative) dep is followed by the 
 
 **Escalation by failure type.** If attempt *n* fails with a missing name, property or export (TS2304/2305/2339/2551/2552/2724), or with the wrong import form for a module (TS2595/TS2614/TS1259/TS2497), that's a context problem, so attempt *n+1* expands one level. Any other failure is repaired at the same level, with the diagnostics. The last attempt uses `fallbackBackend` if one is configured.
 
-The hash of the initial context package is part of the fingerprint (§4.3). A change in any type the region depends on therefore invalidates the cache.
+If the spec has `calls`, the package has a section `Calls allowed`: "You may call exactly: …" (§7 rule 6).
+
+The hash of the initial context package's **stable view** is part of the fingerprint (§4.3). A change in any type the region depends on therefore invalidates the cache. The stable view lists every other region of the file by signature, pending or not, takes type closures from signatures only (parameter and return types, never bodies), and leaves out the level-2 full file. The prompt itself still omits pending siblings (there is nothing to call yet). Before 0.6.3 the fingerprint hashed the prompt, so committing one region added its signature to its siblings' packages and changed their fingerprints: in watch mode, compiling `text.titleCase` re-queued the just-compiled `text.slugify`.
 
 ### 8.9 Model output normalisation [F13]
 
@@ -428,7 +439,13 @@ Small models often return a whole function when asked for a body. If a function 
 
 Block regions are verified through their function's examples, but sibling blocks can only pass those examples together. While generating a block, an example outcome that fails only because another block is still `arc.pending` is **inconclusive**, not a failure. At STAGE, every function whose blocks were generated in this run must pass **all** its examples with every candidate applied. Otherwise the run aborts with `OARC-E090` (detail `joint:…`) and nothing is written.
 
-A generated block is committed **only** if its function passed that joint check (or has no examples, W041). If a sibling block is still pending (it failed under `--keep-going`, or it was outside the requested ids), the joint check cannot run: the generated blocks of that function are **held back** (`OARC-W042`, detail `waiting:<function id>`) and stay pending on disk and in the manifest. Their verified bodies stay in the cache, so a later run that completes the siblings commits them without a model call. Under `--keep-going`, a failed joint check holds back that function's blocks (`OARC-E090`) instead of aborting the run.
+A generated block is committed **only** if its function passed that joint check (or has no examples, W041) **and** a passing example reached it.
+
+**Coverage probe.** Passing examples prove nothing about a block they return before. In selfhost-compile-3, `compile.run.unlock`, `.recover` and `.analyze` were cached as verified with bodies that re-ran the pipeline, ran a commit, and parsed twice: the only conclusive example (`lock held by another run`) returns before any of them. So whenever the sandbox runs examples for a block (its own verification and the joint check), the compiler inserts `globalThis.__openarcHit?.("<block id>")` as the first statement of each block being verified, in the **staged sandbox copy only**, never in committed text. The harness records, per passing example, the ids it hit (a `hits` field on the outcome line). Then:
+- At verification, a block that no passing example reached while every example was conclusive is **unverified** (`OARC-W045`, detail `unreached:<function id>`): it is not cached and not reported as verified. If some examples were inconclusive (sibling blocks pending), the block is *provisional*: cached, logged as provisional, and decided by the joint check.
+- At the joint check, every generated block of the function must be reached by at least one passing example. Otherwise all of that function's generated blocks are held back as with W042: the unreached ones with `OARC-W045`, the others with `OARC-W042` (detail `unreached:<ids>`).
+
+The fix is in the examples: `compile.run` gained one that compiles a one-region project end to end, so every block is reached. If a sibling block is still pending (it failed under `--keep-going`, or it was outside the requested ids), the joint check cannot run: the generated blocks of that function are **held back** (`OARC-W042`, detail `waiting:<function id>`) and stay pending on disk and in the manifest. Their verified bodies stay in the cache, so a later run that completes the siblings commits them without a model call. Under `--keep-going`, a failed joint check holds back that function's blocks (`OARC-E090`) instead of aborting the run.
 
 ### 8.11 Failed attempts
 
@@ -533,6 +550,7 @@ A diagnostic is `{code, id?, file?, line?, detail?}`. It has **no message field*
 | W042 | block held back: its function can't be verified until all its blocks exist (§8.10) |
 | W043 | region keeps a body that does not satisfy its current spec (its compile failed; displayed `stale`, §6.3.1) |
 | W044 | thin examples: fewer than 3, or none with an edge case (§9.5) |
+| W045 | block unverified: no passing example of its function reaches it (§8.10) |
 | E041 | `refine: "next"` unsupported in v0 |
 | E050 | unknown manifest schema |
 | W060 | manual edit detected; region is now developer-managed |
@@ -556,6 +574,7 @@ A diagnostic is `{code, id?, file?, line?, detail?}`. It has **no message field*
 | E095 | another openarc process holds the lock |
 | E096 | a target file changed on disk during the run; nothing was written (§8.1 STAGE) |
 | E097 | write-scope violation: generated code changed something outside its own region (§8.7) |
+| E098 | call not allowed by the spec's `calls` list (§7 rule 6) |
 | W013 | block spec without markers (place them by hand) |
 | E051 | invalid `openarc.config.json` |
 | W096 | advisory test failed |
@@ -633,7 +652,8 @@ The configuration sits at the project root, like `package.json`, and selects the
   
   Every provider returns the raw `{body, imports}` text, which goes through `model.parseOutput` unchanged.
 - **Keys only via env var names.** A hosted backend names its key with `apiKeyEnv` (the *name* of an environment variable). A literal `apiKey` field is invalid config (`OARC-E051`). An unset variable is `OARC-E080` with detail `missing-key:<ENV_NAME>`. The key is never printed, logged, snapshotted or put in a diagnostic.
-- `maxContextTokens` sets the context budget (§8.8) for every provider; Ollama also gets it as `num_ctx`. `outputReserveTokens` (default 2048) is the output cap: Ollama gets it as `num_predict`, hosted APIs as `max_tokens`.
+- `maxContextTokens` sets the context budget (§8.8) for every provider; Ollama also gets it as `num_ctx`. `outputReserveTokens` (default 3072) is the output cap: Ollama gets it as `num_predict`, hosted APIs as `max_tokens`. A truncated reply is retried with double the cap (§8.4).
+- `ollamaCompat` (openai provider): the endpoint is Ollama's OpenAI-compatible `/v1`. Default: true when `baseUrl` ends in `:11434/v1`. The request then also carries `keep_alive` (from `keepAlive`, default `"2m"`) and `reasoning_effort: "none"`, because that endpoint otherwise loads the model with the default keep-alive and lets a reasoning model think. Ollama ignores fields it doesn't know.
 - `temperature` (default 0) and `seed` (default 1) go to Ollama and OpenAI-compatible APIs; retries vary them as in §8.5.
 - `think: false` disables reasoning on Ollama reasoning models, because structured output is enough.
 - The model **digest** from `/api/tags` is part of the fingerprint. If a model is re-pulled, everything it compiled goes stale. Hosted providers have no digest and the fingerprint uses `"<provider>:<baseUrl>:<model>"` without any network call. A hosted model can change silently behind its id; that is acceptable because cached bodies are re-verified on every use (§8.6).
@@ -656,8 +676,8 @@ Stage 0 stays installed as the known-good compiler. A broken stage N is never ne
 2. **Single worker.** At most one `compile.run` is in flight. Analysis MUST NOT run while a compile is in flight; it runs when the worker is idle and the flag is dirty, and once after every run (with `running` still set, so a region edited during its own run lands in `rerun`).
 3. **Analysis.** PARSE + ANALYZE + PLAN as in §8.1, with fingerprints when the backend answers its digest call (§8.4, no model is loaded). If it doesn't, a `compiler` region whose `specHash` differs from the manifest is treated as stale. Every block target is replaced by its enclosing function region (blocks are only verified jointly, §8.10). Targets are queued with `watch.enqueue`, in plan order.
 4. **Dispatch.** Before each `watch.takeNext`, the default backend is checked: Ollama's `/api/tags` must list the model; a hosted backend needs its `apiKeyEnv` set. On failure the worker prints one line and pauses for 5 s, 10 s, 30 s, then 60 s per retry, resetting after a success. The queue MUST NOT be dropped. A relevant change during a pause retries immediately. Each region is `compile.run(ports, {…req, ids: [id], keepGoing: true})`.
-5. **Failed regions.** A run with exit 1 records the region's key: the `specHash`es of the function and its blocks, and their fingerprints (empty when unknown). The region MUST NOT be queued again while its key is unchanged (fingerprints are compared only when both are known). A `config` or `fakes` change clears all keys. A run that fails with `OARC-E080` or `OARC-E095` is not a failure: the region goes back to the front of the queue and the worker pauses as in 4. The status line of a failed run ends with `still pending`, or, when the run reported `OARC-W043` for the region, with `stale: keeps a body that fails the current spec` (§6.3.1).
-6. **History.** Each dispatch appends `{at, id, state, ms, detail}` to `.openarc/watch-history.jsonl`, `state` ∈ `running | done | failed | interrupted`; the file keeps its last 1000 lines. At start, a region whose last entry is `running` is reported and recorded `interrupted`. The history never decides what to compile.
+5. **Failed regions.** A run with exit 1 records the region's key: the `specHash`es of the function and its blocks, and their fingerprints (empty when unknown). The region MUST NOT be queued again while its key is unchanged (fingerprints are compared only when both are known). A `config` or `fakes` change clears all keys. A run that fails with `OARC-E080` or `OARC-E095` is not a failure: the region goes back to the front of the queue and the worker pauses as in 4. A run with `OARC-E096` (a file it would commit to was saved during the compile, typically an edit to another region of the same file) is not a failure either: the region goes back to the front of the queue **without** a pause, its key is not recorded, and the status line ends with `re-queued (file changed during compile)`. Before 0.6.3 it was recorded as failed, so a region that had passed was stranded until its own spec changed. A run that exits 0 but held back a block with `OARC-W045` is recorded as failed (status `held back: an example must reach every block (W045)`), since re-queuing it can't help until the examples change. The status line of any other failed run ends with `still pending`, or, when the run reported `OARC-W043` for the region, with `stale: keeps a body that fails the current spec` (§6.3.1).
+6. **History.** Each dispatch appends `{at, id, state, ms, detail}` to `.openarc/watch-history.jsonl`, `state` ∈ `running | done | failed | requeued | interrupted` (`requeued`: E096); the file keeps its last 1000 lines. At start, a region whose last entry is `running` is reported and recorded `interrupted`. The history never decides what to compile.
 7. **Signals.** The first SIGINT stops dispatch and exits after the running region (printing `finishing <id>, Ctrl+C again to abort`). The second exits immediately after removing `.openarc/lock` if this process holds it; the open transaction is recovered at the next start (§8.2). Stale locks: §8.3.
 
 ---
