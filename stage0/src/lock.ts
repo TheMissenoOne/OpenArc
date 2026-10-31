@@ -5,12 +5,15 @@ import { linkSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 
 const LOCK = ".openarc/lock";
 
-/** Which lock file this is. The inode, or where a filesystem reports none (ino 0: FAT, some Windows and network
- *  filesystems) its content (the holder's pid) plus mtime. Exported for tests. */
-export const statIdentity = (st: { ino: number; mtimeMs: number }, text: string): string => (st.ino ? `ino:${st.ino}` : `pid:${text}@${st.mtimeMs}`);
+/** Which lock file this is: the inode plus the holder's pid, or where a filesystem reports no inode (ino 0: FAT, some
+ *  Windows and network filesystems) the pid plus mtime. The pid is always part of it: filesystems reuse a freed inode
+ *  at once, so a replacement lock created right after the stale one was deleted can carry the same inode (seen on
+ *  GitHub's Ubuntu runners). Exported for tests. */
+export const statIdentity = (st: { ino: number; mtimeMs: number }, text: string): string =>
+  st.ino ? `ino:${st.ino}|pid:${text}` : `pid:${text}@${st.mtimeMs}`;
 export function lockIdentity(path: string): string {
   const st = statSync(path);
-  return statIdentity(st, st.ino ? "" : readFileSync(path, "utf8"));
+  return statIdentity(st, readFileSync(path, "utf8"));
 }
 
 /** process.kill(pid, 0) sends no signal: ESRCH means gone, EPERM means alive but someone else's. */

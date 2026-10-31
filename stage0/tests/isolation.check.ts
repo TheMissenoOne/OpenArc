@@ -131,7 +131,8 @@ import fakePorts from "./fakes/ports.memory.ts";
   try {
     const f = join(dir, "lock");
     writeFileSync(f, "123");
-    assert.match(lockIdentity(f), process.platform === "win32" ? /^(ino:\d+|pid:123@[\d.]+)$/ : /^ino:\d+$/);
+    assert.match(lockIdentity(f), process.platform === "win32" ? /^(ino:\d+\|pid:123|pid:123@[\d.]+)$/ : /^ino:\d+\|pid:123$/);
+    assert.notEqual(statIdentity({ ino: 7, mtimeMs: 1 }, "123"), statIdentity({ ino: 7, mtimeMs: 1 }, "456"), "a reused inode with another pid differs");
     assert.equal(statIdentity({ ino: 0, mtimeMs: 5.5 }, "123"), "pid:123@5.5", "no inode: pid + mtime");
     assert.notEqual(statIdentity({ ino: 0, mtimeMs: 5.5 }, "123"), statIdentity({ ino: 0, mtimeMs: 5.5 }, "456"), "a replacement lock (other pid) differs");
   } finally {
