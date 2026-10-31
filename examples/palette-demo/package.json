@@ -1,0 +1,16 @@
+{
+  "name": "palette-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OpenArc's palette in use: a login flow, a load-balanced service with health checks, a 3-peer gossip network",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "compile": "openarc compile"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "open-arc": "file:../../stage0/build/open-arc-0.8.0.tgz"
+  }
+}

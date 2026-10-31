@@ -2,7 +2,7 @@
 // Node refuses to strip types under node_modules, so the published package must be JS.
 // Usage: node tools/build.ts   then   cd build && npm pack
 import { execFileSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 const root = process.cwd();
 const version = JSON.parse(readFileSync(`${root}/core/package.json`, "utf8")).version as string;
@@ -23,12 +23,18 @@ writeFileSync(`${root}/build/package.json`, JSON.stringify({
   exports: {
     ".": { types: "./dist/core/index.d.ts", default: "./dist/core/index.js" },
     "./harness": { types: "./dist/core/harness.d.ts", default: "./dist/core/harness.js" },
+    "./palette/*": { types: "./dist/src/palette/*.d.ts", default: "./dist/src/palette/*.js" },
   },
-  files: ["dist", "README.md"],
+  files: ["dist", "README.md", "palette"],
   engines: { node: ">=23.6" },
   dependencies: { typescript: `^${tsVersion}` },
   publishConfig: { access: "public" },
 }, null, 2) + "\n");
 chmodSync(`${root}/build/dist/src/main.js`, 0o755);
 for (const f of ["README.md"]) if (existsSync(`${root}/${f}`)) cpSync(`${root}/${f}`, `${root}/build/${f}`);
+// The palette's sources, to copy into a project: palette/*.ts and README.md, and palette/fakes/palette.*.ts
+rmSync(`${root}/build/palette`, { recursive: true, force: true });
+mkdirSync(`${root}/build/palette/fakes`, { recursive: true });
+for (const f of readdirSync(`${root}/src/palette`)) cpSync(`${root}/src/palette/${f}`, `${root}/build/palette/${f}`);
+for (const f of readdirSync(`${root}/tests/fakes`).filter((x) => x.startsWith("palette."))) cpSync(`${root}/tests/fakes/${f}`, `${root}/build/palette/fakes/${f}`);
 console.log(`built open-arc@${version} -> build/`);
