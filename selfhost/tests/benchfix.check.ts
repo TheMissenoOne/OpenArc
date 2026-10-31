@@ -252,6 +252,16 @@ const config = (regions: object = {}) => JSON.stringify({
   assert.deepStrictEqual(pend, [{ name: "#1", ok: false, actual: { pending: "t.p" } }], "a pending body is pending, not a pass for throws: true");
 }
 
+// ── 5a. a harness that crashes before any outcome: one diagnostic naming the error, not one failure per stderr line
+{
+  const stderr = "(node:1) ExperimentalWarning: Type Stripping is an experimental feature\n(Use `node --trace-warnings ...` to show where the warning was created)\n" +
+    "node:internal/modules/package_json_reader:267\n  throw new ERR_MODULE_NOT_FOUND(packageName, fileURLToPath(base), null);\n        ^\n\n" +
+    "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'open-arc' imported from /work/.openarc/harness.mjs\n    at Object.getPackageJSONURL (node:internal/modules/package_json_reader:267:9)\n";
+  assert.equal(engine.crashLine(stderr), "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'open-arc' imported from /work/.openarc/harness.mjs");
+  assert.equal(engine.crashLine("Killed\n"), "Killed");
+  assert.equal(engine.crashLine(""), "no output");
+}
+
 // ── 5. the real sandbox with a symlinked node_modules (a shared install), code mode, a throws example
 {
   const main = join(root, "src", "main.ts");
@@ -324,7 +334,7 @@ const config = (regions: object = {}) => JSON.stringify({
     assert.deepStrictEqual(m.regions["demo.inc"].provenance.tokens, { prompt: 400, completion: 40 });
     const ins = await cli(dir, "inspect", "demo.inc");
     assert.equal(ins.code, 0, ins.out);
-    assert.deepStrictEqual(JSON.parse(ins.out.slice(ins.out.indexOf("{"))).tokens, { prompt: 400, completion: 40 });
+    assert.deepStrictEqual(JSON.parse(ins.out.slice(ins.out.indexOf("{"), ins.out.lastIndexOf("}") + 1)).tokens, { prompt: 400, completion: 40 });
     console.log(`benchfix: sandbox ${isolation}: symlinked node_modules, code mode, throws example ok`);
   } finally {
     rmSync(base, { recursive: true, force: true });

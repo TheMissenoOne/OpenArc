@@ -2,7 +2,7 @@
 // bwrap (Linux) keeps its argv in the sandbox.buildArgv region; this module picks the tier for this machine and builds
 // the others: sandbox-exec (macOS), node (Node's permission model only; Windows and the fallback everywhere), container
 // (podman/docker, only when asked for) and unsafe-none (only when asked for, by that name).
-import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, symlinkSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join, relative, isAbsolute } from "node:path";
@@ -148,7 +148,7 @@ export function bwrapReadPaths(root: string, stageDir: string): string[] {
     const target = real(link);
     try {
       if (!isLink(staged) || readlinkSync(staged) === target) continue;
-      rmSync(staged);
+      unlinkSync(staged); // not rmSync: on Node 23 it silently leaves a link to a directory in place
       symlinkSync(target, staged);
     } catch {
       // not staged on disk

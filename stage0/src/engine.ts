@@ -1403,9 +1403,17 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
   const res = await ports.proc.run(argv, ((sb.cpuSeconds ?? req.sandbox.cpuSeconds) + 20) * 1000);
   if (res.timedOut) return { complete: false, passed: 0, failed: [], hits: none, error: "OARC-E091 sandbox timed out" };
   const summary = { ...readHarnessOutput(res.stdout), hits: harnessHits(res.stdout) };
-  if (!summary.complete && summary.passed === 0 && summary.failed.length === 0)
-    return { ...summary, error: `OARC-E090 harness crashed (exit ${res.code}): ${res.stdout.slice(-600)}` };
+  // no outcome line at all (only stderr: a crash before the first example): one diagnostic, not one failure per line
+  if (!summary.complete && summary.passed === 0 && summary.failed.every((f) => f.name === "<unparseable>"))
+    return { ...summary, error: `OARC-E090 harness crashed (exit ${res.code}): ${crashLine(res.stdout)}` };
   return summary;
+}
+
+/** The line of a crash's output that says what went wrong: the first `...Error: ...` line, else the first line that is
+ *  not Node's experimental-feature warning, else "no output". */
+export function crashLine(out: string): string {
+  const lines = out.split("\n").map((l) => l.trim()).filter((l) => l && !/ExperimentalWarning|--trace-warnings/.test(l));
+  return lines.find((l) => /^[\w.]*Error\b/.test(l)) ?? lines[0] ?? "no output";
 }
 
 /** `openarc doctor`: one example through the real sandbox path, in this project. It returns 2 and then the error code
