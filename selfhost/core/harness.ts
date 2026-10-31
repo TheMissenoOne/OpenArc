@@ -3,6 +3,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { join } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { OpenArcTodoError, type FakeFactory, type FakeInstance, type FakeRef, type Json, type RegionSpec, type AnyFn } from "./index.ts";
 
@@ -75,7 +76,8 @@ export function valuesEqual(a: unknown, b: unknown, o: EqualOptions = {}): boole
   return isDeepStrictEqual(a, b);
 }
 
-const importFile = (root: string, rel: string) => import(pathToFileURL(`${root}/${rel}`).href);
+// join, not `${root}/${rel}`: the root is an OS path (C:\… on Windows), and pathToFileURL handles the drive letter
+const importFile = (root: string, rel: string) => import(pathToFileURL(join(root, rel)).href);
 
 /** Run every example of one function region. `pendingIsFailure` is false only for the dev runner. */
 export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyFn>): Promise<Outcome[]> {
@@ -167,7 +169,7 @@ export async function runOracle(fn: AnyFn, oracle: AnyFn, inputs: Json[][], o: E
 
 /** Sandbox entry: prints one JSON line per example, then {"done": n}. */
 export async function main(root: string, regionId: string): Promise<void> {
-  const plan = JSON.parse(readFileSync(`${root}/.openarc/harness-plan.json`, "utf8")) as Record<string, HarnessPlanEntry>;
+  const plan = JSON.parse(readFileSync(join(root, ".openarc", "harness-plan.json"), "utf8")) as Record<string, HarnessPlanEntry>;
   const entry = plan[regionId];
   if (!entry) throw new Error(`harness: no plan entry for ${regionId}`);
   const mod = await importFile(root, entry.module);

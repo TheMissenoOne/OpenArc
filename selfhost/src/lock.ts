@@ -5,6 +5,14 @@ import { linkSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 
 const LOCK = ".openarc/lock";
 
+/** Which lock file this is. The inode, or where a filesystem reports none (ino 0: FAT, some Windows and network
+ *  filesystems) its content (the holder's pid) plus mtime. Exported for tests. */
+export const statIdentity = (st: { ino: number; mtimeMs: number }, text: string): string => (st.ino ? `ino:${st.ino}` : `pid:${text}@${st.mtimeMs}`);
+export function lockIdentity(path: string): string {
+  const st = statSync(path);
+  return statIdentity(st, st.ino ? "" : readFileSync(path, "utf8"));
+}
+
 /** process.kill(pid, 0) sends no signal: ESRCH means gone, EPERM means alive but someone else's. */
 export function isAlive(pid: number): boolean {
   try {
@@ -20,9 +28,9 @@ export function isAlive(pid: number): boolean {
  *  ponytail: a recycled PID keeps a stale lock alive; the warning on E095 tells the user to delete it. */
 export function clearStaleLock(root: string, warn: (line: string) => void, raced: () => void = () => {}): void {
   const path = `${root}/${LOCK}`;
-  let text: string, ino: number;
+  let text: string, id: string;
   try {
-    ino = statSync(path).ino; // before the read: a lock replaced in between shows its live pid, so it is kept
+    id = lockIdentity(path); // before the read: a lock replaced in between shows its live pid, so it is kept
     text = readFileSync(path, "utf8");
   } catch {
     return;
@@ -34,7 +42,7 @@ export function clearStaleLock(root: string, warn: (line: string) => void, raced
     return; // removed under us
   }
   // Two processes can judge the same lock stale, and one may already have created its own lock in its place. So the
-  // stale file is taken with an atomic rename and deleted only if it is the same file (inode) that was judged.
+  // stale file is taken with an atomic rename and deleted only if it is the same file (lockIdentity) that was judged.
   raced(); // tests: another process replaces the lock right here
   const taken = `${path}.stale-${process.pid}`;
   try {
@@ -42,7 +50,7 @@ export function clearStaleLock(root: string, warn: (line: string) => void, raced
   } catch {
     return; // another process took it first
   }
-  if (statSync(taken).ino !== ino) {
+  if (lockIdentity(taken) !== id) {
     try {
       linkSync(taken, path); // a live lock: put it back (link fails rather than overwrite if yet another lock exists)
     } catch {

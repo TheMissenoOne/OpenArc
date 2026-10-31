@@ -94,6 +94,9 @@ export interface OllamaChatRequest {
 export type Rendered = { ok: true; text: string } | { ok: false; missing: string[] };
 
 // ---------- sandbox (spec §9.2) ----------
+/** How examples are isolated (src/isolation.ts). bwrap: Linux; sandbox-exec: macOS; node: Node's permission model only;
+ *  container: podman/docker; unsafe-none: no sandbox, only when configured by that name. */
+export type SandboxTier = "bwrap" | "sandbox-exec" | "node" | "container" | "unsafe-none";
 export interface SandboxConfig {
   stageDir: string;
   nodeBin: string; // RESOLVED binary, never a version-manager shim
@@ -171,7 +174,11 @@ export interface CompileRequest {
   ids: string[];
   keepGoing?: boolean; // commit the targets that passed; failed ones stay pending
   model: ModelConfig;
-  sandbox: Omit<SandboxConfig, "stageDir" | "regionId">;
+  sandbox: Omit<SandboxConfig, "stageDir" | "regionId"> & {
+    isolation?: SandboxTier; // absent: bwrap (sandbox.buildArgv)
+    unavailable?: string; // the configured tier is unavailable here: every sandbox run is OARC-E092 with this detail
+    containerImage?: string;
+  };
 }
 export interface CompileResult {
   exit: 0 | 1;

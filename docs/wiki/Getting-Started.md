@@ -4,11 +4,23 @@
 
 | | |
 |---|---|
-| OS | Linux with `bwrap` (bubblewrap) and `prlimit` (util-linux) |
-| Node | ≥ 23.6 (runs `.ts` directly) |
+| OS | Linux, macOS or Windows (since 0.7.0) |
+| Node | ≥ 23.6 (runs `.ts` directly); Node 25+ recommended, see below |
 | Models | [Ollama](https://ollama.com), e.g. `ollama pull qwen3.5:9b` |
 
-Examples always run in a sandbox. If `bwrap` is missing, OpenArc refuses to run them; it never falls back to unsandboxed execution.
+Examples always run in a sandbox. How strong it is depends on the OS (`sandbox.isolation` in [[Configuration]]):
+
+| OS | Default tier (`"auto"`) | What isolates generated code |
+|---|---|---|
+| Linux | `bwrap` (needs `bwrap` and `prlimit`) | bubblewrap namespaces (no network, read-only stage, private `/tmp`, no host processes), `prlimit` CPU and address-space caps, Node's permission model, heap cap |
+| macOS | `sandbox-exec` | a `sandbox-exec` profile (no network, no writes outside the temp dir, no reads under your home except the stage, `node_modules` and Node), Node's permission model, heap cap, wall-clock timeout |
+| Windows, or Linux without a usable `bwrap` | `node` (warns `OARC-W046`) | Node's permission model only: reads limited to the stage and `node_modules`; no writes, child processes, workers, addons or (Node 25+) network; heap cap, wall-clock timeout |
+| any, opt-in | `container` | `podman`/`docker run --rm --network=none`, the stage mounted read-only, plus Node's permission model |
+| any, opt-in | `unsafe-none` | nothing. Printed as an error (`OARC-W047`) on every run |
+
+On Linux, install bubblewrap for the strong tier (`sudo apt-get install bubblewrap`, `sudo dnf install bubblewrap`). Ubuntu 24.04 restricts unprivileged user namespaces, which leaves `bwrap` installed but unusable; OpenArc notices and falls back to `node` with `OARC-W046`. The `node` tier blocks network access only on Node 25 and later: on Node 23.6 to 24, generated code in that tier can reach the network.
+
+`npx openarc doctor` shows which tier this machine uses and runs one example in it that also tries to write a file, start a process and open a network connection. Run it once after installing. OpenArc never runs examples unsandboxed unless you write `"isolation": "unsafe-none"` yourself.
 
 ## Install
 

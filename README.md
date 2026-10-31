@@ -45,12 +45,25 @@ npx openarc watch    # or keep it running: recompiles regions as you save, one a
 
 ```bash
 cd stage0 && npm i && npx tsc -p . && node tools/run-examples.ts --strict   # 24/24 regions
-for f in tests/*.check.ts; do node $f; done                                   # no model, no network
+for f in tests/*.check.ts; do node $f; done                                   # no model; sandbox.check runs the real sandbox
 node tools/build.ts && (cd build && npm pack)                                # openarc-x.y.z.tgz
 cd ../selfhost && npm i && npx openarc compile --keep-going                  # OpenArc compiling OpenArc
 ```
 
-Requires Linux with `bwrap` and `prlimit`, Node ≥ 23.6, and a model: local via [Ollama](https://ollama.com), or any API (OpenAI-compatible such as OpenAI, OpenRouter, Groq and vLLM, or Anthropic). Keys are read from environment variables named in `openarc.config.json`; see [Configuration](docs/wiki/Configuration.md).
+## Requirements
+
+Linux, macOS or Windows, Node ≥ 23.6 (25+ recommended), and a model: local via [Ollama](https://ollama.com), or any API (OpenAI-compatible such as OpenAI, OpenRouter, Groq and vLLM, or Anthropic). Keys are read from environment variables named in `openarc.config.json`; see [Configuration](docs/wiki/Configuration.md).
+
+Examples always run sandboxed; how strongly depends on the OS (`sandbox.isolation`, default `"auto"`):
+
+| OS | Sandbox | Isolation |
+|---|---|---|
+| Linux with `bwrap` and `prlimit` | `bwrap` | strongest: namespaces (no network, read-only stage, no host processes), CPU and memory limits, Node's permission model |
+| macOS | `sandbox-exec` | OS profile (no network, no writes, no reads in your home outside the project and Node) plus Node's permission model |
+| Windows, or Linux without a usable `bwrap` | `node` | Node's permission model only, with warning `OARC-W046`: no writes, child processes, workers or addons; network blocked only on Node 25+ |
+| any, opt-in | `container` | `podman`/`docker --network=none`, read-only mount |
+
+`npx openarc doctor` shows the tier this machine uses and proves it with one sandboxed example. Running without a sandbox takes an explicit `"isolation": "unsafe-none"`. See [Safety Model](docs/wiki/Safety-Model.md).
 
 ## License
 

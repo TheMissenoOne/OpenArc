@@ -15,7 +15,8 @@ The keywords MUST, MUST NOT, SHOULD, and MAY are normative. Diagnostics use the 
 | Region identification | Line-comment markers + a manifest |
 | Ownership | Non-overlapping, nested, hash-based |
 | Model backend | One Ollama instance, structured output |
-| Verification | tsc, static effect/import check, developer examples in a sandbox |
+| Verification | tsc, static effect/import check, developer examples in a sandbox (tiered by OS, §9.2) |
+| Platforms | Linux, macOS, Windows (since 0.7.0); Node ≥ 23.6 |
 | Reverse | Provenance (manifest), and `openarc extract` of whole functions (§10). Extraction of arbitrary selections is Phase 5 |
 | Editor | Out of scope for this document. It consumes the manifest (§5) |
 
@@ -191,7 +192,7 @@ A region whose body is exactly its placeholder (`arc.todo("<id>")` for (F), `arc
 ### 4.1 Normalized owned text
 
 `norm(region)` is computed as follows:
-1. Take the region's body lines. Replace each direct child region (its begin marker through its end marker) with the single line `/*«openarc-child:<id>»*/`.
+1. Take the region's body lines, each without one trailing `\r`, so a CRLF file (a Windows checkout) hashes exactly like the same file with LF on every OS. Replace each direct child region (its begin marker through its end marker) with the single line `/*«openarc-child:<id>»*/`.
 2. Parse the result with `ts.createSourceFile(…, setParentNodes = true)`. Walk `node.getChildren()` depth-first, skipping JSDoc nodes. For each leaf, emit its leading comment ranges, then `leaf.getText()` if it is non-empty, then its **trailing** comment ranges. Each comment is emitted once, trimmed. `getLeadingCommentRanges` alone misses a comment on the same line as code, so editing `x = 1; // why` would not change the hash. The examples caught this in stage 0.
 3. Join with U+0020.
 
@@ -200,6 +201,8 @@ The **raw scanner MUST NOT be used**. It doesn't rescan template continuations o
 `hash(region) = "sha256:" + hex(sha256(utf8(norm(region))))`
 
 A formatter run therefore never changes ownership. Editing a child never changes the parent's hash.
+
+Line endings (since 0.7.0): a file whose every line ends in CRLF is held as LF in memory (markers, hashes, splicing, tsc and the sandbox all see LF) and written back with CRLF. A file with mixed endings is left byte for byte as it is.
 
 ### 4.2 Spec hash
 
@@ -465,7 +468,25 @@ The compiler output MUST list exactly what was checked, for example `examples 3/
 
 ### 9.2 Sandbox
 
-Each example run executes the staged program in a fresh process:
+Each example run executes the staged program in a fresh process, isolated by one of these **tiers**. `sandbox.isolation` in the configuration (§13) selects it; the selection is hand-written (`src/isolation.ts`).
+
+| Tier | Platform | Isolation | Selected by `"auto"` |
+|---|---|---|---|
+| `bwrap` | Linux | the argv below: namespaces, `prlimit`, Node's permission model, heap cap | when `bwrap` and `prlimit` are on `PATH` and an unprivileged user namespace actually works (probed once per process) |
+| `sandbox-exec` | macOS | `sandbox-exec -p <profile>` + the Node flags below without bwrap and prlimit | on macOS |
+| `node` | any | Node's permission model only | otherwise (Windows; Linux without a usable bwrap), with `OARC-W046` once per command |
+| `container` | any with podman or docker | `run --rm --network=none`, stage mounted read-only at `/work` | never |
+| `unsafe-none` | any | none | never; with `OARC-W047` at error level on every command |
+
+- An explicitly configured tier that is unavailable is `OARC-E092` (detail `bwrap-unavailable`, `sandbox-exec-unavailable`, `no-podman-or-docker`) and no example runs. `"none"` is invalid configuration (`OARC-E051`); turning the sandbox off MUST be spelled `"unsafe-none"`.
+- Every tier but `unsafe-none` runs `node --permission` with no grant other than `--allow-fs-read`: no `--allow-net`, `--allow-child-process`, `--allow-worker`, `--allow-addons`, `--allow-wasi` or `--allow-fs-write`, and `--max-old-space-size=<heapMb>`. Node's permission model denies network access only from v25.0.0 (when `--allow-net` was added); on Node 23.6–24 the `node` tier does not block the network, and W046 carries the detail `node-<version>:network-not-blocked`.
+- `node` and `sandbox-exec`: `--allow-fs-read` is granted for the real paths of the stage, the project's `node_modules` and the targets of symlinked packages in it (`file:` deps). `node_modules` is not copied: module resolution walks up from the stage, which lives inside the project. The harness gets the stage path as `argv[3]`; bwrap and container mount the stage at `/work` and pass none (`.openarc/harness.mjs`: `main(process.argv[3] ?? "/work", process.argv[2])`, written into every stage by the compiler).
+- `sandbox-exec` profile: `(allow default)`, then `(deny network*)`, `(deny file-write*)` except `/dev` and the temp directory, and `(deny file-read-data)` under the home directory except the stage, `node_modules`, linked packages and the Node prefix.
+- `container`: `<podman|docker> run --rm --network=none --security-opt label=disable -v <stage>:/work:ro -v <root>/node_modules:/work/node_modules:ro -w /work <image> timeout -s KILL <cpuSeconds+5> node --permission --allow-fs-read=/work --max-old-space-size=<heapMb> /work/.openarc/harness.mjs <id>`. Image: `sandbox.containerImage`, default `docker.io/library/node:<host Node version>-slim`.
+- Tiers without `prlimit` rely on the heap cap and the wall-clock timeout, which kills the process (`OARC-E091`); the permission model prevents child processes, so there is no tree to leave behind.
+- `openarc doctor` reports the selected tier and runs one example in it that must also be refused a file write, a child process and a network request.
+
+The `bwrap` tier:
 
 ```
 bwrap --unshare-all --die-with-parent --new-session \
@@ -486,7 +507,7 @@ The executable form is `selfhost/src/sandbox.ts` (`sandbox.buildArgv`). The foll
 - No `--allow-net`, `--allow-child-process`, `--allow-worker`, `--allow-addons`, `--allow-wasi`, or `--allow-fs-write`.
 - Wall-clock timeout: 10 s per region (configurable).
 - Node ≥ 23.6 runs `.ts` directly via type stripping. That's why `erasableSyntaxOnly` is required (§1).
-- `bwrap` and `node --permission` are both required. If either is missing, the result is `OARC-E092`, and there is no fallback to unsandboxed execution. (Verified on the target machine: Node v25.9.0 with `--allow-net`, and `/usr/bin/bwrap` present.)
+- With `"isolation": "bwrap"`, a missing or unusable `bwrap` is `OARC-E092`; with `"auto"` the run falls back to the `node` tier (W046), never to unsandboxed execution. (Verified on the target machine: Node v25.9.0 with `--allow-net`, and `/usr/bin/bwrap` present.)
 
 ### 9.3 Harness
 
@@ -568,7 +589,9 @@ A diagnostic is `{code, id?, file?, line?, detail?}`. It has **no message field*
 | E083 | child slot missing or duplicated |
 | E090 | example failed |
 | E091 | sandbox timeout or resource limit |
-| E092 | sandbox unavailable |
+| E092 | sandbox unavailable (the configured tier, §9.2) |
+| W046 | weaker isolation: Node permission model only (no OS sandbox) |
+| W047 | no sandbox: `sandbox.isolation` is `"unsafe-none"` (printed at error level on every run) |
 | E093 | staging I/O error |
 | W094 | recovered interrupted transaction |
 | E095 | another openarc process holds the lock |
@@ -641,9 +664,11 @@ The configuration sits at the project root, like `package.json`, and selects the
     "context": { "initialLevel": 0, "expandOnFailure": true }
   },
   "regions": { "payments.process": { "backend": "big", "contextLevel": 2 } },
-  "sandbox": { "heapMb": 512, "cpuSeconds": 20 }
+  "sandbox": { "heapMb": 512, "cpuSeconds": 20, "isolation": "auto" }
 }
 ```
+
+- `sandbox.isolation`: `"auto"` (default), `"bwrap"`, `"sandbox-exec"`, `"node"`, `"container"` or `"unsafe-none"` (§9.2). `sandbox.containerImage` sets the container tier's image.
 
 - `provider` is one of:
   - `"ollama"`: `POST {host}/api/chat` as in §8.4. `host` defaults to `http://127.0.0.1:11434`; `keepAlive` (default `"2m"`) is sent as `keep_alive`, so an idle model leaves RAM.

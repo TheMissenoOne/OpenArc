@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  stage0:
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, node: 25.x, tier: bwrap }
+          - { os: macos-latest, node: 25.x, tier: sandbox-exec }
+          - { os: windows-latest, node: 25.x, tier: node }
+          - { os: ubuntu-latest, node: 23.x, tier: bwrap } # engines.node is >=23.6
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor, so a stock bwrap fails with
+      # "setting up uid map: Permission denied". Lift the restriction for this runner only if the probe fails.
+      - name: Install bubblewrap (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
+          if ! bwrap --unshare-all --die-with-parent --ro-bind / / true; then
+            echo "bwrap: user namespaces restricted; setting kernel.apparmor_restrict_unprivileged_userns=0"
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            bwrap --unshare-all --die-with-parent --ro-bind / / true
+          fi
+          echo "bwrap works"
+
+      - name: Install
+        working-directory: stage0
+        run: npm ci
+
+      - name: Type-check
+        working-directory: stage0
+        run: npx tsc -p .
+
+      - name: Self-hosted examples
+        working-directory: stage0
+        run: node tools/run-examples.ts --strict
+
+      # includes tests/sandbox.check.ts: doctor + a real compile against a fake Ollama server, through this OS's sandbox
+      - name: Checks
+        working-directory: stage0
+        run: |
+          for f in tests/*.check.ts; do
+            echo "::group::$f"
+            node "$f"
+            echo "::endgroup::"
+          done
+
+      - name: Build the package
+        working-directory: stage0
+        run: |
+          node tools/build.ts
+          (cd build && npm pack)
+          echo "TARBALL=$PWD/build/open-arc-$(node -p 'require("./core/package.json").version').tgz" >> "$GITHUB_ENV"
+
+      - name: Fresh install smoke
+        run: |
+          d="$RUNNER_TEMP/fresh" && mkdir -p "$d" && cd "$d"
+          npm init -y > /dev/null
+          npm i -D "$TARBALL"
+          npx openarc init
+          npm pkg set type=module
+          mkdir -p src
+          printf '%s\n' \
+            'import * as arc from "open-arc";' \
+            'type Inc = (n: number) => number;' \
+            'export const incSpec = arc.defineRegion<Inc>({ id: "demo.inc", intent: "add one", examples: [{ args: [1], expected: 2 }] });' \
+            > src/inc.ts
+          npx openarc scaffold
+          npx tsc -p .
+          npx openarc graph | tee graph.txt
+          grep -q 'demo.inc .*pending' graph.txt
+
+      - name: Sandbox self-test (openarc doctor)
+        run: |
+          cd "$RUNNER_TEMP/fresh"
+          npx openarc doctor | tee doctor.txt
+          grep -q "isolation: auto -> ${{ matrix.tier }} " doctor.txt
+          # the Node-permission-only tier on every OS, too
+          node -e 'const fs=require("fs"),f="openarc.config.json",c=JSON.parse(fs.readFileSync(f,"utf8"));c.sandbox={isolation:"node"};fs.writeFileSync(f,JSON.stringify(c))'
+          npx openarc doctor

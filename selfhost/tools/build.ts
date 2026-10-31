@@ -26,7 +26,6 @@ writeFileSync(`${root}/build/package.json`, JSON.stringify({
   },
   files: ["dist", "README.md"],
   engines: { node: ">=23.6" },
-  os: ["linux"],
   dependencies: { typescript: `^${tsVersion}` },
   publishConfig: { access: "public" },
 }, null, 2) + "\n");

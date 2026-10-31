@@ -1,6 +1,7 @@
 // Project configuration: openarc.config.json at the project root (like package.json/tsconfig.json).
 // Hand-written. It picks which backend compiles which region and how much context each one gets.
 import type { Json } from "open-arc";
+import { ISOLATIONS, type Isolation } from "./isolation.ts";
 
 /** Context levels, cumulative (spec §8.4, adaptive context):
  *  0 contract: signature, the type closure of the signature, intent, examples, effects/deps, rules
@@ -50,7 +51,16 @@ export interface OpenArcConfig {
     context: { initialLevel: ContextLevel; expandOnFailure: boolean };
   };
   regions?: Record<string, { backend?: string; contextLevel?: ContextLevel }>;
-  sandbox?: { heapMb?: number; addressSpaceBytes?: number; cpuSeconds?: number; nodeBin?: string };
+  sandbox?: {
+    heapMb?: number;
+    addressSpaceBytes?: number;
+    cpuSeconds?: number;
+    nodeBin?: string;
+    /** spec §9.2: "auto" (default) = bwrap on Linux, sandbox-exec on macOS, else "node" (OARC-W046). "container" and
+     *  "unsafe-none" only when written here. */
+    isolation?: Isolation;
+    containerImage?: string; // container tier, default docker.io/library/node:<this Node's version>-slim
+  };
 }
 
 export const DEFAULT_CONFIG: OpenArcConfig = {
@@ -79,6 +89,9 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
   if (!names.length) return { config: DEFAULT_CONFIG, error: "openarc.config.json: no backends" };
   for (const ref of [c.compilation?.defaultBackend, c.compilation?.fallbackBackend, ...Object.values(c.regions ?? {}).map((r) => r.backend)])
     if (ref !== undefined && !names.includes(ref)) return { config: DEFAULT_CONFIG, error: `openarc.config.json: unknown backend "${ref}"` };
+  const iso = c.sandbox?.isolation;
+  if (iso !== undefined && !ISOLATIONS.includes(iso))
+    return { config: DEFAULT_CONFIG, error: `openarc.config.json: sandbox.isolation must be one of ${ISOLATIONS.join(", ")}${(iso as string) === "none" ? ' (no sandbox at all is spelled "unsafe-none")' : ""}` };
   for (const [name, b] of Object.entries(c.backends)) {
     const bad = (why: string) => ({ config: DEFAULT_CONFIG, error: `openarc.config.json: backend "${name}": ${why}` });
     if (typeof b !== "object" || b === null) return bad("must be an object");

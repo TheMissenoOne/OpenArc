@@ -27,7 +27,8 @@ type NormalizeOwnedText = (lines: string[], children: ChildSpan[]) => string;
 export const normalizeOwnedTextSpec = arc.defineRegion<NormalizeOwnedText>({
   id: "hash.normalizeOwnedText",
   intent: [
-    "1. Replace each child span lines[from..to] with the single line /*«openarc-child:<id>»*/ and join lines with \\n.",
+    "1. Strip one trailing \\r from every line (CRLF files hash like LF files, on every OS). Replace each child span lines[from..to]",
+    "with the single line /*«openarc-child:<id>»*/ and join lines with \\n.",
     "2. Parse with ts.createSourceFile(setParentNodes=true). Walk node.getChildren() depth-first, skipping JSDoc nodes;",
     "for every leaf, emit its leading comment ranges, then its getText() if non-empty, then its trailing comment ranges (every comment once, trimmed; same-line trailing comments count).",
     "3. Join with single spaces. Never use the raw scanner: it does not rescan templates or regexes, so whitespace inside them would be lost.",
@@ -52,6 +53,7 @@ export const normalizeOwnedTextSpec = arc.defineRegion<NormalizeOwnedText>({
     },
     { name: "regex whitespace is semantic", args: [["x = /a  b/g;"], []], expected: "x = /a  b/g ;" },
     { name: "trailing comment counts", args: [["x = 1; // why"], []], expected: "x = 1 ; // why" },
+    { name: "CRLF hashes like LF", args: [["const t = `a\r", "b`; // c\r"], []], expected: "const t = `a\nb` ; // c" },
   ],
 });
 

@@ -13,6 +13,7 @@
 | `openarc graph` | region tree: kind, state (`stale` for a compiler region whose spec changed since its body was verified), number of examples, file |
 | `openarc inspect <id>` | spec, state (`stale` as in `graph`, with `ownership` alongside), manifest entry and provenance (model, context level, attempts, sampling, checks) |
 | `openarc check <id> --oracle <module>#<export>` | differential test: run the compiled region and a reference implementation on its examples' arguments plus 60 seeded variations, in the sandbox, and list every disagreement; exit 1 if any. See "Thin examples" in [[Writing Specs]] |
+| `openarc doctor` | report Node, the platform, the tools found and the selected sandbox tier, then run one example in that sandbox which also tries a file write, a child process and a network request; each must be refused. No model. Exit 1 if the tier is unavailable or anything gets through (except the network on Node < 25 in the `node` tier, which is reported) |
 | `openarc freeze <id>` | make a region developer-owned |
 | `openarc release <id>` | hand a region back to the compiler; the current body is backed up to `.openarc/backup/` |
 | `openarc resolve <id> --keep` | accept the current body under the new spec |
@@ -51,3 +52,7 @@ Errors are `OARC-Exxx` and warnings `OARC-Wxxx`. The full table is in `SPEC-phas
 | W043 | a compiler-owned region's recompile failed, so it keeps a body that does not satisfy its current spec; `compile` exits 1 and `graph` shows it as `stale` |
 | W044 | thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); consider `openarc check --oracle` |
 | W045 | a generated block is unverified: no passing example of its function reaches it. It isn't cached as verified or committed; add an example that runs through it |
+| E091 | the sandbox timed out (wall clock) or hit a resource limit |
+| E092 | the configured sandbox tier isn't available on this machine (detail: `bwrap-unavailable`, `sandbox-exec-unavailable`, `no-podman-or-docker`); nothing runs |
+| W046 | weaker isolation: Node permission model only, no OS sandbox (the `node` tier: Windows, or Linux without a usable `bwrap`). Printed once per command. Detail `node-<version>:network-not-blocked` on Node < 25 |
+| W047 | `sandbox.isolation` is `"unsafe-none"`: no sandbox at all. Printed at error level on every run; it is never chosen implicitly |

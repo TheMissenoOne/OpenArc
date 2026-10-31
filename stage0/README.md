@@ -34,8 +34,8 @@ export const normalizeTitle: NormalizeTitle = (title) => {
 
 ## Requirements
 
-- Linux, with `bwrap` (bubblewrap) and `prlimit`. Examples run in a sandbox with no network, a read-only filesystem and resource limits. If the sandbox is unavailable, OpenArc refuses to run examples rather than running them unsandboxed.
-- Node ≥ 23.6, which runs `.ts` directly.
+- Linux, macOS or Windows. Examples always run sandboxed; the strength depends on the OS: `bwrap` on Linux (namespaces, no network, read-only stage, resource limits; install bubblewrap), `sandbox-exec` on macOS, and Node's permission model alone on Windows (warning `OARC-W046`). `npx openarc doctor` shows and tests the sandbox on your machine. OpenArc never runs examples unsandboxed unless you configure `"isolation": "unsafe-none"`.
+- Node ≥ 23.6, which runs `.ts` directly; Node 25+ recommended (the Node-only sandbox blocks network access from Node 25).
 - [Ollama](https://ollama.com) with a model, e.g. `ollama pull qwen3.5:9b`.
 
 ## Use
