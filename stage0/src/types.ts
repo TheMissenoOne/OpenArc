@@ -132,7 +132,8 @@ export type Command =
   | { cmd: "freeze" | "release" | "inspect"; id: string }
   | { cmd: "resolve"; id: string; mode: "keep" | "regen" | "unlink" }
   | { cmd: "graph" }
-  | { cmd: "usage"; reason: "unknown-command" | "missing-id" | "resolve-needs-mode" };
+  | { cmd: "extract"; file: string; fn?: string; id?: string } // spec §10; absent flags are omitted
+  | { cmd: "usage"; reason: "unknown-command" | "missing-id" | "resolve-needs-mode" | "missing-file" | "bad-flag" };
 
 // ---------- ports: every effect arrives through a parameter (spec §7.5) ----------
 /** Paths are project-relative POSIX. `remove` deletes a file or a whole directory tree. `list` returns direct child names, sorted. */

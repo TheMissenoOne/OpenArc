@@ -89,4 +89,29 @@ const strictSchema = { ...(MODEL_OUTPUT_SCHEMA as object), required: ["body", "i
   assert.match(cfg({ provider: "gemini", model: "m", maxContextTokens: 1 })!, /unknown provider/);
   assert.equal(cfg({ provider: "openai", model: "m", maxContextTokens: 1, apiKeyEnv: "K" }), undefined);
 }
+// connection error (Ollama died mid-run): retried exactly once, then given up
+{
+  const ollama: BackendConfig = { provider: "ollama", model: "m", maxContextTokens: 8192 };
+  const reply = JSON.stringify({ message: { role: "assistant", content: OUT }, done: true });
+  const flaky = (failures: Error[]) => {
+    let calls = 0;
+    const logs: string[] = [];
+    const ports = { log: (l: string) => logs.push(l), http: { async postJson() { calls++; const e = failures.shift(); if (e) throw e; return reply; } } } as unknown as Ports;
+    return { ports, logs, calls: () => calls };
+  };
+  const refused = () => Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+  const once = flaky([refused()]);
+  assert.equal(await complete(once.ports, ollama, "S", "U", env, 0), OUT);
+  assert.equal(once.calls(), 2);
+  assert.match(once.logs[0]!, /retrying once/);
+  const twice = flaky([refused(), refused()]);
+  await assert.rejects(complete(twice.ports, ollama, "S", "U", env, 0), /fetch failed/);
+  assert.equal(twice.calls(), 2);
+  const other = flaky([new Error("HTTP 500: boom")]);
+  await assert.rejects(complete(other.ports, ollama, "S", "U", env, 0), /HTTP 500/);
+  assert.equal(other.calls(), 1, "only connection errors are retried");
+  const hosted = flaky([new Error("connect ECONNREFUSED 127.0.0.1:1234")]);
+  assert.equal(await complete(hosted.ports, { provider: "openai", model: "local", baseUrl: "http://127.0.0.1:1234/v1", maxContextTokens: 8192 }, "S", "U", env, 0).catch((e) => e.message), "openai: no message content");
+  assert.equal(hosted.calls(), 2);
+}
 console.log("backends: request shapes ok");

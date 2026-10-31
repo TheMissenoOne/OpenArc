@@ -7,7 +7,7 @@ import type { Candidate, ChildSpan, CompileRequest, Diagnostic, ManifestView, Po
 import type { BackendConfig, ContextLevel, OpenArcConfig } from "./config.ts";
 import { hostOf, parseConfig } from "./config.ts";
 import { scanMarkers, buildRegionTree } from "./markers.ts";
-import { findDuplicateIds } from "./ids.ts";
+import { findDuplicateIds, isValidId } from "./ids.ts";
 import { canonicalJson, normalizeOwnedText, sha256Tagged } from "./hash.ts";
 import { detect } from "./ownership.ts";
 import { checkRestrictions } from "./block.ts";
@@ -88,6 +88,7 @@ export interface Project {
   accepted: Map<string, string>; // rel path -> text with this run's accepted candidates
   sandboxDir?: string; // rel path of this run's sandbox stage
   provenance: Map<string, { [k: string]: Json }>;
+  e080Streak: number; // consecutive OARC-E080s in this run; generate stops calling the backend at 3
 }
 
 const err = (code: Diagnostic["code"], extra: Omit<Diagnostic, "code"> = {}): Diagnostic => ({ code, ...extra });
@@ -114,7 +115,7 @@ export async function parse(ports: Ports, req: CompileRequest, diagnostics: Diag
   if (manifest.schema !== 1) diagnostics.push(err("OARC-E050"));
   const project: Project = {
     root: req.root, config, files: new Map(), disk: new Map(), specs: new Map(), regions: [], manifest,
-    digests: new Map(), accepted: new Map(), provenance: new Map(),
+    digests: new Map(), accepted: new Map(), provenance: new Map(), e080Streak: 0,
   };
   for (const dir of SOURCE_DIRS)
     for (const rel of await listTs(ports, dir)) {
@@ -495,6 +496,29 @@ function resolveLocal(p: Project, fromRel: string, spec: string): string | null 
   return p.files.has(rel) ? rel : null;
 }
 
+/** The import declaration most often used for package `spec` across the project (value imports only), or null. */
+function canonicalImport(p: Project, spec: string): string | null {
+  const counts = new Map<string, number>();
+  for (const rel of p.files.keys()) {
+    const sf = p.program?.getSourceFile(abs(p, rel));
+    for (const d of sf?.statements.filter(ts.isImportDeclaration) ?? [])
+      if ((d.moduleSpecifier as ts.StringLiteral).text === spec && d.importClause && !d.importClause.isTypeOnly) {
+        const t = d.getText(sf).replace(/\s+/g, " ");
+        counts.set(t, (counts.get(t) ?? 0) + 1);
+      }
+  }
+  let best: string | null = null;
+  for (const [t, n] of counts) if (best === null || n > counts.get(best)!) best = t; // ties: first seen (files are in sorted order)
+  return best;
+}
+
+/** "Allowed new imports": the deps, then the exact import form for each package dep (e.g. typescript needs a default import, TS2595). */
+function allowedImports(p: Project, deps: string[]): string {
+  const pkgs = deps.filter((d) => !d.startsWith("."));
+  const forms = pkgs.map((d) => canonicalImport(p, d) ?? d);
+  return [deps.join(", ") || "none", ...(forms.length ? ["Use exactly these import forms:", ...forms] : [])].join("\n");
+}
+
 const RULES = [
   "Only use imports listed under 'Allowed new imports' or already imported by the file.",
   "Never use: process, globalThis, eval, Function, fetch, require, dynamic import(), setTimeout, setInterval.",
@@ -548,11 +572,11 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   sections.push(["Intent", s.intent || "(none)"]);
   if (r.kind === "function") {
     sections.push(["Effects allowed", s.effects.join(", ") || "none"]);
-    sections.push(["Allowed new imports", s.deps.join(", ") || "none"]);
+    sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
     if (s.examples.length)
       sections.push(["Examples (deep strict equality; {\"$fake\": name} is a test double for that parameter)", s.examples.map((e) => canonicalJson(e)).join("\n")]);
   } else {
-    sections.push(["Allowed new imports", s.deps.join(", ") || "none"]);
+    sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
     sections.push(["Enclosing function (your block is at <<<HERE>>>)", enclosingSource(p, r)]);
   }
   if (level >= 2) sections.push([`Full file ${r.file}`, p.files.get(r.file)!]);
@@ -705,9 +729,9 @@ export function staticCheck(body: string, effects: string[], fileBound: Set<stri
 
 /** The body must parse as exactly one function body: it cannot close its braces and escape the region. */
 export function guardBody(body: string): string | null {
-  // Markers are recognised on comment tokens only (F2), so "@openarc:" inside a string or regex is inert and
+  // Markers are recognised on comment tokens only (F2), so the marker prefix inside a string or regex is inert and
   // allowed (the marker scanner itself needs it). Reject marker-shaped LINES (line-based locators must never be
-  // fooled, even by a template-literal line) and any comment that mentions @openarc:.
+  // fooled, even by a template-literal line) and any comment that mentions the marker prefix.
   if (linesOf(body).some((l) => /^\s*\/\/\s*@openarc:/.test(l))) return "OARC-E097 body contains a marker-shaped line (markers belong to the compiler)";
   const text = `async function __region() {\n${body}\n}\n`;
   const sf = ts.createSourceFile("g.ts", text, ts.ScriptTarget.Latest, true);
@@ -811,7 +835,8 @@ function mergeImports(text: string, imports: { from: string; names: string[] }[]
   return lines.join("\n");
 }
 
-const TS_MISSING_CONTEXT = new Set([2304, 2305, 2339, 2551, 2552, 2724]); // cannot find name/property/export: a context problem
+// cannot find name/property/export, or the wrong import form for a module (TS2595/TS1259/TS2497): a context problem
+const TS_MISSING_CONTEXT = new Set([2304, 2305, 2339, 2551, 2552, 2724, 2595, 1259, 2497]);
 
 export async function generate(ports: Ports, req: CompileRequest, p: Project, id: string, diagnostics: Diagnostic[]): Promise<{ candidate: Candidate | null; modelCalls: number }> {
   const r = p.regions.find((x) => x.id === id)!;
@@ -822,6 +847,12 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   let previous: { body: string; problems: string[] } | null = null;
   const cachePath = `.openarc/cache/${r.fingerprint.replace("sha256:", "")}.json`;
   const cached = await ports.fs.read(cachePath);
+  // The backend died mid-run (e.g. Ollama OOM-killed): after 3 consecutive E080s, stop calling it for the rest of the run.
+  if (p.e080Streak >= 3) return { candidate: null, modelCalls };
+  const backendDown = () => {
+    if (++p.e080Streak === 3) diagnostics.push(err("OARC-E080", { detail: "stopped:3-consecutive" }));
+    return { candidate: null, modelCalls };
+  };
 
   for (let attempt = 1; attempt <= c.maxAttempts; attempt++) {
     const backend = backendFor(p, id, stage);
@@ -833,7 +864,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       ports.log(`  ${id}: cache hit`);
     } else {
       const digest = await modelDigest(ports, p, backend, diagnostics);
-      if (digest === null) return { candidate: null, modelCalls };
+      if (digest === null) return backendDown();
       const context = attempt === 1 && level === initialLevel(p, r) ? r.context0 : buildContext(p, r, level, backend);
       const rendered = renderTemplate(PROMPT_TEMPLATE, {
         context,
@@ -851,8 +882,9 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
         );
       } catch (e) {
         diagnostics.push(err("OARC-E080", { id, detail: (e as Error).message.slice(0, 120) }));
-        return { candidate: null, modelCalls };
+        return backendDown();
       }
+      p.e080Streak = 0;
       modelCalls++;
       const parsed = parseOutput(raw);
       ports.log(`  ${id}: attempt ${attempt} via ${backend.name} (${backend.model}), context L${level} ${context.length} chars, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
@@ -985,48 +1017,41 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
 
 /** Apply candidates, run the joint check for blocks, build the new manifest, and write staged files. */
 export async function stage(ports: Ports, req: CompileRequest, p: Project, candidates: Candidate[], txid: string, diagnostics: Diagnostic[]): Promise<StagedFile[]> {
-  // joint check: a function whose blocks were generated in this run must pass ALL its examples now (F14).
-  // With --keep-going, a function that still has pending blocks can't run its examples yet; its blocks stay individually verified.
-  const generatedIds = new Set(candidates.map((c) => c.id));
-  const stillPending = (rootId: string) => p.regions.some((r) => r.root === rootId && r.kind === "block" && r.pending && !generatedIds.has(r.id));
-  const roots = new Set(candidates.map((c) => p.regions.find((r) => r.id === c.id)!).filter((r) => r.kind === "block").map((r) => r.root).filter((id) => !stillPending(id)));
+  // Joint check (F14): a block is verified only through its function's examples, and sibling outcomes that fail because
+  // another block is still pending count as inconclusive. So a generated block is committed only if its function passes
+  // ALL its examples now. When a sibling is still pending (it failed under --keep-going, or wasn't requested), the joint
+  // check can't run: the block is held back (OARC-W042) and stays pending. Its cache entry stays, so the next run gets it
+  // without a model call. A failed joint check aborts the run, or under --keep-going holds back that function's blocks.
   const overlay = new Map(p.files);
   for (const [k, v] of p.accepted) overlay.set(k, v);
-  for (const rootId of roots) {
-    if (!p.specs.get(rootId)!.examples.length) continue;
+  const regionOf = (id: string) => p.regions.find((r) => r.id === id)!;
+  const generatedIds = new Set(candidates.map((c) => c.id));
+  const genBlocks = candidates.map((c) => regionOf(c.id)).filter((r) => r.kind === "block");
+  const roots = [...new Set(genBlocks.map((r) => r.root))].filter((id) => p.specs.get(id)!.examples.length > 0);
+  const held = new Set<string>();
+  const hold = (rootId: string) => {
+    for (const r of genBlocks.filter((b) => b.root === rootId)) {
+      held.add(r.id);
+      overlay.set(r.file, spliceRegion(overlay.get(r.file)!, r.id, r.bodyLines)); // back to its pre-run (pending) body
+    }
+  };
+  const waiting = roots.filter((id) => p.regions.some((r) => r.root === id && r.kind === "block" && r.pending && !generatedIds.has(r.id)));
+  for (const rootId of waiting) {
+    hold(rootId);
+    for (const r of genBlocks.filter((b) => b.root === rootId)) diagnostics.push(err("OARC-W042", { id: r.id, detail: `waiting:${rootId}` }));
+  }
+  for (const rootId of roots.filter((id) => !waiting.includes(id))) {
     const res = await runSandbox(ports, req, p, rootId, overlay);
     if (res.error || res.failed.length || !res.complete) {
       diagnostics.push(err("OARC-E090", { id: rootId, detail: `joint:${res.error ?? res.failed.map((f) => f.name).join(",")}` }));
-      return [];
+      if (!req.keepGoing) return [];
+      hold(rootId);
     }
   }
   if (p.sandboxDir) await ports.fs.remove(p.sandboxDir);
 
   const files = new Map(overlay);
-  const manifest: Manifest = { schema: 1, regions: {} };
-  const generated = new Set(candidates.map((c) => c.id));
-  for (const r of p.regions) {
-    const text = files.get(r.file)!;
-    const old = p.manifest.regions[r.id];
-    let hash = r.hash;
-    if (generated.has(r.id)) {
-      const tree = buildRegionTree(scanMarkers(text).markers).roots;
-      const flat = (ns: typeof tree): typeof tree => ns.flatMap((n) => [n, ...flat(n.children)]);
-      const n = flat(tree).find((x) => x.id === r.id)!;
-      const body = linesOf(text).slice(n.beginLine, n.endLine - 1);
-      hash = sha256Tagged(normalizeOwnedText(body, n.children.map((c) => ({ id: c.id, from: c.beginLine - n.beginLine - 1, to: c.endLine - n.beginLine - 1 }))));
-    } else if (r.state === "pending") continue;
-    const base = { kind: r.kind, parent: r.parent, file: r.file, ...(r.kind === "function" ? { symbol: r.spec.symbol } : {}) };
-    if (generated.has(r.id)) {
-      manifest.regions[r.id] = { ...base, ownership: "compiler", hash, specHash: r.specHash, fingerprint: r.fingerprint, provenance: { ...p.provenance.get(r.id)!, at: ports.now() } };
-    } else if (r.state === "compiler") {
-      manifest.regions[r.id] = old!;
-    } else if (r.state === "developer") {
-      manifest.regions[r.id] = old
-        ? { ...old, ownership: "developer", hash: r.hash }
-        : { ...base, ownership: "developer", hash: r.hash, specHash: r.specHash, fingerprint: null, provenance: { source: "extracted", at: ports.now() } };
-    } else if (old) manifest.regions[r.id] = { ...old, ownership: "conflicted" };
-  }
+  const manifest = nextManifest(p, files, new Set([...generatedIds].filter((id) => !held.has(id))), ports.now());
   const out: StagedFile[] = [];
   for (const [rel, text] of files) {
     if (p.disk.get(rel) === text) continue;
@@ -1042,4 +1067,219 @@ export async function stage(ports: Ports, req: CompileRequest, p: Project, candi
   out.push({ target: ".openarc/manifest.json", text: JSON.stringify(manifest, null, 2) + "\n" });
   for (const [i, f] of out.entries()) await ports.fs.write(`.openarc/txn/${txid}/stage/${i}`, f.text);
   return out;
+}
+
+/** The manifest STAGE writes: generated regions become compiler-owned, the rest keep or record their analyzed state. */
+function nextManifest(p: Project, files: Map<string, string>, generated: Set<string>, now: string): Manifest {
+  const manifest: Manifest = { schema: 1, regions: {} };
+  for (const r of p.regions) {
+    const text = files.get(r.file)!;
+    const old = p.manifest.regions[r.id];
+    let hash = r.hash;
+    if (generated.has(r.id)) {
+      const tree = buildRegionTree(scanMarkers(text).markers).roots;
+      const flat = (ns: typeof tree): typeof tree => ns.flatMap((n) => [n, ...flat(n.children)]);
+      const n = flat(tree).find((x) => x.id === r.id)!;
+      const body = linesOf(text).slice(n.beginLine, n.endLine - 1);
+      hash = sha256Tagged(normalizeOwnedText(body, n.children.map((c) => ({ id: c.id, from: c.beginLine - n.beginLine - 1, to: c.endLine - n.beginLine - 1 }))));
+    } else if (r.state === "pending") continue;
+    const base = { kind: r.kind, parent: r.parent, file: r.file, ...(r.kind === "function" ? { symbol: r.spec.symbol } : {}) };
+    if (generated.has(r.id)) {
+      manifest.regions[r.id] = { ...base, ownership: "compiler", hash, specHash: r.specHash, fingerprint: r.fingerprint, provenance: { ...p.provenance.get(r.id)!, at: now } };
+    } else if (r.state === "compiler") {
+      manifest.regions[r.id] = old!;
+    } else if (r.state === "developer") {
+      manifest.regions[r.id] = old
+        ? { ...old, ownership: "developer", hash: r.hash }
+        : { ...base, ownership: "developer", hash: r.hash, specHash: r.specHash, fingerprint: null, provenance: { source: "extracted", at: now } };
+    } else if (old) manifest.regions[r.id] = { ...old, ownership: "conflicted" };
+  }
+  return manifest;
+}
+
+/** True when this run's ownership transitions (W060 -> developer, new developer/extracted regions, conflicts) are not yet
+ *  in the manifest. compile.run commits a manifest-only transaction for them when there is nothing to generate.
+ *  Removed entries don't count: those are OARC-E062 and need `openarc resolve --unlink`. */
+export function manifestChanged(p: Project): boolean {
+  const next = nextManifest(p, p.files, new Set(), "");
+  return Object.entries(next.regions).some(([id, e]) => {
+    const old = p.manifest.regions[id];
+    return !old || canonicalJson(e as unknown as Json) !== canonicalJson(old as unknown as Json);
+  });
+}
+
+// ───────────────────────────── EXTRACT (§10) ─────────────────────────────
+// `openarc extract <file>`: adopt existing functions as developer-owned regions. Markers go around the declaration,
+// a defineRegion spec (with a checker-derived `type <Name>Fn`) goes above it, and the body stays byte-for-byte,
+// so nothing is regenerated until `openarc release <id>`.
+
+export interface ExtractResult {
+  files: StagedFile[]; // the rewritten source file, then the manifest; empty when nothing changed
+  extracted: string[]; // new region ids
+  skipped: string[]; // functions already inside a region (re-running is a no-op)
+  refused: { name: string; reason: string }[];
+}
+
+const idSegment = (s: string) => {
+  const c = s.replace(/[^A-Za-z0-9]+(.)?/g, (_m, ch: string | undefined) => (ch ? ch.toUpperCase() : "")).replace(/^[^A-Za-z]+/, "");
+  return c ? c[0]!.toLowerCase() + c.slice(1) : "x";
+};
+/** Default id: `<file-stem>.<functionName>`, each segment normalised to the id grammar (§2.3). */
+export const extractId = (rel: string, fn: string) => [...rel.split("/").at(-1)!.replace(/\.tsx?$/, "").split("."), fn].map(idSegment).join(".");
+
+const SPEC_ID_RE = /\bdefine(?:Region|Block)\s*(?:<[^>]*>)?\s*\(\s*\{\s*id:\s*"([^"]+)"/g;
+const tsErrors = (prog: ts.Program, sf: ts.SourceFile) =>
+  [...prog.getSyntacticDiagnostics(sf), ...prog.getSemanticDiagnostics(sf)].filter((d) => d.category === ts.DiagnosticCategory.Error);
+
+export async function extract(ports: Ports, req: CompileRequest, p: Project, rel: string, opts: { fn?: string; id?: string }): Promise<ExtractResult> {
+  const res: ExtractResult = { files: [], extracted: [], skipped: [], refused: [] };
+  const refuse = (name: string, reason: string) => res.refused.push({ name, reason });
+  const text = p.files.get(rel);
+  if (!rel.startsWith("src/") || !rel.endsWith(".ts") || text === undefined) return refuse(rel, "not a .ts file under src/ (only src/ holds regions)"), res;
+  if (opts.id && !opts.fn) return refuse(rel, "--id needs --function"), res;
+  p.program = makeProgram(p, p.files);
+  const checker = p.program.getTypeChecker();
+  const sf = p.program.getSourceFile(abs(p, rel))!;
+  const errorsBefore = tsErrors(p.program, sf).length;
+  const scan = scanMarkers(text);
+  const tree = buildRegionTree(scan.markers);
+  if (scan.diagnostics.length || tree.diagnostics.length) return refuse(rel, `fix its markers first (${[...scan.diagnostics, ...tree.diagnostics].map((d) => d.code).join(", ")})`), res;
+  const flat = (ns: typeof tree.roots): typeof tree.roots => ns.flatMap((n) => [n, ...flat(n.children)]);
+  const regions = flat(tree.roots);
+  const usedIds = new Set([...srcFiles(p).flatMap(([, t]) => [...t.matchAll(SPEC_ID_RE)].map((m) => m[1]!)), ...Object.keys(p.manifest.regions)]);
+  const bound = fileBindings(text);
+  const hasMod = (st: ts.Statement, k: ts.SyntaxKind) => ts.canHaveModifiers(st) && (ts.getModifiers(st)?.some((m) => m.kind === k) ?? false);
+  const listed = new Set(sf.statements.filter(ts.isExportDeclaration).filter((d) => !d.moduleSpecifier && d.exportClause && ts.isNamedExports(d.exportClause))
+    .flatMap((d) => (d.exportClause as ts.NamedExports).elements.map((e) => (e.propertyName ?? e.name).text)));
+  const lineOf = (pos: number) => sf.getLineAndCharacterOfPosition(pos).line; // 0-based
+  const lines = linesOf(text);
+
+  // Top-level function declarations and `const f = (...) => ...` / `= function (...) {...}`, grouped by name (overloads).
+  const byName = new Map<string, (ts.FunctionDeclaration | ts.VariableStatement)[]>();
+  for (const st of sf.statements) {
+    let name: string | undefined;
+    if (ts.isFunctionDeclaration(st)) {
+      if (!st.name) {
+        if (!opts.fn) refuse("default", "default-exported anonymous function: give it a name first");
+        continue;
+      }
+      name = st.name.text;
+    } else if (ts.isVariableStatement(st) && st.declarationList.declarations.length === 1) {
+      const d = st.declarationList.declarations[0]!;
+      if (ts.isIdentifier(d.name) && d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))) name = d.name.text;
+    } else if (ts.isExportAssignment(st) && !st.isExportEquals && (ts.isArrowFunction(st.expression) || ts.isFunctionExpression(st.expression)) && !opts.fn) {
+      refuse("default", "default-exported anonymous function: give it a name first");
+    }
+    if (name !== undefined) byName.set(name, [...(byName.get(name) ?? []), st as ts.FunctionDeclaration | ts.VariableStatement]);
+  }
+  if (opts.fn && !byName.has(opts.fn)) {
+    const isMethod = sf.statements.some((st) => ts.isClassDeclaration(st) && st.members.some((m) =>
+      (ts.isMethodDeclaration(m) || ts.isGetAccessor(m) || ts.isSetAccessor(m)) && m.name && ts.isIdentifier(m.name) && (m.name.text === opts.fn || `${st.name?.text}.${m.name.text}` === opts.fn)));
+    refuse(opts.fn, isMethod ? "class method: regions are top-level functions (§3.2); move it out of the class first" : "no top-level function with that name");
+  }
+
+  const inserts: { from: number; to: number; specAt: number; id: string; spec: string[] }[] = [];
+  for (const [name, decls] of byName) {
+    const exported = decls.some((st) => hasMod(st, ts.SyntaxKind.ExportKeyword)) || listed.has(name);
+    if (opts.fn ? name !== opts.fn : !exported) continue;
+    if (decls.length > 1) {
+      refuse(name, "overloaded function: a region holds one declaration with one call signature");
+      continue;
+    }
+    const st = decls[0]!;
+    const fnNode = ts.isFunctionDeclaration(st) ? st : (st.declarationList.declarations[0]!.initializer as ts.ArrowFunction | ts.FunctionExpression);
+    const nameNode = ts.isFunctionDeclaration(st) ? st.name! : (st.declarationList.declarations[0]!.name as ts.Identifier);
+    const start = st.getStart(sf), from = lineOf(start), to = lineOf(st.getEnd());
+    if (regions.some((n) => n.beginLine < from + 1 && to + 1 < n.endLine)) {
+      res.skipped.push(name);
+      continue;
+    }
+    const sigs = checker.getTypeAtLocation(nameNode).getCallSignatures();
+    if (sigs.length !== 1) {
+      refuse(name, "overloaded function: a region holds one declaration with one call signature");
+      continue;
+    }
+    if (fnNode.typeParameters?.length || sigs[0]!.typeParameters?.length) {
+      refuse(name, "generic function: its type parameters can't be expressed in the non-generic alias defineRegion<F> needs");
+      continue;
+    }
+    if (lines[from]!.slice(0, sf.getLineAndCharacterOfPosition(start).character).trim() || !/^\s*(\/\/.*)?$/.test(lines[to]!.slice(sf.getLineAndCharacterOfPosition(st.getEnd()).character))) {
+      refuse(name, "the declaration shares a line with other code; markers need whole lines");
+      continue;
+    }
+    const id = opts.id ?? extractId(rel, name);
+    if (!isValidId(id)) {
+      refuse(name, `invalid id "${id}" (segments are [a-z][a-zA-Z0-9]*)`);
+      continue;
+    }
+    if (usedIds.has(id)) {
+      refuse(name, `id "${id}" is already used; pass --function ${name} --id <id>`);
+      continue;
+    }
+    const alias = `${name[0]!.toUpperCase()}${name.slice(1)}Fn`;
+    const specName = `${name}Spec`;
+    if (bound.has(specName) || new RegExp(`\\b(type|interface|class|enum)\\s+${alias.replace(/\$/g, "\\$")}\\b`).test(text)) {
+      refuse(name, `${alias} or ${specName} is already declared in the file`);
+      continue;
+    }
+    const sig = checker.signatureToString(sigs[0]!, st, ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.WriteArrowStyleSignature);
+    const doc = ts.getJSDocCommentsAndTags(st).filter(ts.isJSDoc).map((d) => ts.getTextOfJSDocComment(d.comment) ?? "").join("\n");
+    const first = doc.split("\n").map((l) => l.trim()).find(Boolean) ?? "TODO describe";
+    const ind = /^\s*/.exec(lines[from]!)![0];
+    inserts.push({
+      from, to, id,
+      specAt: lineOf(st.getStart(sf, true)), // above the JSDoc, which stays attached to the function and outside the markers
+      spec: [
+        `type ${alias} = ${sig};`,
+        "",
+        `export const ${specName} = arc.defineRegion<${alias}>({`,
+        `  id: ${JSON.stringify(id)},`,
+        ...(id.split(".").at(-1) === name ? [] : [`  symbol: ${JSON.stringify(name)},`]),
+        `  intent: [${JSON.stringify(`[inferred] ${first}`)}],`,
+        "  examples: [],",
+        "});",
+        "",
+      ].map((l) => (l ? ind + l : l)),
+    });
+    usedIds.add(id);
+  }
+  if (!inserts.length) return res;
+  if (bound.has("arc") && !/import \* as arc from "openarc"/.test(text)) return refuse(rel, "the name `arc` is already bound; specs need `import * as arc from \"openarc\"`"), res;
+
+  for (const ins of inserts.sort((a, b) => b.from - a.from)) {
+    const ind = /^\s*/.exec(lines[ins.from]!)![0];
+    lines.splice(ins.to + 1, 0, `${ind}// @openarc:end ${ins.id}`);
+    lines.splice(ins.from, 0, `${ind}// @openarc:begin ${ins.id}`);
+    lines.splice(ins.specAt, 0, ...ins.spec);
+  }
+  if (!/import \* as arc from "openarc"/.test(text)) lines.splice(lines[0]?.startsWith("#!") ? 1 : 0, 0, 'import * as arc from "openarc";');
+  const out = lines.join("\n");
+
+  // The result must type-check no worse than before, and analyze as developer-owned function regions.
+  p.files.set(rel, out);
+  p.program = makeProgram(p, p.files, p.program);
+  const after = tsErrors(p.program, p.program.getSourceFile(abs(p, rel))!);
+  const ds: Diagnostic[] = [];
+  if (after.length <= errorsBefore) {
+    p.specs.clear();
+    p.regions = [];
+    await analyze(ports, req, p, ds, { offline: true });
+  }
+  const bad = ds.filter((d) => d.code.startsWith("OARC-E") && d.file === rel);
+  if (after.length > errorsBefore || bad.length) {
+    p.files.set(rel, text);
+    const why = after.length > errorsBefore ? `TS${after[0]!.code} ${ts.flattenDiagnosticMessageText(after[0]!.messageText, " ")}` : bad.map((d) => `${d.code}${d.id ? ` ${d.id}` : ""}`).join(", ");
+    return refuse(rel, `the extracted file would not check: ${why}`), res;
+  }
+  const manifest: Manifest = JSON.parse(JSON.stringify(p.manifest));
+  for (const { id } of [...inserts].reverse()) {
+    const r = p.regions.find((x) => x.id === id)!;
+    manifest.regions[id] = {
+      kind: "function", parent: null, file: rel, symbol: r.spec.symbol, ownership: "developer",
+      hash: r.hash, specHash: r.specHash, fingerprint: null, provenance: { source: "extracted", at: ports.now() },
+    };
+    res.extracted.push(id);
+  }
+  res.files = [{ target: rel, text: out }, { target: ".openarc/manifest.json", text: JSON.stringify(manifest, null, 2) + "\n" }];
+  return res;
 }

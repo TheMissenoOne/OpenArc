@@ -24,7 +24,23 @@ function apiKey(b: BackendConfig, env: Record<string, string | undefined>): stri
 // OpenAI strict json_schema needs every property listed in `required`; imports: [] is what parseOutput defaults to anyway.
 const STRICT_OUTPUT_SCHEMA = { ...(MODEL_OUTPUT_SCHEMA as Record<string, Json>), required: ["body", "imports"] } as Json;
 
-export async function complete(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined> = process.env): Promise<string> {
+/** fetch() connection failures: the server is down or restarting (e.g. Ollama OOM-killed mid-run). */
+const isConnectionError = (e: unknown) =>
+  /ECONNREFUSED|fetch failed/.test(`${(e as Error)?.message} ${((e as Error)?.cause as { code?: string } | undefined)?.code ?? ""}`);
+
+/** One request; on a connection error, wait `retryDelayMs` and retry ONCE (Ollama restarts after an OOM kill). */
+export async function complete(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined> = process.env, retryDelayMs = 10_000): Promise<string> {
+  try {
+    return await completeOnce(ports, b, system, user, env);
+  } catch (e) {
+    if (!isConnectionError(e)) throw e;
+    ports.log(`  backend ${b.provider} ${baseUrlOf(b)}: connection failed, retrying once in ${retryDelayMs / 1000}s`);
+    await new Promise((r) => setTimeout(r, retryDelayMs));
+    return completeOnce(ports, b, system, user, env);
+  }
+}
+
+async function completeOnce(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined>): Promise<string> {
   const seed = b.seed ?? 1;
   const maxTokens = b.outputReserveTokens ?? 2048;
   if (b.provider === "ollama") {

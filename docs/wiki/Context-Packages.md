@@ -10,6 +10,10 @@ A region is compiled the way a unit test isolates code. Instead of the repositor
 
 Block regions start at L1. They also get the variables in scope, with checker-printed types, and the enclosing function with `<<<HERE>>>` where the block goes.
 
+## Import forms
+
+"Allowed new imports" lists the spec's `deps`. For each package dep it adds the exact import line the project already uses, e.g. `import ts from "typescript";` (typescript needs a default import; `import * as ts` fails with TS2595). If the project never imports that package, only the specifier is shown.
+
 ## Budgets
 
 `budget = (maxContextTokens − outputReserveTokens) × 3.5` characters. If a package is too large, optional sections are dropped in this order: full file, helpers, imports. Larger models get richer packages simply by having a bigger `maxContextTokens`.
@@ -18,7 +22,7 @@ Block regions start at L1. They also get the variables in scope, with checker-pr
 
 | Failure | Interpretation | Next attempt |
 |---|---|---|
-| TS2304/2305/2339/2551/2552/2724 (cannot find name/property/export) | context problem | one level more context |
+| TS2304/2305/2339/2551/2552/2724 (cannot find name/property/export), TS2595/1259/2497 (wrong import form for a module) | context problem | one level more context |
 | other type errors, failed examples, static rules | implementation problem | same level + the exact diagnostics |
 | last attempt | capability problem | `fallbackBackend`, if configured |
 

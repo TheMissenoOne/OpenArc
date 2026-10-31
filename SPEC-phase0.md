@@ -16,7 +16,7 @@ The keywords MUST, MUST NOT, SHOULD, and MAY are normative. Diagnostics use the 
 | Ownership | Non-overlapping, nested, hash-based |
 | Model backend | One Ollama instance, structured output |
 | Verification | tsc, static effect/import check, developer examples in a sandbox |
-| Reverse | Provenance (manifest) only. Static extraction is Phase 5 |
+| Reverse | Provenance (manifest), and `openarc extract` of whole functions (§10). Extraction of arbitrary selections is Phase 5 |
 | Editor | Out of scope for this document. It consumes the manifest (§5) |
 
 **Non-goals for v0:** operator algebra, CUE/TypeSpec, projection or virtual documents, same-region three-way merge, non-TS targets, LLM-written authoritative tests, extraction of arbitrary selections.
@@ -322,11 +322,11 @@ any state ──error──> ABORT (no writes; diagnostics printed; exit code 1)
 | ANALYZE | Pair specs with markers. Build the region tree. Compute hashes and ownership (§6.2), block contracts (§3.5) and fingerprints | E011, E012, E021, E032–E035, E061–E063 |
 | VALIDATE | Contract binding (§2.4) on the **current** code. Example typing (tsc). `refine` | E020, E041, E070 |
 | PLAN | Select targets: pending regions, plus `compiler` regions whose fingerprint ≠ `m.fingerprint`, restricted to the requested ids and their descendants. Skip `developer`/`conflicted` regions with W060/E061. Order: children before parents (post-order). Parents are generated with children as opaque `«openarc-child»` slots. | — |
-| GENERATE | Cache lookup by fingerprint. On a miss, call the model (§8.4) | E080 (backend unreachable), E081 (schema invalid) |
+| GENERATE | Cache lookup by fingerprint. On a miss, call the model (§8.4). A connection error (`ECONNREFUSED`, `fetch failed`) is retried once after 10 s. After 3 consecutive E080s in one run, the remaining targets are skipped without calling the backend (E080, detail `stopped:3-consecutive`) | E080 (backend unreachable), E081 (schema invalid) |
 | STATIC | Splice the candidate into an in-memory copy. Apply §7 | E070–E074 |
 | SANDBOX | Run the examples of the enclosing (F) region(s) (§9) | E090 (example failed), E091 (timeout/limit), E092 (sandbox unavailable) |
 | repair | If STATIC or SANDBOX fails and attempts < 3, go back to GENERATE with a repair prompt (§8.5). Otherwise ABORT for this run | E082 (attempts exhausted) |
-| STAGE | Write every changed file to `.openarc/txn/<txid>/`, plus the new manifest. Write `.openarc/txn/<txid>/journal.json` listing `{target, backupOf}` | E093 (I/O) |
+| STAGE | Write every changed file to `.openarc/txn/<txid>/`, plus the new manifest. When PLAN found no targets but ownership changed (a W060 transition to `developer`, a new hand-written region), STAGE and COMMIT still run with the manifest alone, so the transition is recorded once and a later spec change is detected as E061. Write `.openarc/txn/<txid>/journal.json` listing `{target, backupOf}` | E093 (I/O) |
 | COMMIT | For each file: copy the original to the journal backup, then `rename(staged, target)`. Then rename the manifest. Delete the journal last. | — |
 
 ### 8.2 Crash recovery
@@ -396,7 +396,9 @@ Block regions always start at L1, plus the variables in scope (`let`/`const`/par
 
 The **budget** is `(maxContextTokens − outputReserveTokens) × 3.5` characters for the selected backend (§13). Optional sections are dropped (full file first, then helpers, then imports) until the package fits.
 
-**Escalation by failure type.** If attempt *n* fails with a missing name, property or export (TS2304/2305/2339/2551/2552/2724), that's a context problem, so attempt *n+1* expands one level. Any other failure is repaired at the same level, with the diagnostics. The last attempt uses `fallbackBackend` if one is configured.
+Under "Allowed new imports", each package (non-relative) dep is followed by the exact import declaration the project already uses for it, most frequent value import first (e.g. `import ts from "typescript";`, which needs a default import), or by the bare specifier if the project never imports it.
+
+**Escalation by failure type.** If attempt *n* fails with a missing name, property or export (TS2304/2305/2339/2551/2552/2724), or with the wrong import form for a module (TS2595/TS1259/TS2497), that's a context problem, so attempt *n+1* expands one level. Any other failure is repaired at the same level, with the diagnostics. The last attempt uses `fallbackBackend` if one is configured.
 
 The hash of the initial context package is part of the fingerprint (§4.3). A change in any type the region depends on therefore invalidates the cache.
 
@@ -407,6 +409,8 @@ Small models often return a whole function when asked for a body. If a function 
 ### 8.10 Joint verification of sibling blocks [F14]
 
 Block regions are verified through their function's examples, but sibling blocks can only pass those examples together. While generating a block, an example outcome that fails only because another block is still `arc.pending` is **inconclusive**, not a failure. At STAGE, every function whose blocks were generated in this run must pass **all** its examples with every candidate applied. Otherwise the run aborts with `OARC-E090` (detail `joint:…`) and nothing is written.
+
+A generated block is committed **only** if its function passed that joint check (or has no examples, W041). If a sibling block is still pending (it failed under `--keep-going`, or it was outside the requested ids), the joint check cannot run: the generated blocks of that function are **held back** (`OARC-W042`, detail `waiting:<function id>`) and stay pending on disk and in the manifest. Their verified bodies stay in the cache, so a later run that completes the siblings commits them without a model call. Under `--keep-going`, a failed joint check holds back that function's blocks (`OARC-E090`) instead of aborting the run.
 
 ## 9. Verification
 
@@ -468,6 +472,14 @@ Fakes are developer-authored and authoritative (§9.1). They run inside the sand
 2. The command inserts markers and a `defineBlock({id, intent: "TODO"})` at module scope, and records `{kind: "block", ownership: "developer", source: "extracted"}`. The body is unchanged, so no regeneration happens until `openarc release`.
 3. It MAY ask the model to propose an `intent`. The proposal is written as `intent` prefixed with `"[inferred] "`, which is left for the developer to remove.
 
+**`openarc extract <file> [--function <name>] [--id <id>]`** adopts existing functions as (F) regions. It is deterministic and never calls a model.
+1. Candidates are the top-level `function` declarations and `const S = (...) => ...` / `= function (...) {...}` statements of a file under `src/`: every exported one, or only `--function <name>` (exported or not). `--id` requires `--function`.
+2. For each, the command writes, above the declaration (and above its JSDoc, which stays attached and outside the markers), `type <Name>Fn = <signature>;`, where the signature is printed by the type checker as a non-generic arrow type, and then `export const <name>Spec = arc.defineRegion<<Name>Fn>({ id, intent: ["[inferred] <first JSDoc line | TODO describe>"], examples: [] })`. `symbol` is added when the id's last segment differs from the function name. Markers go around the declaration lines. `import * as arc from "openarc"` is added if missing.
+3. The id defaults to `<file-stem>.<functionName>`, each segment normalised to §2.3 (separators camel-cased, leading non-letters dropped, first letter lowercased).
+4. Each region is recorded as `{kind: "function", ownership: "developer", fingerprint: null, provenance: {source: "extracted"}}` with the hashes ANALYZE computes. The declaration's text is unchanged byte for byte, so nothing is regenerated until `openarc release <id>`. Editing the spec of a developer region is E061 as usual (`resolve --keep` accepts it).
+5. It refuses, with a message and exit code 1: overloaded functions, generic functions (type parameters can't be expressed in a non-generic `F`), default-exported anonymous functions, class methods, declarations that share a line with other code, invalid or already-used ids, and any result that type-checks worse than the original file or fails ANALYZE.
+6. It is idempotent: a declaration already inside a region is skipped. File and manifest are written in one transaction (§8.1 STAGE/COMMIT) under the lock (§8.3).
+
 ---
 
 ## 11. Diagnostics
@@ -490,6 +502,7 @@ A diagnostic is `{code, id?, file?, line?, detail?}`. It has **no message field*
 | E035 | unsupported construct in a block region |
 | W040 | block region verified indirectly |
 | W041 | block region has no behavioral verification (parent has no examples) |
+| W042 | block held back: its function can't be verified until all its blocks exist (§8.10) |
 | E041 | `refine: "next"` unsupported in v0 |
 | E050 | unknown manifest schema |
 | W060 | manual edit detected; region is now developer-managed |

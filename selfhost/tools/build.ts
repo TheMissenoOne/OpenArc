@@ -6,7 +6,7 @@ import { chmodSync, cpSync, existsSync, readFileSync, rmSync, writeFileSync } fr
 
 const root = process.cwd();
 const version = JSON.parse(readFileSync(`${root}/core/package.json`, "utf8")).version as string;
-rmSync(`${root}/build`, { recursive: true, force: true });
+rmSync(`${root}/build/dist`, { recursive: true, force: true }); // keep earlier openarc-*.tgz: other checkouts install them by path
 execFileSync(`${root}/node_modules/.bin/tsc`, ["-p", "tsconfig.build.json"], { stdio: "inherit" });
 const tsVersion = JSON.parse(readFileSync(`${root}/node_modules/typescript/package.json`, "utf8")).version as string;
 writeFileSync(`${root}/build/package.json`, JSON.stringify({

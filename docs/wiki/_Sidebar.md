@@ -7,6 +7,7 @@
 - [[Context Packages]]
 - [[Safety Model]]
 - [[Fakes]]
+- [[Adopting Existing Code]]
 - [[CLI Reference]]
 - [[Bootstrap]]
 - [[Design Log]]

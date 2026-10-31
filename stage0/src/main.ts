@@ -2,12 +2,13 @@
 // `openarc` CLI entry point. Hand-written: the real ports plus command dispatch.
 import { mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { CompileRequest, Diagnostic, Ports } from "./types.ts";
 import { parseArgv } from "./cli.ts";
 import { run } from "./compile.ts";
+import { commit, planJournal } from "./txn.ts";
 import * as engine from "./engine.ts";
 import { DEFAULT_CONFIG, hostOf } from "./config.ts";
 
@@ -26,6 +27,7 @@ const MESSAGES: Record<string, string> = {
   "OARC-E035": "unsupported construct in a block region",
   "OARC-W040": "block region verified indirectly (through its function's examples)",
   "OARC-W041": "block region has no behavioral verification (its function has no examples)",
+  "OARC-W042": "block held back: its function can't be verified until all its blocks exist (kept in the cache, committed by a later run)",
   "OARC-E041": "refine: \"next\" is unsupported in v0",
   "OARC-E050": "unknown manifest schema",
   "OARC-E051": "invalid openarc.config.json",
@@ -178,7 +180,7 @@ async function main(argv: string[]): Promise<number> {
 
   switch (cmd.cmd) {
     case "usage":
-      console.error(`openarc: ${cmd.reason}\n\nusage: openarc init | scaffold | compile [--keep-going] [ids...] | graph | inspect <id>\n       openarc freeze|release <id> | resolve <id> --keep|--regen|--unlink`);
+      console.error(`openarc: ${cmd.reason}\n\nusage: openarc init | scaffold | compile [--keep-going] [ids...] | graph | inspect <id>\n       openarc freeze|release <id> | resolve <id> --keep|--regen|--unlink\n       openarc extract <file> [--function <name>] [--id <id>]`);
       return 2;
     case "init": {
       const wrote: string[] = [];
@@ -210,8 +212,33 @@ async function main(argv: string[]): Promise<number> {
       const keepGoing = cmd.ids.includes("--keep-going");
       const res = await run(ports, { ...request(root, project, cmd.ids.filter((a) => !a.startsWith("--"))), keepGoing });
       res.diagnostics.forEach((d) => console.error(fmt(d)));
+      if (res.diagnostics.some((d) => d.code === "OARC-E080" && d.detail === "stopped:3-consecutive"))
+        console.error("stopped early: the model backend failed 3 times in a row, so the remaining regions were skipped. Is it running (Ollama OOM-killed?)");
       console.error(`done: exit ${res.exit} · ${res.modelCalls} model call(s) · ${((Date.now() - t0) / 1000).toFixed(1)}s`);
       return res.exit;
+    }
+    case "extract": {
+      const rel = relative(root, resolve(process.cwd(), cmd.file)).split(sep).join("/");
+      const project = await engine.parse(ports, request(root, null, []), diagnostics);
+      const res = await engine.extract(ports, request(root, project, []), project, rel, { fn: cmd.fn, id: cmd.id });
+      print();
+      for (const n of res.skipped) console.log(`already a region: ${n}`);
+      for (const r of res.refused) console.error(`refused ${r.name}: ${r.reason}`);
+      if (res.files.length) {
+        if (!(await ports.fs.createExclusive(".openarc/lock"))) {
+          console.error(fmt({ code: "OARC-E095" }));
+          return 1;
+        }
+        try {
+          const txid = ports.newTxId();
+          for (const [i, f] of res.files.entries()) await ports.fs.write(`.openarc/txn/${txid}/stage/${i}`, f.text);
+          await commit(ports.fs, planJournal(txid, res.files.map((f, i) => ({ target: f.target, staged: `.openarc/txn/${txid}/stage/${i}` }))));
+        } finally {
+          await ports.fs.remove(".openarc/lock");
+        }
+        console.log(`extracted (developer-owned): ${res.extracted.join(", ")}\nreview the [inferred] intents, add examples, then \`openarc release <id>\` to hand a region to the compiler`);
+      } else if (!res.refused.length) console.log("nothing to extract");
+      return res.refused.length ? 1 : 0;
     }
     case "graph":
     case "inspect": {

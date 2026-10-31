@@ -110,7 +110,7 @@ export async function run(ports: Ports, req: CompileRequest): Promise<CompileRes
     // @openarc:begin compile.run.plan
     arc.pending("compile.run.plan");
     // @openarc:end compile.run.plan
-    if (targets.length === 0) return done(hasErrors(diagnostics) ? 1 : 0);
+    if (targets.length === 0 && (project === null || !engine.manifestChanged(project))) return done(hasErrors(diagnostics) ? 1 : 0);
 
     for (const id of targets) {
       let candidate: Candidate | null = null;
