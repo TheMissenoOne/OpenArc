@@ -1,1 +1,1 @@
-{ "name": "open-arc", "version": "0.6.4", "type": "module", "exports": { ".": "./index.ts", "./harness": "./harness.ts" } }
+{ "name": "open-arc", "version": "0.7.0", "type": "module", "exports": { ".": "./index.ts", "./harness": "./harness.ts" } }

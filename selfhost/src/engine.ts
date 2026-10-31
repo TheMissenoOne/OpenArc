@@ -15,8 +15,12 @@ import { selectTargets } from "./plan.ts";
 import { PROMPT_TEMPLATE_VERSION, PROMPT_TEMPLATE, renderTemplate, parseOutput } from "./model.ts";
 import { baseUrlOf, complete, isOllamaCompat } from "./backends.ts";
 import { buildArgv, readHarnessOutput } from "./sandbox.ts";
-import { readFileSync } from "node:fs";
-import { posix } from "node:path";
+import { readFileSync, rmSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { createServer, type AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join, posix, sep } from "node:path";
+import { HARNESS_ENTRY, tierArgv } from "./isolation.ts";
 
 const versionAt = (rel: string): string | undefined => {
   try {
@@ -100,6 +104,7 @@ export interface Project {
   digests: Map<string, string>;
   accepted: Map<string, string>; // rel path -> text with this run's accepted candidates
   sandboxDir?: string; // rel path of this run's sandbox stage
+  crlf: Set<string>; // files that are CRLF on disk: held as LF in `files` (hashes match on every OS), written back as CRLF
   provenance: Map<string, { [k: string]: Json }>;
   e080Streak: number; // consecutive OARC-E080s in this run; generate stops calling the backend at 3
 }
@@ -107,6 +112,10 @@ export interface Project {
 const err = (code: Diagnostic["code"], extra: Omit<Diagnostic, "code"> = {}): Diagnostic => ({ code, ...extra });
 const linesOf = (t: string) => t.split("\n");
 const abs = (p: Project, rel: string) => `${p.root}/${rel}`;
+/** Only files whose every line ends in CRLF; a mixed file is kept byte for byte, as before. */
+const isCrlf = (t: string) => t.includes("\r\n") && !/(^|[^\r])\n/.test(t);
+/** The bytes to write for `text` (LF, as held in p.files): the file's own line endings. */
+export const toDisk = (p: Project, rel: string, text: string) => (p.crlf.has(rel) ? text.replaceAll("\n", "\r\n") : text);
 
 // ───────────────────────────── PARSE ─────────────────────────────
 
@@ -127,14 +136,16 @@ export async function parse(ports: Ports, req: CompileRequest, diagnostics: Diag
   const manifest = (manifestText ? JSON.parse(manifestText) : { schema: 1, regions: {} }) as Manifest;
   if (manifest.schema !== 1) diagnostics.push(err("OARC-E050"));
   const project: Project = {
-    root: req.root, config, files: new Map(), disk: new Map(), specs: new Map(), regions: [], manifest,
-    digests: new Map(), accepted: new Map(), provenance: new Map(), e080Streak: 0,
+    // TypeScript reports file names with forward slashes, also on Windows; abs() must build the same strings
+    root: sep === "\\" ? req.root.replaceAll("\\", "/") : req.root, config, files: new Map(), disk: new Map(), specs: new Map(), regions: [], manifest,
+    digests: new Map(), accepted: new Map(), provenance: new Map(), e080Streak: 0, crlf: new Set(),
   };
   for (const dir of SOURCE_DIRS)
     for (const rel of await listTs(ports, dir)) {
       const text = (await ports.fs.read(rel)) ?? "";
-      project.files.set(rel, text);
       project.disk.set(rel, text);
+      if (isCrlf(text)) project.crlf.add(rel);
+      project.files.set(rel, project.crlf.has(rel) ? text.replaceAll("\r\n", "\n") : text);
     }
   const ids: { id: string; file: string }[] = [];
   for (const [rel, text] of srcFiles(project)) {
@@ -304,7 +315,10 @@ export async function scaffoldProject(ports: Ports, p: Project, diagnostics: Dia
   p.program = makeProgram(p, p.files);
   extractSpecs(p, p.program.getTypeChecker(), diagnostics);
   const ids = scaffoldInMemory(p, diagnostics);
-  for (const [rel, text] of p.files) if (p.disk.get(rel) !== text) await ports.fs.write(rel, text);
+  for (const [rel, lf] of p.files) {
+    const text = toDisk(p, rel, lf);
+    if (p.disk.get(rel) !== text) await ports.fs.write(rel, text);
+  }
   return ids;
 }
 
@@ -1335,18 +1349,26 @@ function harnessHits(stdout: string): Set<string> {
   return hits;
 }
 
-type SandboxResult = { complete: boolean; passed: number; failed: { name: string; actual?: Json }[]; hits: Set<string>; error?: string };
+export type SandboxResult = { complete: boolean; passed: number; failed: { name: string; actual?: Json }[]; hits: Set<string>; error?: string };
 
 async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId: string, overlay: Map<string, string>, oracle?: { module: string; export: string; inputs: Json[][] }, probe: string[] = []): Promise<SandboxResult> {
   const none = new Set<string>();
+  if (req.sandbox.unavailable) return { complete: false, passed: 0, failed: [], hits: none, error: `OARC-E092 sandbox unavailable: ${req.sandbox.unavailable}` };
+  const tier = req.sandbox.isolation ?? "bwrap";
   const dir = p.sandboxDir ?? (p.sandboxDir = `.openarc/sandbox/${Date.now().toString(36)}`);
   if ((await ports.fs.read(`${dir}/package.json`)) === null) {
-    for (const f of ["package.json", "tsconfig.json", ".openarc/harness.mjs", ...SOURCE_DIRS.map((d) => `${d}/package.json`)]) {
+    for (const f of ["package.json", "tsconfig.json", ...SOURCE_DIRS.map((d) => `${d}/package.json`)]) {
       const t = await ports.fs.read(f);
       if (t !== null) await ports.fs.write(`${dir}/${f}`, t);
     }
-    const cp = await ports.proc.run(["cp", "-al", `${p.root}/node_modules`, `${p.root}/${dir}/node_modules`], 60_000);
-    if (cp.code !== 0) return { complete: false, passed: 0, failed: [], hits: none, error: `OARC-E092 could not stage node_modules: ${cp.stdout}` };
+    await ports.fs.write(`${dir}/.openarc/harness.mjs`, HARNESS_ENTRY); // the project's copy may predate argv[3]
+    // bwrap sees only the stage, so node_modules is hard-linked into it (Linux: cp -al always exists). The other tiers
+    // read the project's node_modules in place: module resolution walks up from the stage, which lives inside the
+    // project, and isolation.readPaths grants exactly that directory. The container tier mounts it at /work/node_modules.
+    if (tier === "bwrap") {
+      const cp = await ports.proc.run(["cp", "-al", `${p.root}/node_modules`, `${p.root}/${dir}/node_modules`], 60_000);
+      if (cp.code !== 0) return { complete: false, passed: 0, failed: [], hits: none, error: `OARC-E092 could not stage node_modules: ${cp.stdout}` };
+    } else if (tier === "container") await ports.fs.write(`${dir}/node_modules/.mountpoint`, "");
   }
   for (const [rel, text] of probe.length ? probed(p, overlay, probe) : overlay) await ports.fs.write(`${dir}/${rel}`, text);
   const spec = p.specs.get(rootId)!;
@@ -1354,17 +1376,92 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
   const tolerance = typeof spec.literal.tolerance === "number" ? { tolerance: spec.literal.tolerance } : {};
   await ports.fs.write(`${dir}/.openarc/harness-plan.json`, JSON.stringify({ [rootId]: { module: spec.file, symbol: spec.symbol, specExport: spec.exportName, examples: spec.examples, ...tolerance, ...(oracle ? { oracle } : {}) } }));
   const sb = p.config.sandbox ?? {};
-  const argv = buildArgv({
-    stageDir: `${p.root}/${dir}`, nodeBin: req.sandbox.nodeBin, nodePrefix: req.sandbox.nodePrefix,
-    heapMb: sb.heapMb ?? req.sandbox.heapMb, addressSpaceBytes: sb.addressSpaceBytes ?? req.sandbox.addressSpaceBytes,
+  const limits = {
+    nodeBin: req.sandbox.nodeBin, nodePrefix: req.sandbox.nodePrefix, heapMb: sb.heapMb ?? req.sandbox.heapMb,
     cpuSeconds: sb.cpuSeconds ?? req.sandbox.cpuSeconds, regionId: rootId,
-  });
+  };
+  const argv = tier === "bwrap"
+    ? buildArgv({ ...limits, stageDir: `${p.root}/${dir}`, addressSpaceBytes: sb.addressSpaceBytes ?? req.sandbox.addressSpaceBytes })
+    : tierArgv(tier, { ...limits, root: p.root, stageDir: join(p.root, dir), containerImage: req.sandbox.containerImage });
   const res = await ports.proc.run(argv, ((sb.cpuSeconds ?? req.sandbox.cpuSeconds) + 20) * 1000);
   if (res.timedOut) return { complete: false, passed: 0, failed: [], hits: none, error: "OARC-E091 sandbox timed out" };
   const summary = { ...readHarnessOutput(res.stdout), hits: harnessHits(res.stdout) };
   if (!summary.complete && summary.passed === 0 && summary.failed.length === 0)
     return { ...summary, error: `OARC-E090 harness crashed (exit ${res.code}): ${res.stdout.slice(-600)}` };
   return summary;
+}
+
+/** `openarc doctor`: one example through the real sandbox path, in this project. It returns 2 and then the error code
+ *  of a file write, a child process and a connection to a socket doctor listens on, each of which the sandbox must refuse. */
+export const DOCTOR_EXPECTED: Json = ["2", "ERR_ACCESS_DENIED", "ERR_ACCESS_DENIED", "ERR_ACCESS_DENIED"];
+/** Connection errors that mean "denied": a permission refusal (Node's model, sandbox-exec), or a network namespace of
+ *  its own (bwrap, container) where the socket doctor is listening on does not exist. A timeout or anything else proves
+ *  nothing. */
+export const NETWORK_DENIED: readonly string[] = ["ERR_ACCESS_DENIED", "EPERM", "EACCES", "ECONNREFUSED", "ENETUNREACH"];
+const doctorSource = (escape: string, port: number) => `import { writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { connect } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+const code = async (f: () => unknown): Promise<string> => {
+  try {
+    await f();
+    return "allowed";
+  } catch (e) {
+    const x = e as { code?: unknown; cause?: { code?: unknown } };
+    return String(x.code ?? x.cause?.code ?? e);
+  }
+};
+const reach = () => new Promise<void>((ok, no) => {
+  const s = connect(${port}, "127.0.0.1", () => (s.destroy(), ok()));
+  s.on("error", no);
+  s.setTimeout(3000, () => (s.destroy(), no(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }))));
+});
+export const probeSpec = { id: "doctor.probe", intent: "" };
+export const probe = async (n: number): Promise<string[]> => [
+  String(n + 1),
+  await code(() => writeFileSync(join(tmpdir(), ${JSON.stringify(escape)}), "x")),
+  await code(() => execFileSync(process.execPath, ["-e", ""])),
+  await code(reach),
+];
+`;
+/** doctor's verdict on the probe: what to print and whether the sandbox held. `networkExcused`: the node tier on a Node
+ *  without network permission (< 25), where an allowed connection is a known gap (W046), not a failure. */
+export function doctorReport(res: SandboxResult, tier: string, networkExcused: boolean): { lines: string[]; ok: boolean } {
+  if (res.error) return { lines: [`sandbox: ${res.error}`], ok: false };
+  if (!res.complete) return { lines: ["sandbox: harness output incomplete (process exited early?)"], ok: false };
+  const got = res.passed === 1 ? (DOCTOR_EXPECTED as string[]) : res.failed[0]?.actual;
+  if (!Array.isArray(got)) return { lines: [`sandbox: the example did not run: ${JSON.stringify(res.failed[0]?.actual ?? null)}`], ok: false };
+  let ok = got[0] === "2";
+  const lines = [`example: ${ok ? "ok (1 + 1 = 2 inside the sandbox)" : `FAIL (got ${String(got[0])})`}`];
+  for (const [i, what] of ["file write", "child process", "network"].entries()) {
+    const r = String(got[i + 1]);
+    const allowed = r === "allowed";
+    const excused = allowed && what === "network" && networkExcused;
+    // the network probe connects to a socket doctor itself listens on, so only a denial counts as blocked; anything
+    // else (a timeout, an unrelated error) proves nothing either way
+    const unproven = !allowed && what === "network" && !NETWORK_DENIED.includes(r);
+    if (((allowed && !excused) || unproven) && tier !== "unsafe-none") ok = false;
+    lines.push(`${what.padEnd(13)} ${allowed ? (excused ? "ALLOWED (Node < 25 has no network permission; use Node 25+ or an OS sandbox)" : "ALLOWED") : unproven ? `UNVERIFIED (${r})` : `blocked (${r})`}`);
+  }
+  lines.push(ok ? "doctor: ok" : "doctor: FAIL");
+  return { lines, ok };
+}
+export async function sandboxProbe(ports: Ports, req: CompileRequest): Promise<SandboxResult> {
+  const spec = { file: "src/__openarc_doctor.ts", symbol: "probe", exportName: "probeSpec", literal: {}, examples: [{ args: [1], expected: DOCTOR_EXPECTED }] };
+  const p = await parse(ports, req, []); // the project's own files are staged too, as in a compile (core/ of a file: dep)
+  p.specs.set("doctor.probe", spec as unknown as SpecInfo);
+  const escape = `openarc-doctor-escape-${process.pid}-${randomBytes(4).toString("hex")}`;
+  const server = createServer((c) => c.destroy());
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+  try {
+    const port = (server.address() as AddressInfo).port;
+    return await runSandbox(ports, req, p, "doctor.probe", new Map(p.files).set(spec.file, doctorSource(escape, port)));
+  } finally {
+    server.close();
+    rmSync(join(tmpdir(), escape), { force: true }); // written only where the sandbox let it through (unsafe-none)
+    if (p.sandboxDir) await ports.fs.remove(p.sandboxDir);
+  }
 }
 
 // ───────────────────────────── STAGE ─────────────────────────────
@@ -1402,7 +1499,8 @@ export async function stage(ports: Ports, req: CompileRequest, p: Project, candi
     const mine = genBlocks.filter((b) => b.root === rootId);
     const res = await runSandbox(ports, req, p, rootId, overlay, undefined, mine.map((b) => b.id));
     if (res.error || res.failed.length || !res.complete) {
-      diagnostics.push(err("OARC-E090", { id: rootId, detail: `joint:${res.error ?? res.failed.map((f) => f.name).join(",")}` }));
+      const code = res.error?.startsWith("OARC-E092") ? "OARC-E092" : "OARC-E090"; // sandbox unavailable, as per block
+      diagnostics.push(err(code, { id: rootId, detail: `joint:${res.error ?? res.failed.map((f) => f.name).join(",")}` }));
       if (!req.keepGoing) return [];
       hold(rootId);
       continue;
@@ -1421,7 +1519,8 @@ export async function stage(ports: Ports, req: CompileRequest, p: Project, candi
   const files = new Map(overlay);
   const manifest = nextManifest(p, files, new Set([...generatedIds].filter((id) => !held.has(id))), ports.now());
   const out: StagedFile[] = [];
-  for (const [rel, text] of files) {
+  for (const [rel, lf] of files) {
+    const text = toDisk(p, rel, lf);
     if (p.disk.get(rel) === text) continue;
     // Spec integrity, enforced on bytes: only src/ may change (never tests, fakes or core), and every
     // spec statement must be identical to the one on disk. Scaffolding and generation only touch region bodies and imports.
@@ -1672,7 +1771,7 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
     };
     res.extracted.push(id);
   }
-  res.files = [{ target: rel, text: out }, { target: ".openarc/manifest.json", text: JSON.stringify(manifest, null, 2) + "\n" }];
+  res.files = [{ target: rel, text: toDisk(p, rel, out) }, { target: ".openarc/manifest.json", text: JSON.stringify(manifest, null, 2) + "\n" }];
   return res;
 }
 

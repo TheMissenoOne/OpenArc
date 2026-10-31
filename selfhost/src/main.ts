@@ -15,6 +15,7 @@ import { describeBackend, testBackend } from "./backends.ts";
 import { clearStaleLock, releaseOwnLock } from "./lock.ts";
 import { createWatcher, regionKey, type RegionKey } from "./watcher.ts";
 import { watchDirs } from "./dirwatch.ts";
+import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools, type TierChoice } from "./isolation.ts";
 
 const MESSAGES: Record<string, string> = {
   "OARC-W001": "'@openarc:' text that is not a valid marker",
@@ -47,6 +48,8 @@ const MESSAGES: Record<string, string> = {
   "OARC-E090": "example failed",
   "OARC-E091": "sandbox timeout or resource limit",
   "OARC-E092": "sandbox unavailable",
+  "OARC-W046": "weaker isolation: Node permission model only (no OS sandbox)",
+  "OARC-W047": "NO SANDBOX: sandbox.isolation is \"unsafe-none\"; generated code runs with your full user permissions",
   "OARC-W094": "recovered an interrupted transaction",
   "OARC-E095": "another openarc process holds .openarc/lock",
   "OARC-E096": "the file changed on disk during the compile; nothing was written (run again)",
@@ -84,7 +87,7 @@ export function realPorts(root: string): Ports {
         await rename(p(from), p(to));
       },
       async remove(rel) {
-        await rm(p(rel), { recursive: true, force: true });
+        await rm(p(rel), { recursive: true, force: true, maxRetries: 5 }); // Windows: a just-exited sandbox can hold a handle briefly
       },
       async list(rel) {
         try {
@@ -153,8 +156,30 @@ export function realPorts(root: string): Ports {
   };
 }
 
-function request(root: string, project: engine.Project | null, ids: string[]): CompileRequest {
+/** The Node version the harness runs under: sandbox.nodeBin's own, not this CLI's. */
+const harnessNodeVersion = (cfg: OpenArcConfig): string => nodeVersionOf(cfg.sandbox?.nodeBin ?? process.execPath);
+
+const tierOf = (cfg: OpenArcConfig): TierChoice => chooseTier(cfg.sandbox?.isolation ?? "auto", process.platform, probeTools());
+
+/** The sandbox notice for this run, printed once by every command that runs examples: W046 for the node tier, W047 at
+ *  error level for unsafe-none (every run), E092 when the configured tier is unavailable (the caller then stops). */
+function isolationNotice(cfg: OpenArcConfig): boolean {
+  const t = tierOf(cfg);
+  if ("error" in t) {
+    console.error(fmt({ code: "OARC-E092", detail: t.error }));
+    return false;
+  }
+  if (t.tier === "node") {
+    const v = harnessNodeVersion(cfg);
+    console.error(fmt({ code: "OARC-W046", detail: nodeBlocksNetwork(v) ? "node" : `node-${v}:network-not-blocked` }));
+  }
+  if (t.tier === "unsafe-none") console.error(`error   ${fmt({ code: "OARC-W047" }).slice(8)}`);
+  return true;
+}
+
+function request(root: string, project: { config: OpenArcConfig } | null, ids: string[]): CompileRequest {
   const cfg = project?.config ?? DEFAULT_CONFIG;
+  const tier = tierOf(cfg);
   const b = cfg.backends[cfg.compilation.defaultBackend]!;
   const nodeBin = cfg.sandbox?.nodeBin ?? process.execPath; // execPath is the resolved binary, never a version-manager shim
   return {
@@ -167,6 +192,8 @@ function request(root: string, project: engine.Project | null, ids: string[]): C
       heapMb: cfg.sandbox?.heapMb ?? 512,
       addressSpaceBytes: cfg.sandbox?.addressSpaceBytes ?? 32 * 1024 ** 3, // virtual, not RAM: Node's WASM type stripper reserves ~10 GiB
       cpuSeconds: cfg.sandbox?.cpuSeconds ?? 20,
+      ...("error" in tier ? { unavailable: tier.error } : { isolation: tier.tier }),
+      ...(cfg.sandbox?.containerImage ? { containerImage: cfg.sandbox.containerImage } : {}),
     },
   };
 }
@@ -188,7 +215,8 @@ async function analyzeOffline(ports: Ports, root: string, diagnostics: Diagnosti
 const USAGE = `usage: openarc init [--backend <preset> [--model <id>] [--base-url <url>]] | backends [test [name]] | scaffold | compile [--keep-going] [ids...] | watch [--debounce <ms>] | graph | inspect <id>
        openarc freeze|release <id> | resolve <id> --keep|--regen|--unlink
        openarc extract <file> [--function <name>] [--id <id>]
-       openarc check <id> --oracle <module>#<export>`;
+       openarc check <id> --oracle <module>#<export>
+       openarc doctor`;
 
 /** `openarc backends [test [name]]`: list the configured backends, or send one tiny request through one of them. */
 async function backends(ports: Ports, args: string[]): Promise<number> {
@@ -240,6 +268,7 @@ async function check(root: string, ports: Ports, args: string[]): Promise<number
   }
   const diagnostics: Diagnostic[] = [];
   const project = await analyzeOffline(ports, root, diagnostics);
+  if (!isolationNotice(project.config)) return 1;
   const res = await engine.oracleCheck(ports, request(root, project, [id]), project, id, oracle);
   if (res.error && !res.inputs) {
     console.error(`check ${id}: ${res.error}`);
@@ -251,6 +280,27 @@ async function check(root: string, ports: Ports, args: string[]): Promise<number
   return res.disagreements.length || res.error ? 1 : 0;
 }
 
+/** `openarc doctor`: the selected isolation tier, then one example through it that must also fail to write a file, start
+ *  a process and reach the network. No model. Exit 1 if the sandbox is unavailable or lets something through. */
+async function doctor(root: string, ports: Ports): Promise<number> {
+  const { config, error } = parseConfig(await ports.fs.read("openarc.config.json"));
+  if (error) {
+    console.error(error);
+    return 1;
+  }
+  const tools = probeTools();
+  const t = tierOf(config);
+  console.log(`node ${process.versions.node} (${process.execPath}) on ${process.platform}-${process.arch}`);
+  console.log(`tools: bwrap ${tools.bwrap ? "works" : "no"} · sandbox-exec ${tools.sandboxExec ? "yes" : "no"} · container ${tools.container ?? "no"}`);
+  console.log(`isolation: ${config.sandbox?.isolation ?? "auto"} -> ${"error" in t ? `unavailable (${t.error})` : `${t.tier} (${t.reason})`}`);
+  if (!isolationNotice(config)) return 1;
+  const res = await engine.sandboxProbe(ports, request(root, { config }, []));
+  const tier = "error" in t ? "" : t.tier;
+  const r = engine.doctorReport(res, tier, tier === "node" && !nodeBlocksNetwork(harnessNodeVersion(config)));
+  for (const line of r.lines) (line.startsWith("sandbox:") ? console.error : console.log)(line);
+  return r.ok ? 0 : 1;
+}
+
 async function main(argv: string[]): Promise<number> {
   const root = findRoot(process.cwd());
   const ports = realPorts(root);
@@ -259,6 +309,7 @@ async function main(argv: string[]): Promise<number> {
   if (argv[0] === "check") return check(root, ports, argv.slice(1));
   // Same for `backends` and init's --backend flags (cli.parseArgv returns {cmd: "init"} whatever follows).
   if (argv[0] === "backends") return backends(ports, argv.slice(1));
+  if (argv[0] === "doctor") return doctor(root, ports);
   const initWith = argv[0] === "init" ? initConfig(argv.slice(1)) : DEFAULT_CONFIG;
   if (typeof initWith === "string") {
     console.error(`openarc: ${initWith}\n\n${USAGE}`);
@@ -288,7 +339,7 @@ async function main(argv: string[]): Promise<number> {
       if (hadConfig && argv.length > 1) console.log("note: openarc.config.json already exists and was not changed; add the backend to it by hand (see `openarc backends`)");
       await put("tsconfig.json", JSON.stringify(TSCONFIG, null, 2) + "\n");
       await put(manifestPath, '{\n  "schema": 1,\n  "regions": {}\n}\n');
-      await put(".openarc/harness.mjs", 'import { main } from "open-arc/harness";\nawait main("/work", process.argv[2]);\n');
+      await put(".openarc/harness.mjs", HARNESS_ENTRY);
       const ignore = ["lock", "sandbox/", "txn/", "watch-history.jsonl", "attempts/"];
       const had = await ports.fs.read(".openarc/.gitignore");
       const missing = ignore.filter((l) => !(had ?? "").split("\n").includes(l));
@@ -321,6 +372,7 @@ async function main(argv: string[]): Promise<number> {
       clearStaleLock(root, (l) => console.error(l));
       const pre: Diagnostic[] = [];
       const project = await engine.parse(ports, request(root, null, []), pre);
+      if (!isolationNotice(project.config)) return 1;
       const t0 = Date.now();
       const keepGoing = cmd.ids.includes("--keep-going");
       const res = await run(ports, { ...request(root, project, cmd.ids.filter((a) => !a.startsWith("--"))), keepGoing });
@@ -366,6 +418,7 @@ async function main(argv: string[]): Promise<number> {
     case "watch": {
       // spec §15. One worker: analysis never overlaps a compile, so at most one model is resident.
       let config = DEFAULT_CONFIG;
+      if (!isolationNotice(parseConfig(await ports.fs.read("openarc.config.json")).config)) return 1;
       const w = createWatcher({
         fs: ports.fs,
         print: (l) => console.log(l),

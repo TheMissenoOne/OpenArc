@@ -12,6 +12,7 @@ export const scanMarkersSpec = arc.defineRegion<ScanMarkers>({
     "Tokenize with the TypeScript scanner and consider ONLY single-line comment tokens; text inside strings, templates and code is never inspected.",
     "A comment is a marker iff it is the only non-whitespace content of its line and equals '// @openarc:begin <id>' or '// @openarc:end <id>' (single spaces) with a valid id (ids.isValidId).",
     "Any other comment (single- or multi-line) containing '@openarc:' yields OARC-W001 with its 1-based start line. Markers are returned in line order.",
+    "Line endings may be CRLF (files checked out on Windows): a trailing \\r is whitespace, never part of a marker, and line numbers are the same as with LF.",
   ],
   deps: ["./ids.ts", "typescript"],
   examples: [
@@ -35,6 +36,17 @@ export const scanMarkersSpec = arc.defineRegion<ScanMarkers>({
       name: "invalid id is not a marker",
       args: ["// @openarc:begin Bad.Id\n"],
       expected: { markers: [], diagnostics: [{ code: "OARC-W001", line: 1 }] },
+    },
+    {
+      name: "CRLF line endings",
+      args: ["a\r\n// @openarc:begin x.y\r\nb\r\n    // @openarc:end x.y\r\n"],
+      expected: {
+        markers: [
+          { kind: "begin", id: "x.y", line: 2 },
+          { kind: "end", id: "x.y", line: 4 },
+        ],
+        diagnostics: [],
+      },
     },
     { name: "no markers", args: ["const x = 1;\n"], expected: { markers: [], diagnostics: [] } },
     {
