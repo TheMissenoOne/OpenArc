@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "regions": {
+    "tasks.normalizeTitle": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/tasks.ts",
+      "symbol": "normalizeTitle",
+      "ownership": "compiler",
+      "hash": "sha256:a752250b609f91ada2b9958a0d20b9c9b411893f9c52e20a019ca603ad0fe9c2",
+      "specHash": "sha256:810b6daf5db476bc0717183ea86b6f281fa0eae6b5d5bdd48be707ebd5e0de3e",
+      "fingerprint": "sha256:e411d88079a03b106c0ade19f51978dfa6396090a52a5195c6ec98ee1cc6329b",
+      "provenance": {
+        "source": "generated",
+        "backend": "local",
+        "model": "qwen3.5:9b",
+        "contextLevel": 1,
+        "attempts": 2,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:3/3"
+        ],
+        "at": "2026-10-31T17:31:18.260Z"
+      }
+    }
+  }
+}

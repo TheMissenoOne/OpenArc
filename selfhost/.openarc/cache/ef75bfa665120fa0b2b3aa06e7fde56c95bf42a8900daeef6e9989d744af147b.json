@@ -1,0 +1,1 @@
+{"body":"project = await engine.parse(ports, req, diagnostics);\n  const journal = planJournal(txid, targets.map(t => ({ target: t, staged: '' })) as any);\n  await recover(ports.fs);\n  await commit(ports.fs, journal);","imports":[]}

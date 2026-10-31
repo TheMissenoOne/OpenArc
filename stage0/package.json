@@ -1,0 +1,19 @@
+{
+  "name": "openarc-stage0",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "examples": "node tools/run-examples.ts",
+    "build": "node tools/build.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "5.9"
+  },
+  "dependencies": {
+    "openarc": "file:./core"
+  },
+  "license": "MIT"
+}

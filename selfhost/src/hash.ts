@@ -1,0 +1,78 @@
+import * as arc from "openarc";
+import type { Json } from "openarc";
+import type { ChildSpan } from "./types.ts";
+
+// ── hash.canonicalJson ────────────────────────────────────────── spec §4.2
+type CanonicalJson = (value: Json) => string;
+
+export const canonicalJsonSpec = arc.defineRegion<CanonicalJson>({
+  id: "hash.canonicalJson",
+  intent: "JSON.stringify semantics for scalars, no whitespace, object keys sorted by UTF-16 code unit order at every depth, array order preserved.",
+  examples: [
+    { args: [{ b: 1, a: [true, null, "x"] }], expected: "{\"a\":[true,null,\"x\"],\"b\":1}" },
+    { args: [{ z: { y: 2, x: 1 } }], expected: "{\"z\":{\"x\":1,\"y\":2}}" },
+    { args: [[{ b: 2, a: 1 }]], expected: "[{\"a\":1,\"b\":2}]" },
+    { args: ["é"], expected: "\"é\"" },
+    { args: [1.5], expected: "1.5" },
+  ],
+});
+
+// @openarc:begin hash.canonicalJson
+export const canonicalJson: CanonicalJson = (value) => arc.todo("hash.canonicalJson");
+// @openarc:end hash.canonicalJson
+
+// ── hash.normalizeOwnedText ───────────────────────────────────── spec §4.1
+type NormalizeOwnedText = (lines: string[], children: ChildSpan[]) => string;
+
+export const normalizeOwnedTextSpec = arc.defineRegion<NormalizeOwnedText>({
+  id: "hash.normalizeOwnedText",
+  intent: [
+    "1. Replace each child span lines[from..to] with the single line /*«openarc-child:<id>»*/ and join lines with \\n.",
+    "2. Parse with ts.createSourceFile(setParentNodes=true). Walk node.getChildren() depth-first, skipping JSDoc nodes;",
+    "for every leaf, emit its leading comment ranges, then its getText() if non-empty, then its trailing comment ranges (every comment once, trimmed; same-line trailing comments count).",
+    "3. Join with single spaces. Never use the raw scanner: it does not rescan templates or regexes, so whitespace inside them would be lost.",
+  ],
+  deps: ["typescript"],
+  examples: [
+    { name: "whitespace-insensitive", args: [["const x=1;"], []], expected: "const x = 1 ;" },
+    {
+      name: "comments count",
+      args: [["const  x = 1;", "// note", "return x;"], []],
+      expected: "const x = 1 ; // note return x ;",
+    },
+    {
+      name: "child replaced by slot",
+      args: [["a();", "// @openarc:begin p.c", "b();", "// @openarc:end p.c", "c();"], [{ id: "p.c", from: 1, to: 3 }]],
+      expected: "a ( ) ; /*«openarc-child:p.c»*/ c ( ) ;",
+    },
+    {
+      name: "template whitespace is semantic",
+      args: [["const t = `a ${b}   c`;"], []],
+      expected: "const t = `a ${ b }   c` ;",
+    },
+    { name: "regex whitespace is semantic", args: [["x = /a  b/g;"], []], expected: "x = /a  b/g ;" },
+    { name: "trailing comment counts", args: [["x = 1; // why"], []], expected: "x = 1 ; // why" },
+  ],
+});
+
+// @openarc:begin hash.normalizeOwnedText
+export const normalizeOwnedText: NormalizeOwnedText = (lines, children) => arc.todo("hash.normalizeOwnedText");
+// @openarc:end hash.normalizeOwnedText
+
+// ── hash.sha256Tagged ─────────────────────────────────────────── spec §4.1
+type Sha256Tagged = (text: string) => string;
+
+export const sha256TaggedSpec = arc.defineRegion<Sha256Tagged>({
+  id: "hash.sha256Tagged",
+  intent: "'sha256:' + lowercase hex SHA-256 of the UTF-8 bytes of text.",
+  deps: ["node:crypto"],
+  examples: [
+    { args: [""], expected: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
+    { args: ["abc"], expected: "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" },
+    { args: ["const x = 1 ;"], expected: "sha256:60fe306eed8812b12eab2ef34e74175e14345f3d1ee945e3a9a19e463b249340" },
+  ],
+});
+
+// @openarc:begin hash.sha256Tagged
+export const sha256Tagged: Sha256Tagged = (text) => arc.todo("hash.sha256Tagged");
+// @openarc:end hash.sha256Tagged

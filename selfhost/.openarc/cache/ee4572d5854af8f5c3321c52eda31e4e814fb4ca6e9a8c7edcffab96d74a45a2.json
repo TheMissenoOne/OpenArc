@@ -1,0 +1,1 @@
+{"body":"const url = `${cfg.host}/api/chat`;\nconst body = { model: req.model, stream: req.stream, format: req.format, options: req.options, messages: req.messages };\nconst response = await http.postJson(url, body);\nreturn JSON.parse(response).message.content;","imports":[]}
