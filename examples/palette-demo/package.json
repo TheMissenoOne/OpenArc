@@ -2,7 +2,7 @@
   "name": "palette-demo",
   "version": "1.0.0",
   "private": true,
-  "description": "OpenArc's palette in use: a login flow, a load-balanced service with health checks, a 3-peer gossip network",
+  "description": "OpenArc's palette in use: a login flow and page, a load-balanced service with health checks, a 3-peer gossip network",
   "type": "module",
   "license": "MIT",
   "scripts": {
@@ -11,6 +11,11 @@
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
-    "open-arc": "file:../../stage0/build/open-arc-0.8.0.tgz"
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "jsdom": "^26.0.0",
+    "open-arc": "file:../../stage0/build/open-arc-0.8.0.tgz",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   }
 }

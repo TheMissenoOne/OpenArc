@@ -1,6 +1,6 @@
 # OpenArc — Phase 0 Technical Specification
 
-**Version:** 0.3.0-draft. Revised after self-hosting (`selfhost/WALKTHROUGH.md`) and after the stage 0 implementation (`stage0/`). · **Date:** 2026-10-31 · **Status:** for review, not implemented
+**Version:** 0.4.0-draft (0.8.0 adds §2.5 concepts, §2.6 UI structure specs, §3.7 sketches, §9.6 the UI harness). Revised after self-hosting (`selfhost/WALKTHROUGH.md`) and after the stage 0 implementation (`stage0/`). · **Date:** 2026-10-31 · **Status:** for review, not implemented
 
 The keywords MUST, MUST NOT, SHOULD, and MAY are normative. Diagnostics use the code `OARC-Exxx` (error) or `OARC-Wxxx` (warning). Section 11 lists every code.
 
@@ -11,7 +11,7 @@ The keywords MUST, MUST NOT, SHOULD, and MAY are normative. Diagnostics use the 
 | Component | v0 |
 |---|---|
 | Source | TypeScript ≥ 5.8, with `erasableSyntaxOnly: true`, `strict: true` |
-| Spec DSL | `defineRegion<F>` (function regions), `defineBlock` (block regions) |
+| Spec DSL | `defineRegion<F>` (function regions), `defineBlock` (block regions); since 0.8.0 also sketches (`sketch` with `arc.hole<T>()`, §3.7), concepts (`defineConcept`, §2.5) and UI structure specs (`ui` in a `*.spec.tsx` file, §2.6) |
 | Region identification | Line-comment markers + a manifest |
 | Ownership | Non-overlapping, nested, hash-based |
 | Model backend | One Ollama instance, structured output |
@@ -58,6 +58,21 @@ export interface RegionSpec<F extends (...a: any[]) => any> {
   tolerance?: number;         // default numeric tolerance of every example, default 1e-9 (§9.3)
   refine?: "concrete" | "next"; // default "concrete"; "next" is reserved, v0 rejects it (OARC-E041)
   calls?: string[];           // allowlist of imported or port functions the body may call (§7 rule 6); default: unrestricted
+  sketch?: F;                 // the body as typed code with arc.hole<T>() gaps (§3.7); read as syntax, never run
+  concept?: string;           // this region is a variant of that concept (§2.5)
+  fixtures?: { [name: string]: Json };  // values for the concept's "$fixture:<name>" placeholders
+  waive?: { [law: string]: string };    // laws that don't apply to this variant, with the reason
+  ui?: (...a: Parameters<F>) => UiNode; // a *.spec.tsx structure in the open-arc/ui vocabulary (§2.6); read as syntax
+}
+// intent is optional when sketch or ui is present (a sketch beats an intent; hole descriptions are local intents).
+// Example also has script?: UiStep[] and dom?: {text?, notText?, enabled?, disabled?} for UI regions (§9.6), and
+// expected is optional when F returns unknown (a component is checked in the DOM).
+
+export interface ConceptSpec {
+  id: string;
+  intent: string | string[];
+  laws: { name: string; args: Json[]; expected?: Json; fakesAfter?: {[fake: string]: Json}; tolerance?: number; exact?: boolean }[];
+  interface?: string;         // a type in the concept's file that every variant's F must instantiate (§2.4)
 }
 
 export interface BlockSpec {
@@ -70,6 +85,8 @@ export interface BlockSpec {
 
 export function defineRegion<F extends (...a: any[]) => any>(spec: RegionSpec<F>): RegionSpec<F>;
 export function defineBlock(spec: BlockSpec): BlockSpec;
+export function defineConcept(spec: ConceptSpec): ConceptSpec;
+export function hole<T = void>(description: string): T;  // a sketch gap (§3.7); throws if ever run
 export function todo(id: string): never;    // pending FUNCTION body; throws OpenArcTodoError(id)
 export function pending(id: string): void;  // pending BLOCK body; throws too, but typed void [F4]
 ```
@@ -89,6 +106,8 @@ The compiler reads specs **without executing them**. A spec call MUST satisfy al
 - `F` is a type reference or function type literal that resolves to exactly one call signature.
 
 Violation: `OARC-E010`. Async functions are allowed. `expected` is compared against the awaited result.
+
+Two property values are read as **syntax** and never evaluated: `sketch` (an arrow or function expression with a block body, §3.7) and `ui` (the JSX subset of §2.6). Everything else in the object stays JSON. `defineConcept` is read by the same rules. A string `"$fixture:<name>"` anywhere in a concept law is a placeholder (§2.5). E010 details for these forms: `sketch:must-be-a-function-with-a-block-body`, `sketch:hole-<n>-description-must-be-a-string-literal`, `sketch:adjacent-statement-holes`, `ui:*` (§2.6), `concept:*`, `concept-unknown:<id>`, `fixture-missing:<name>`, `waive-unknown-law:<name>`.
 
 ### 2.3 Identifiers
 
@@ -114,6 +133,32 @@ const __c: __Check = true;
 
 Failure: `OARC-E020`. Implementations MAY use `checker.isTypeAssignableTo` instead, as long as it gives the same result. The declared type `F` is authoritative: generated code never chooses its own signature (§8.4).
 
+A concept variant's `F` MUST be an instance of the concept's `interface` when the concept names one: `F` is a reference to that type (`Strategy<PasswordCred>` for `interface: "Strategy"`), or, for a non-generic interface, assignable to it. Failure: `OARC-E020`, detail `concept-interface:<name>`.
+
+### 2.5 Concepts (since 0.8.0)
+
+A **concept** is a family of function regions that share an intent and laws: `arc.defineConcept({ id, intent, laws, interface? })`. Its **variants** are ordinary regions with `concept: "<id>"`, compiled once each and used by import; a concept is never expanded into its users.
+
+- **Laws** are example templates. Every law that a variant does not waive becomes one of its examples, named `law: <name>`, placed before the variant's own examples, with each `"$fixture:<name>"` string (anywhere in `args`, `expected` or `fakesAfter`) replaced by the variant's `fixtures[name]`: pure JSON substitution, done statically by the compiler (and by the dev runner). Laws are authoritative (tier 1, §9.1).
+- **Waivers:** `waive: { "<law>": "<reason>" }` skips a law that can't apply. The reason is printed by `compile` (`<id>: law "<law>" waived: <reason>`) and stored in the manifest provenance as `waived`. A waiver of an unknown law is E010 `waive-unknown-law:<name>`; a missing fixture is E010 `fixture-missing:<name>`; an unknown concept is E010 `concept-unknown:<id>`.
+- **Hashes:** a variant's spec hash includes its concept's hash (`canonicalJson` of the concept literal), so changing a law re-fingerprints every variant. A user's fingerprint includes the concept's one-line summary through its context package (§8.8), and nothing else of the concept.
+- **What a model sees:** a variant's package has a `Concept` section (the concept's intent, the waived laws) and the laws as concrete examples. A region that calls a variant sees its signature plus `// variant of concept <id>: <intent> Laws: <names>.`, never its body or examples.
+
+### 2.6 UI structure specs (since 0.8.0)
+
+A UI region's spec lives in a `*.spec.tsx` file under `src/` with `/** @jsxImportSource open-arc/ui */`, and has `ui: (props) => <Form …>…</Form>`. tsc checks the structure against the vocabulary in `open-arc/ui`; the compiler reads it statically into a JSON tree. The region itself is a React function component in the sibling file (`LoginPage.spec.tsx` → `LoginPage.tsx`), scaffolded there with `import type { <F> } from "./<name>.spec.tsx"`, so `F` MUST be an exported type name (E010 `ui:F-must-be-an-exported-type-name`). `react` is an allowed import of every UI region.
+
+Accepted subset: the `ui` value is an arrow with zero or one parameter whose body is (optionally parenthesised) JSX; the root is `Form`. Children are vocabulary elements, fragments, text, `{"string"}` and `{/* comments */}`. Attributes are bare (`required` = true), string literals, `{<JSON literal>}`, or `{<ref>}` where a ref is a dotted path rooted at the parameter or an import (`{"$ref": "props.onLogin"}`). Rejected with E010: spreads (`ui:spread`), any other child expression such as `.map` or a conditional (`ui:child-expression:<text>`), computed attributes (`ui:expression:<text>`), and tags outside the vocabulary (`ui:tag:<name>`; lowercase tags are also TS errors).
+
+| Word | Meaning (shown to the model) | Derived check (§9.6) |
+|---|---|---|
+| `Form title onSubmit onSuccess?` | `<form>` with a heading `title`; on submit calls onSubmit with `{ <Field name>: value }`; `ok: false` shows `error` in ErrorText; `ok: true` calls onSuccess(result) | a `<form>`; a heading (h1–h3 or legend) with the title; the wiring example |
+| `Field name label type? secret? required? autoComplete?` | a labelled input (`secret` = type password) | an input whose accessible name is `label`, with that name, type, required and autocomplete |
+| `ErrorText` | `role="alert"` with the last failure message | an element with `role="alert"` |
+| `Submit busyText?` (text child) | `<button type="submit">` named by its text, disabled with busyText while pending | a submit button with that accessible name |
+
+The tree (with the vocabulary version) joins the spec hash. UI regions need a DOM from the project: `"ui": { "dom": "jsdom" }` in `openarc.config.json` and `jsdom`, `react` and `react-dom` installed. Otherwise every UI region is `OARC-E092` (detail `dom:not-configured`, `dom:jsdom-missing`, `dom:react-missing`, `dom:react-dom-missing`) before any model call; there is no unverified fallback.
+
 ---
 
 ## 3. Region grammar
@@ -137,7 +182,7 @@ The lines between a `begin`/`end` pair (the **body**) MUST be exactly one of the
 - `[export] [async] function S(...) {...}`
 - `[export] const S = [async] (...) => ...` / `= [async] function (...) {...}`
 
-The compiler finds its spec with `defineRegion` whose `id` equals the marker id, in the same file or in a file imported by it. `S` must equal `spec.symbol` (`OARC-E021`).
+The compiler finds its spec with `defineRegion` whose `id` equals the marker id, in any `src/` file (the same file, a file imported by it, or a `*.spec.tsx` file that nothing imports, §2.6). `S` must equal `spec.symbol` (`OARC-E021`). `src/` files are `.ts` and, since 0.8.0, `.tsx`.
 
 **(B) Block region.** One or more complete statements, contiguous, all in the *same* block of an enclosing function body (or of a nested block). Its spec is `defineBlock` with the matching id. Block regions MUST be nested (directly or transitively) inside an (F) region (`OARC-E032`).
 
@@ -185,6 +230,23 @@ Both forms type-check. Scaffolding is deterministic and is available on its own 
 
 A region whose body is exactly its placeholder (`arc.todo("<id>")` for (F), `arc.pending("<id>");` for (B)) is **pending**, whether or not it has a manifest entry (§6.2). [F5]
 
+### 3.7 Sketches (since 0.8.0)
+
+A function region's spec may carry its body as a **sketch**: `sketch: async (a, b) => { … }`, contextually typed by `F`, with `arc.hole<T>("<description>")` where the model fills in. The sketch is read as syntax and never run.
+
+- An **expression hole** stands for exactly one expression of type `T` (written, or inferred from context). A **statement hole** (`arc.hole("…");` as a statement) stands for 0..n statements, under the §3.4 restrictions relative to the function the hole is in: no `return`, `break` or `continue` out of it, no `this`, and no declaration of a name the sketch uses after it. Two adjacent statement holes are E010 (`sketch:adjacent-statement-holes`). Holes are numbered in source order; descriptions MUST be string literals. Call it as `arc.hole`.
+- The region's parameter names are the sketch's. Its body is the sketch's statements (dedented) with every hole filled; `intent` is optional.
+- **VALIDATE:** tsc errors inside the sketch are reported at ANALYZE, before any model call, as `OARC-E070` with detail `sketch:TS<code>`.
+- **Output (§8.4):** the model replies `{"fills": {"<n>": "<code>"}, "imports": [...]}`, constrained by a per-region schema with exactly one string per hole. The compiler splices each fill into the sketch; an expression fill is parenthesised so it can't change how the code around it parses. A reply with `body` instead of `fills` is kept as a whole body, and containment (§7 rule 7) recovers its fills or rejects it.
+- **Calls:** the sketch's own calls on restricted roots (§7 rule 6: imports, and parameters whose type name ends in `Ports`) are the **implied allowlist**. Fills may call `implied ∪ spec.calls` (E098); the sketch's own code is never checked against `calls`.
+- **PLAN** orders a sketch's callees (project regions it calls) before it, so its examples run against compiled callees.
+- **Coverage (§8.10):** the sandbox copy carries a probe in every hole (`id#n`). A hole that no passing example reaches is unverified: `OARC-W045` (detail `hole:<id>#<n>`), the candidate is neither cached nor committed, and the region stays pending.
+- **Sketch versus example (`OARC-E100`):** when an example fails and its run reached no hole, its result is decided by the developer's code (the sketch and its callees), so no fill can fix it. The compiler reports E100 (detail = the example name) and stops that region's attempts. A failure that ends in a pending callee is inconclusive, not E100.
+- **Hashing:** the spec hash covers the sketch through the §4.1 normalisation (whitespace-insensitive, comments count) plus the fills-protocol version.
+- A sketch never escalates to L2 (whole file); a context failure escalates to L1 at most.
+
+Block regions stay: a block is a statement hole in developer-owned text, held by markers. A sketch puts the structure in the spec, gives expression holes and one model call per region.
+
 ---
 
 ## 4. Hashing
@@ -207,6 +269,8 @@ Line endings (since 0.7.0): a file whose every line ends in CRLF is held as LF i
 ### 4.2 Spec hash
 
 `specHash = sha256(canonicalJson(specLiteral) + "\n" + printType(F))`. Here `canonicalJson` means sorted keys and no whitespace, and `printType` uses `checker.typeToString` with `NoTruncation`. For (B), the `printType` part is the canonical JSON of `{reads, writes}`.
+
+Since 0.8.0 the spec literal also holds, for a sketch region, `$sketch` (the normalised sketch and the fills-protocol version, §3.7); for a UI region, `$ui` (the structure tree and the vocabulary version, §2.6); and for a concept variant, `$concept` (the concept's hash, §2.5).
 
 ### 4.3 Fingerprint (cache key)
 
@@ -321,7 +385,8 @@ Static rules are applied to the owned text of each **candidate** body, and to th
 3. Forbidden free identifiers, unless allowed by `effects`: `process`, `globalThis`, `global`, `window`, `self`, `eval`, `Function`, `fetch`, `XMLHttpRequest`, `WebSocket`, `Deno`, `Bun`, `setTimeout`, `setInterval`, `queueMicrotask` (`OARC-E073`).
 4. Effect-gated identifiers: `Date`, `performance` need `clock`; `Math.random` and `crypto.getRandomValues`, `crypto.randomUUID`, `crypto.randomBytes` need `random`; `console` needs `log` (`OARC-E074`). Any other use of `crypto` is pure: `createHash` on `crypto` imported from `node:crypto` needs no effect. A name the file binds (its imports and top-level declarations, **plus the candidate's requested imports**) is not the global of the same name. Before 0.6.3 the requested imports were not counted, so `import crypto from "node:crypto"` requested by the model still read as the global and `hash.sha256Tagged` failed three times with `'crypto' requires effect 'random'`. The pure uses of `Date` are exempt: `Date.parse(…)`, `Date.UTC(…)`, `new Date(<at least one argument>)`, and `Date` as a type. `Date.now()` and `new Date()` with no argument read the clock and stay gated.
 5. Any other capability (DB, network, filesystem, env) MUST arrive as a parameter of `F` (ports or injected dependencies). There is no effect token for it. This is what lets examples run against fakes.
-6. Call allowlist, only when the spec has `calls` (§2.1). For every call expression in the body, the compiler computes the callee path from identifiers and property accesses (`engine.parse`, `ports.fs.remove`, `recover`; an element access prints as `x[]`). If the path's root identifier is **restricted**, the path MUST equal an entry of `calls` or fall under one of its `prefix.*` entries (`OARC-E098`, detail = the path; message `call not allowed by spec: <path> (allowed: …)`). Restricted roots are the file's import bindings (named, default and namespace, plus the candidate's requested imports) and the parameters of the enclosing function whose type is `Ports`. Calls on locals (`diagnostics.push`, `staged.map`), on functions the body declares, and on globals (governed by rules 3 and 4) are not restricted. Only calls are checked: an alias (`const f = engine.parse; f()`) is not traced. The rule stops a model that wanders into the wrong step; the sandbox remains the security boundary.
+6. Call allowlist, only when the spec has `calls` (§2.1). For every call expression in the body, the compiler computes the callee path from identifiers and property accesses (`engine.parse`, `ports.fs.remove`, `recover`; an element access prints as `x[]`). If the path's root identifier is **restricted**, the path MUST equal an entry of `calls` or fall under one of its `prefix.*` entries (`OARC-E098`, detail = the path; message `call not allowed by spec: <path> (allowed: …)`). Restricted roots are the file's import bindings (named, default and namespace, plus the candidate's requested imports) and the parameters of the enclosing function whose type is `Ports`. Calls on locals (`diagnostics.push`, `staged.map`), on functions the body declares, and on globals (governed by rules 3 and 4) are not restricted. Only calls are checked: an alias (`const f = engine.parse; f()`) is not traced. The rule stops a model that wanders into the wrong step; the sandbox remains the security boundary. For a sketch region, the rule applies to each fill, with the implied allowlist (§3.7).
+7. Containment, for sketch regions (§3.7): the candidate body MUST be the sketch with every hole replaced by some code and nothing else changed (`OARC-E099 sketch not preserved: body line <n> has … where the sketch has …`). The check walks both ASTs in parallel: an expression hole matches one expression, a statement hole 0..n statements (backtracking); every other node has the same kind and children and every token the same text, except that string literals compare by value; comments and whitespace are ignored. It yields the fills that rules 6 and §3.4 then check.
 
 ---
 
@@ -342,11 +407,11 @@ any state ──error──> ABORT (no writes; diagnostics printed; exit code 1)
 | PARSE | Load the tsconfig program. Find spec calls (§2.2) and markers (§3.1) | E010, E030, E031, W001 |
 | ANALYZE | Pair specs with markers. Build the region tree. Compute hashes and ownership (§6.2), block contracts (§3.5) and fingerprints | E011, E012, E021, E032–E035, E061–E063 |
 | VALIDATE | Contract binding (§2.4) on the **current** code. Example typing (tsc). `refine` | E020, E041, E070 |
-| PLAN | Select targets: pending regions, plus `compiler` regions whose fingerprint ≠ `m.fingerprint`, restricted to the requested ids and their descendants. Skip `developer`/`conflicted` regions with W060/E061. Order: children before parents (post-order). Parents are generated with children as opaque `«openarc-child»` slots. | — |
-| GENERATE | Cache lookup by fingerprint. On a miss, call the model (§8.4). An output that is not valid JSON is logged with its reason (`✗ output was not valid: <detail>`). Every failed attempt is saved (§8.11). A `compiler` region that ends without a candidate gets `OARC-W043` (§6.3.1). A connection error (`ECONNREFUSED`, `fetch failed`) is retried once after 10 s. After 3 consecutive E080s in one run, the remaining targets are skipped without calling the backend (E080, detail `stopped:3-consecutive`) | E080 (backend unreachable), E081 (schema invalid) |
+| PLAN | Select targets: pending regions, plus `compiler` regions whose fingerprint ≠ `m.fingerprint`, restricted to the requested ids and their descendants. Skip `developer`/`conflicted` regions with W060/E061. Order: children before parents (post-order), and a sketch's callees before it (§3.7). Parents are generated with children as opaque `«openarc-child»` slots. | — |
+| GENERATE | A UI region whose project has no DOM is E092 here, before any model call (§2.6). Cache lookup by fingerprint. On a miss, call the model (§8.4). An output that is not valid JSON is logged with its reason (`✗ output was not valid: <detail>`). Every failed attempt is saved (§8.11). A `compiler` region that ends without a candidate gets `OARC-W043` (§6.3.1). A connection error (`ECONNREFUSED`, `fetch failed`) is retried once after 10 s. After 3 consecutive E080s in one run, the remaining targets are skipped without calling the backend (E080, detail `stopped:3-consecutive`) | E080 (backend unreachable), E081 (schema invalid) |
 | STATIC | Splice the candidate into an in-memory copy. Apply §7 | E070–E074 |
-| SANDBOX | Run the examples of the enclosing (F) region(s) (§9) | E090 (example failed), E091 (timeout/limit), E092 (sandbox unavailable) |
-| repair | If STATIC or SANDBOX fails and attempts < 3, go back to GENERATE with a repair prompt (§8.5). Otherwise ABORT for this run | E082 (attempts exhausted) |
+| SANDBOX | Run the examples of the enclosing (F) region(s) (§9); for a UI region, the DOM checks of §9.6 | E090 (example failed), E091 (timeout/limit), E092 (sandbox unavailable), E100 (§3.7), W045 |
+| repair | If STATIC or SANDBOX fails and attempts < 3, go back to GENERATE with a repair prompt (§8.5). Otherwise ABORT for this run. E100 and E092 stop the region's attempts at once | E082 (attempts exhausted) |
 | STAGE | Write every changed file to `.openarc/txn/<txid>/`, plus the new manifest. When PLAN found no targets but ownership changed (a W060 transition to `developer`, a new hand-written region), STAGE and COMMIT still run with the manifest alone, so the transition is recorded once and a later spec change is detected as E061. Write `.openarc/txn/<txid>/journal.json` listing `{target, backupOf}`. Before writing, every changed target is re-read: if it differs from the text PARSE read (the developer saved during the run), nothing is staged or committed | E093 (I/O), E096 |
 | COMMIT | For each file: copy the original to the journal backup, then `rename(staged, target)`. Then rename the manifest. Delete the journal last. | — |
 
@@ -360,7 +425,7 @@ At startup, every `openarc` command checks `.openarc/txn/*/journal.json`. If one
 
 ### 8.4 Model request
 
-Function regions: the compiler prints the signature from `F` (the parameter names and types come from the call signature). The model returns **only the statements of the body**. Block regions: the model returns the statements between the markers.
+Function regions: the compiler prints the signature from `F` (the parameter names and types come from the call signature). The model returns **only the statements of the body**. Block regions: the model returns the statements between the markers. Sketch regions (§3.7): the model returns `{"fills": {"<n>": "<code>"}, "imports": [...]}` under a per-region schema whose `fills` object requires exactly the hole numbers, each a string; the prompt template and system message say so, and their version is part of the sketch's spec hash.
 
 Request: `POST {OLLAMA_HOST}/api/chat`, `stream: false`, `options: {temperature: <cfg, default 0>, seed: <cfg>, num_ctx: <cfg>, num_predict: <outputReserveTokens>}`, `format:` the JSON schema below, `keep_alive` from config. `num_predict` caps the output: without it a confused model generated for about three minutes and still returned truncated JSON. Hosted providers send the same schema in their own structured-output field (§13).
 
@@ -405,7 +470,7 @@ The model never writes files. It returns `{body, imports}` as data, and the comp
 
 1. **Containment.** `body` must parse, with no syntax errors, as exactly one statement when wrapped as `async function __region() {\n<body>\n}`. A body that closes its braces to escape (`}; export const xSpec = …; function q() {`) is rejected. Markers belong to the compiler: a marker-shaped line (`// @openarc:begin …` or `// @openarc:end …`, even inside a template literal) and any comment still mentioning `@openarc:` are rejected. Before these checks the compiler **strips** every comment whose text contains `@openarc:` but is not marker-shaped (`// matches @openarc: markers`), a non-semantic normalisation it logs (`stripped n comment(s) mentioning @openarc:`); the prefix inside strings, regexes and templates is inert and kept. In selfhost-compile-3, `markers.scanMarkers` lost all three attempts to such comments. → `OARC-E097`
 2. **Splice.** After splicing, every line outside the region's markers is byte-identical to before. The only exception is added import lines (`import { … } from "…"`, `import type { … } from "…"`, `import x from "…"`, `import x, { … } from "…"`), which the compiler writes for imports that passed §7.2. → `OARC-E097`
-3. **Spec integrity.** At STAGE, only files under `src/` may change, never tests, fakes or core. In every changed file, the text of every `defineRegion`/`defineBlock` statement is byte-identical to the file on disk. → `OARC-E097` (detail `spec-integrity`), and nothing is written.
+3. **Spec integrity.** At STAGE, only files under `src/` may change, never tests, fakes or core. In every changed file, the text of every `defineRegion`/`defineBlock`/`defineConcept` statement is byte-identical to the file on disk. → `OARC-E097` (detail `spec-integrity`), and nothing is written. A sketch and a `ui` structure are part of their spec statement, and `*.spec.tsx` files are never written by the compiler. Fills are spliced by the compiler; containment (§7 rule 7) is an extra structural check inside the region. A UI component's static checks parse the body as TSX.
 4. **Examples are static.** The harness receives the examples from the compiler's static extraction (§2.2) through `harness-plan.json`, not from the module's runtime `spec.examples`. A body that mutates its spec object at runtime cannot weaken its own tests. The sandbox mounts the stage read-only.
 
 The executable form is `selfhost/tests/write-scope.check.ts`.
@@ -432,11 +497,16 @@ Under "Allowed new imports", each package (non-relative) dep is followed by the 
 
 If the spec has `calls`, the package has a section `Calls allowed`: "You may call exactly: …" (§7 rule 6).
 
+Since 0.8.0:
+- **Sketch regions** (§3.7): `Task` (fill the numbered holes; the rest is fixed and checked), `Sketch` (the sketch with `«n»` in place of each hole, under its printed signature) and `Holes` (one line per hole: its type or "statements", and its description) replace the fixed signature; `Calls allowed in fills` lists the implied allowlist plus `calls`; `Functions the sketch calls` lists each project function the sketch calls with its type, and for a concept variant the concept's one-line summary.
+- **Concept variants** (§2.5): a `Concept` section; the laws are among the examples. **Prose regions** that import variants get `Concept variants you can call` with the same one-line summaries.
+- **UI regions** (§2.6): `Structure (required; checked in the rendered DOM)` (the tree printed as TSX), `What the structure words mean` (one line per word used), and `UI rules`. Examples include their `script` and `dom`.
+
 The hash of the initial context package's **stable view** is part of the fingerprint (§4.3). A change in any type the region depends on therefore invalidates the cache. The stable view lists every other region of the file by signature, pending or not, takes type closures from signatures only (parameter and return types, never bodies), and leaves out the level-2 full file. The prompt itself still omits pending siblings (there is nothing to call yet). Before 0.6.3 the fingerprint hashed the prompt, so committing one region added its signature to its siblings' packages and changed their fingerprints: in watch mode, compiling `text.titleCase` re-queued the just-compiled `text.slugify`.
 
 ### 8.9 Model output normalisation [F13]
 
-Small models often return a whole function when asked for a body. If a function region's `body` parses as a single function declaration or a `const` bound to an arrow or function expression, the compiler unwraps it to the inner statements (or `return <expr>;`). Markdown fences are stripped. This normalisation runs **before** the write-scope checks.
+Small models often return a whole function when asked for a body. If a function region's `body` parses as a single function declaration or a `const` bound to an arrow or function expression, the compiler unwraps it to the inner statements (or `return <expr>;`). Markdown fences are stripped. This normalisation runs **before** the write-scope checks. A sketch region that gets a `body` instead of `fills` keeps it as a whole body; containment (§7 rule 7) recovers its fills or rejects it.
 
 ### 8.10 Joint verification of sibling blocks [F14]
 
@@ -446,6 +516,7 @@ A generated block is committed **only** if its function passed that joint check 
 
 **Coverage probe.** Passing examples prove nothing about a block they return before. In selfhost-compile-3, `compile.run.unlock`, `.recover` and `.analyze` were cached as verified with bodies that re-ran the pipeline, ran a commit, and parsed twice: the only conclusive example (`lock held by another run`) returns before any of them. So whenever the sandbox runs examples for a block (its own verification and the joint check), the compiler inserts `globalThis.__openarcHit?.("<block id>")` as the first statement of each block being verified, in the **staged sandbox copy only**, never in committed text. The harness records, per passing example, the ids it hit (a `hits` field on the outcome line). Then:
 - At verification, a block that no passing example reached while every example was conclusive is **unverified** (`OARC-W045`, detail `unreached:<function id>`): it is not cached and not reported as verified. If some examples were inconclusive (sibling blocks pending), the block is *provisional*: cached, logged as provisional, and decided by the joint check.
+- Sketch regions get one probe per hole, `globalThis.__openarcHit?.("<id>#<n>")`, as the first part of the fill (a comma expression for an expression hole, a statement for a statement hole). A hole no passing example reaches is `OARC-W045` with detail `hole:<id>#<n>` (§3.7). The harness reports `hits` on failing outcomes too; only passing ones count as coverage, and a failing one without hits is E100.
 - At the joint check, every generated block of the function must be reached by at least one passing example. Otherwise all of that function's generated blocks are held back as with W042: the unreached ones with `OARC-W045`, the others with `OARC-W042` (detail `unreached:<ids>`).
 
 The fix is in the examples: `compile.run` gained one that compiles a one-region project end to end, so every block is reached. If a sibling block is still pending (it failed under `--keep-going`, or it was outside the requested ids), the joint check cannot run: the generated blocks of that function are **held back** (`OARC-W042`, detail `waiting:<function id>`) and stay pending on disk and in the manifest. Their verified bodies stay in the cache, so a later run that completes the siblings commits them without a model call. Under `--keep-going`, a failed joint check holds back that function's blocks (`OARC-E090`) instead of aborting the run.
@@ -460,8 +531,8 @@ Every failed attempt (invalid output, STATIC, or SANDBOX failure, including a ca
 
 | Tier | Source | Can fail a compile |
 |---|---|---|
-| Authoritative | `examples` written by the developer in specs; project tests under `tests/` that are not in `tests/advisory/` | yes |
-| Derived | Generated mechanically from authoritative data (v0: the contract-binding check §2.4) | yes |
+| Authoritative | `examples` written by the developer in specs, and concept laws expanded with a variant's fixtures (§2.5); project tests under `tests/` that are not in `tests/advisory/` | yes |
+| Derived | Generated mechanically from authoritative data: the contract-binding check (§2.4); since 0.8.0 the UI structure, accessibility and wiring checks derived from a `ui` tree (§9.6) | yes |
 | Advisory | Model-written tests, under `tests/advisory/` | no; reported only (`OARC-W096`) |
 
 The compiler output MUST list exactly what was checked, for example `examples 3/3, tsc, static` (stored in `provenance.verifiedBy`). Passing means "these checks passed", not "the region is correct".
@@ -529,6 +600,16 @@ At PLAN, a function target whose examples are fewer than 3 (`OARC-W044`, detail 
 
 `openarc check <id> --oracle <module>#<export>` runs a compiled function region against a reference implementation. `<module>` is a project-relative path; that one file is copied into the sandbox stage. Inputs are the argument lists of the region's examples whose values are only numbers, strings, booleans, and arrays or objects of those, followed by seeded variations (mulberry32, seed 1, 60 inputs in total, deduplicated): numbers become 0, their negation, a neighbour or a random value of similar magnitude; strings get a character inserted or deleted, become empty, upper-cased or doubled, or are swapped for another example's string at the same position; booleans flip; array elements and object values are varied in place; a top-level array changes length only when the examples' lengths differ at that position. The harness plan entry carries `oracle: {module, export, inputs}`, and the harness calls both functions on a fresh clone of each input. They agree when both return values that are equal under §9.3 (with the spec's tolerance) or when both throw. Each disagreement prints the args and both results; the command exits 1 if there is any.
 
+### 9.6 UI harness (since 0.8.0)
+
+For a UI region (§2.6) the harness plan entry carries the structure tree and names the component file as the module. Inside the same sandbox, `core/ui-harness.ts`:
+
+1. registers an in-thread module load hook (`module.registerHooks`, Node ≥ 23.5; no worker) that transpiles `.tsx` with the project's TypeScript (`jsx: react-jsx`);
+2. creates a jsdom document from the project's `node_modules`, installs its globals, and imports `react`, `react-dom/client` and the component;
+3. reports one outcome per check: `ui: structure and accessibility` (the derived checks of the §2.6 table; elements are found by accessible name: `label[for]`, a wrapping label, `aria-label`, or a button's text), `ui: wiring` (every Field filled with a generated value, Submit clicked, the prop that `Form onSubmit` references called exactly once with `{ <name>: value }`), then each example: render with `args[0]` as props, run `script` (`fill {label, value}`, `click {role, name}`), then check `dom.text` / `notText` (body text), `dom.enabled` / `disabled` (by role and name) and `fakesAfter`.
+
+Fakes may sit anywhere inside the props (a function-valued prop can be `{"$fake": …}`). `"action#<name>"` is a built-in fake, named per instance: a function that records its calls and returns `init.returns[i]` on the i-th call; `snapshot()` is `{calls}`. Other names load `tests/fakes/<name before #>.ts` as usual. `verifiedBy` counts the derived checks with the examples (`examples:5/5` for two derived checks and three examples).
+
 ## 10. Reverse (Phase 0 subset)
 
 `openarc inspect <id>` and `openarc graph` read the manifest and markers only. A region whose `provenance.source` is `"extracted"` has a spec the developer wrote, but its implementation was not generated.
@@ -571,7 +652,7 @@ A diagnostic is `{code, id?, file?, line?, detail?}`. It has **no message field*
 | W042 | block held back: its function can't be verified until all its blocks exist (§8.10) |
 | W043 | region keeps a body that does not satisfy its current spec (its compile failed; displayed `stale`, §6.3.1) |
 | W044 | thin examples: fewer than 3, or none with an edge case (§9.5) |
-| W045 | block unverified: no passing example of its function reaches it (§8.10) |
+| W045 | block or sketch hole unverified: no passing example reaches it (§8.10; detail `unreached:<function id>` or `hole:<id>#<n>`) |
 | E041 | `refine: "next"` unsupported in v0 |
 | E050 | unknown manifest schema |
 | W060 | manual edit detected; region is now developer-managed |
@@ -589,7 +670,7 @@ A diagnostic is `{code, id?, file?, line?, detail?}`. It has **no message field*
 | E083 | child slot missing or duplicated |
 | E090 | example failed |
 | E091 | sandbox timeout or resource limit |
-| E092 | sandbox unavailable (the configured tier, §9.2) |
+| E092 | sandbox unavailable (the configured tier, §9.2); for UI regions, no DOM (detail `dom:not-configured`, `dom:jsdom-missing`, `dom:react-missing`, `dom:react-dom-missing`, §2.6) |
 | W046 | weaker isolation: Node permission model only (no OS sandbox) |
 | W047 | no sandbox: `sandbox.isolation` is `"unsafe-none"` (printed at error level on every run) |
 | E093 | staging I/O error |
@@ -597,7 +678,9 @@ A diagnostic is `{code, id?, file?, line?, detail?}`. It has **no message field*
 | E095 | another openarc process holds the lock |
 | E096 | a target file changed on disk during the run; nothing was written (§8.1 STAGE) |
 | E097 | write-scope violation: generated code changed something outside its own region (§8.7) |
-| E098 | call not allowed by the spec's `calls` list (§7 rule 6) |
+| E098 | call not allowed by the spec's `calls` list (§7 rule 6), or, in a sketch's fill, by the implied allowlist (§3.7) |
+| E099 | sketch not preserved: the body is not the sketch with only its holes filled (§7 rule 7) |
+| E100 | an example fails without reaching any hole of the sketch: the sketch decides it, so no fill can fix it (§3.7; detail = the example name) |
 | W013 | block spec without markers (place them by hand) |
 | E051 | invalid `openarc.config.json` |
 | W096 | advisory test failed |
@@ -643,6 +726,18 @@ Required cases (minimum):
 | 018 | spec uses an identifier in examples | E010 |
 | 019 | duplicate ids across files | E011 |
 | 020 | `refine: "next"` | E041 |
+| 021 | a sketch filled correctly (fills reply) | committed; body = sketch with fills; every hole reached |
+| 022 | a whole-body reply that keeps the sketch | fills recovered, committed |
+| 023 | a whole-body reply that alters non-hole code | E099 |
+| 024 | a statement hole filled with `return` | E035 (hole) |
+| 025 | a fill calling an off-list port | E098 (hole) |
+| 026 | a hole no example reaches | W045 `hole:<id>#<n>`, nothing committed |
+| 027 | an example the sketch decides before any hole, contradicting it | E100 after one model call |
+| 028 | a mistyped hole (`arc.hole<number>` where a string is needed) | E070 `sketch:TS2345`, no model call |
+| 029 | a concept variant | its examples begin with the laws; a waived law is logged and in the provenance |
+| 030 | a variant missing a fixture | E010 `fixture-missing:<name>` |
+| 031 | a TSX spec with `.map` | E010 `ui:child-expression:…` |
+| 032 | a UI region without `ui.dom` | E092 `dom:not-configured`, no model call |
 
 ---
 
@@ -669,6 +764,7 @@ The configuration sits at the project root, like `package.json`, and selects the
 ```
 
 - `sandbox.isolation`: `"auto"` (default), `"bwrap"`, `"sandbox-exec"`, `"node"`, `"container"` or `"unsafe-none"` (§9.2). `sandbox.containerImage` sets the container tier's image.
+- `ui.dom`: `"jsdom"` (since 0.8.0) opts into UI regions (§2.6): their checks render components in the project's own `jsdom` (with `react` and `react-dom`), installed as devDependencies. Any other value is E051.
 
 - `provider` is one of:
   - `"ollama"`: `POST {host}/api/chat` as in §8.4. `host` defaults to `http://127.0.0.1:11434`; `keepAlive` (default `"2m"`) is sent as `keep_alive`, so an idle model leaves RAM.
@@ -688,7 +784,7 @@ The configuration sits at the project root, like `package.json`, and selects the
 
 ## 14. Bootstrap [F12]
 
-1. **Stage 0** is `selfhost/` with every region body written by hand, outside OpenArc. Those regions are `developer`-owned. Its acceptance test is the self-hosted examples (`node tools/run-examples.ts --strict`: 24/24). It is built into the npm package `open-arc` (`node tools/build.ts`).
+1. **Stage 0** is `selfhost/` with every region body written by hand, outside OpenArc. Those regions are `developer`-owned. Its acceptance test is the self-hosted examples (`node tools/run-examples.ts --strict`: 43/43, the 24 compiler regions and the 19 palette regions). It is built into the npm package `open-arc` (`node tools/build.ts`).
 2. **Stage 1:** stage 0, installed as the devDependency `openarc-stage0`, compiles a pristine `selfhost/` scaffold (`selfhost-scaffold.tgz`). Its output is `compiler`-owned regions.
 3. **Stage 2:** the package built from stage 1 compiles the scaffold again, with stage 1's cache. That run must make **zero** model calls and produce a byte-identical tree and manifest (excluding `provenance.at`). Fingerprints use `COMPILER_VERSION`, not a build hash, so stages share cache keys. `COMPILER_VERSION` is read at import time from `core/package.json` (source tree) or the package's own `package.json` (published build), so every release gets new cache keys.
 

@@ -13,8 +13,21 @@ export const fooSpec = arc.defineRegion<F>({
   examples: [{ name?: "…", args: [...], expected: …, tolerance?: 1e-6, exact?: false }],
   tolerance: 1e-9,                           // optional: the default numeric tolerance of every example
   calls: ["helpers.slug", "ports.fs.read"],  // optional: the only imported/port functions the body may call
+  sketch: (a, b) => { … arc.hole<T>("…") … }, // optional: the body as typed code with holes (see Sketches)
+  concept: "auth", fixtures: { … }, waive: { … }, // optional: a variant of a concept (see Concepts)
 });
 ```
+
+Four ways to say what a region does, which mix freely:
+
+| Form | Checked? | Use it for |
+|---|---|---|
+| `examples` (and a concept's laws) | yes, in the sandbox | behaviour |
+| `sketch` with `arc.hole<T>()` | yes: the generated body must be the sketch with only the holes filled (`OARC-E099`) | structure you already know |
+| `ui` in a `*.spec.tsx` file | yes, in a rendered DOM | a component's structure and wiring |
+| `intent` (and hole descriptions) | no | everything else; optional once a sketch or `ui` exists |
+
+Where they disagree, the checked forms win: examples, then the sketch, then the UI structure, then `calls`/`effects`, then prose.
 
 **Specs must be static.** Only JSON literals are allowed: no identifiers, spreads, calls or template substitutions. The compiler reads them without running your code (`OARC-E010` otherwise). Use the array form for long intents.
 
@@ -65,6 +78,9 @@ Add the inputs it finds as examples, and recompile.
 | Your examples pass, in the sandbox | Identical output on a fresh regeneration |
 | Hand edits are never overwritten | |
 | A failed compile writes nothing | |
+| A sketch region keeps its sketch (only holes are generated) | |
+| A concept variant passes its concept's laws | |
+| A UI component has the structure, labels and wiring its `ui` describes | |
 
 ## Block regions (mixed resolution)
 
@@ -90,6 +106,103 @@ Rules for blocks:
 - **No escaping control flow:** no `return`/`break`/`continue` out of the block, and no `this`, `arguments` or `super`. Arrow functions are transparent to `this` and `arguments`, so those are caught inside arrows too.
 - **Communicate through `let` variables declared above the block.** The parent owns all control flow.
 - **They're verified through the enclosing function's examples.** Sibling blocks are jointly re-verified before commit, and **some passing example must reach each block**: a block that every example returns before is unverified (`OARC-W045`), not cached as verified and not committed. Add an example that goes all the way through.
+
+## Sketches: structure as code
+
+When you know how a function should work, write it in the spec and leave holes only where you want the model. A sketch is real TypeScript, typed by `F`, read as syntax and never run:
+
+```ts
+export const passwordSpec = arc.defineRegion<Strategy<PasswordCred>>({
+  id: "auth.password",
+  calls: ["ports.users.recordFailure", "ports.clock.now"],   // what fills may call besides what the sketch calls
+  examples: [/* … */],
+  sketch: async (cred, ports) => {
+    const email = arc.hole<string>("cred.email trimmed and lower-cased");      // expression hole: one expression of type T
+    const user = await ports.users.findByEmail(email);
+    if (user === null) return { ok: false, reason: "invalid" };
+    const valid = await ports.hasher.verify(cred.password, user.passwordHash);
+    arc.hole("if not valid, record the failure for user.id");                 // statement hole: 0..n statements
+    return valid ? { ok: true, userId: user.id } : { ok: false, reason: "invalid" };
+  },
+});
+```
+
+- **Holes.** `arc.hole<T>("…")` as an expression is one expression of type `T` (written, or inferred: `const n: number = arc.hole("…")`). As a statement it is zero or more statements, with the block rules: no `return`, `break` or `continue` out of it, no `this`, no declaration the sketch uses later (`OARC-E035`). A function-valued hole (`arc.hole<(s: string) => string>("…")`) is a local helper. Descriptions are string literals; two statement holes in a row are ambiguous (`OARC-E010`).
+- **Checked before the model.** The sketch type-checks against `F` with your file: a hole of the wrong type is `OARC-E070` (detail `sketch:TS<code>`) before any model call.
+- **What the model does.** It sees the sketch with `«1»`, `«2»`… in place, one line per hole (its type and description), and replies `{"fills": {"1": "…", "2": "…"}}`. The compiler splices the fills (an expression fill is parenthesised) and commits the sketch with them as the region body. A model that sends a whole body anyway is not rejected outright: containment recovers its fills.
+- **Containment (`OARC-E099`).** The body must be the sketch with only the holes filled: comments, whitespace and quote style don't matter, anything else does (`body line 3 has 'invalid' where the sketch has "unknown"`).
+- **Calls.** Fills may call what the sketch itself calls plus `calls` (`OARC-E098` otherwise). Most sketches need no `calls` at all. The sketch's own calls are never checked: you wrote them.
+- **Coverage (`OARC-W045`, detail `hole:<id>#<n>`).** Every hole must be reached by a passing example, or the region isn't committed. Add an example that goes through it.
+- **`OARC-E100`.** An example that fails without reaching any hole is decided by your sketch, so no fill can fix it: the compiler says so after one attempt instead of spending the rest.
+- Parameter names come from the sketch, `intent` becomes optional, and callees the sketch calls are compiled first.
+
+A block region is a statement hole in code you edit in place; a sketch keeps the structure in the spec and allows expression holes. Both stay.
+
+## Concepts: one contract, many variants
+
+A concept is a family of regions with a shared intent and **laws**, the rules every variant must obey. Each variant is an ordinary region that names the concept:
+
+```ts
+export const authConcept = arc.defineConcept({
+  id: "auth",
+  interface: "Strategy",       // optional: each variant's F must be Strategy<…> (else OARC-E020 concept-interface)
+  intent: "Authenticate one credential. An unknown user gets the same answer as a wrong secret.",
+  laws: [
+    { name: "wrong secret is rejected", args: ["$fixture:wrong", "$fixture:ports"], expected: { ok: false, reason: "invalid" } },
+  ],
+});
+
+export const apiKeySpec = arc.defineRegion<Strategy<ApiKeyCred>>({
+  id: "auth.apiKey",
+  concept: "auth",
+  intent: "…",
+  fixtures: { ports: { $fake: "palette.auth", init: { … } }, wrong: { apiKey: "k1.guess" } },
+  waive: { "some law": "why it can't apply here" },
+});
+```
+
+- Every law becomes an example of every variant, named `law: <name>`, with `"$fixture:<name>"` replaced by the variant's fixture (a missing one is `OARC-E010 fixture-missing:<name>`). Laws are as authoritative as your own examples.
+- `waive` skips a law with a reason; `compile` prints it and the manifest provenance records it.
+- Changing a law recompiles every variant. A region that calls a variant sees its signature and the concept's one-line summary, never its body.
+
+The [[Palette]] is a library of concepts (auth, load balancing, a p2p protocol, a login page) built this way.
+
+## UI specs: TSX structure
+
+A UI region's spec goes in a `*.spec.tsx` file and describes the component's rough structure with a small vocabulary; the region is a React component in the sibling `.tsx` file:
+
+```tsx
+/** @jsxImportSource open-arc/ui */
+import * as arc from "open-arc";
+import { ErrorText, Field, Form, Submit } from "open-arc/ui";
+
+export type LoginPageFn = (props: LoginPageProps) => unknown;   // an exported type name: the component file imports it
+
+export const loginPageSpec = arc.defineRegion<LoginPageFn>({
+  id: "ui.loginPage",
+  symbol: "LoginPage",
+  ui: (props) => (
+    <Form title="Sign in" onSubmit={props.onLogin} onSuccess={props.onSuccess}>
+      <Field name="email" type="email" label="Email" required autoComplete="username" />
+      <Field name="password" secret label="Password" required autoComplete="current-password" />
+      <ErrorText />
+      <Submit busyText="Signing in…">Sign in</Submit>
+    </Form>
+  ),
+  examples: [{
+    name: "a wrong password shows the error",
+    args: [{ onLogin: { $fake: "action#onLogin", init: { returns: [{ ok: false, error: "Wrong email or password." }] } }, onSuccess: { $fake: "action#onSuccess" } }],
+    script: [{ fill: { label: "Email", value: "ana@x.io" } }, { fill: { label: "Password", value: "nope" } }, { click: { role: "button", name: "Sign in" } }],
+    dom: { text: ["Wrong email or password."], enabled: [{ role: "button", name: "Sign in" }] },
+    fakesAfter: { "action#onLogin": { calls: [[{ email: "ana@x.io", password: "nope" }]] } },
+  }],
+});
+```
+
+- **Vocabulary:** `Form`, `Field`, `ErrorText`, `Submit` (from `open-arc/ui`). tsc checks the attributes; the compiler reads the tree without running it. Spreads, `.map`, conditionals, computed attributes and other tags are `OARC-E010` (`ui:*`): repetition and conditions belong in the intent.
+- **Checks, in a DOM in the sandbox:** derived structure and accessibility (each Field is an input whose accessible name is its label, with the right name, type, required and autocomplete; an alert for ErrorText; a submit button named by its text), a derived **wiring** example (fill every field, submit, the prop `Form onSubmit` points to is called once with `{ name: value }`), then your examples: `script` steps (`fill` by label, `click` by role and name), `dom` assertions (`text`, `notText`, `enabled`, `disabled`) and `fakesAfter`.
+- **`action#<name>`** is a built-in fake: a function that records its calls and returns `init.returns` in order.
+- **Setup:** `"ui": { "dom": "jsdom" }` in `openarc.config.json`, and `jsdom`, `react`, `react-dom` (plus `@types/react` and `"jsx": "react-jsx"` in tsconfig) in the project. Without them a UI region is `OARC-E092` (`dom:not-configured`, `dom:jsdom-missing`, …) before any model call.
 
 ## `calls`: what a body may call
 

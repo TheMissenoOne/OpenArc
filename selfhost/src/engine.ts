@@ -18,7 +18,7 @@ import { buildArgv, readHarnessOutput } from "./sandbox.ts";
 import { readFileSync } from "node:fs";
 import { join, posix, sep } from "node:path";
 import { HARNESS_ENTRY, tierArgv } from "./isolation.ts";
-// palette (structured specs, SPEC §2.5, §2.6, §4.5): concepts, UI specs and sketches; hooks below are marked `palette:`
+// palette (structured specs, SPEC §2.5, §2.6, §3.7): concepts, UI specs and sketches; hooks below are marked `palette:`
 import * as sketch from "./sketch.ts";
 import * as concepts from "./concepts.ts";
 import * as ui from "./ui.ts";
@@ -54,7 +54,7 @@ export interface SpecInfo {
   params: string[];
   isAsync: boolean;
   typeNode?: ts.TypeNode;
-  sketch?: sketch.SketchInfo; // palette: the body as typed code with holes (§4.5)
+  sketch?: sketch.SketchInfo; // palette: the body as typed code with holes (§3.7)
   ui?: ui.UiInfo; // palette: the component's structure, read from a *.spec.tsx file (§2.6)
 }
 
@@ -377,7 +377,7 @@ export async function analyze(ports: Ports, req: CompileRequest, p: Project, dia
     extractSpecs(p, p.program.getTypeChecker(), diagnostics);
   }
   const checker = p.program.getTypeChecker();
-  diagnostics.push(...sketch.sketchTypeErrors(p.program, p.root, p.specs.values())); // palette: a sketch must type-check before any model call (§4.5)
+  diagnostics.push(...sketch.sketchTypeErrors(p.program, p.root, p.specs.values())); // palette: a sketch must type-check before any model call (§3.7)
 
   for (const [rel, text] of srcFiles(p)) {
     const lines = linesOf(text);
@@ -806,7 +806,8 @@ export function plan(p: Project, req: CompileRequest, diagnostics: Diagnostic[])
     p.regions.map((r) => ({ id: r.id, parent: r.parent, state: r.state, stale: r.stale })),
     req.ids,
   );
-  const targets = sketch.calleesFirst(selected, p.specs); // palette: a sketch's callees compile before it (§8.1)
+  // palette: callees compile before their callers (§8.1): a sketch's calls, and the regions of the files a file imports
+  const targets = sketch.calleesFirst(selected, p.specs, (f) => [...importedSpecifiers(p.files.get(f) ?? "")].flatMap((x) => resolveLocal(p, f, x) ?? []));
   diagnostics.push(...skipped);
   for (const id of targets) {
     const r = p.regions.find((x) => x.id === id)!;

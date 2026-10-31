@@ -1,4 +1,4 @@
-// Sketches (SPEC §4.5): a region body written as typed TypeScript inside its spec, with `arc.hole<T>("…")` where the
+// Sketches (SPEC §3.7): a region body written as typed TypeScript inside its spec, with `arc.hole<T>("…")` where the
 // model fills in. HAND-WRITTEN bootstrap code, not a region. engine.ts calls it from small, marked hooks: extraction,
 // the context package, the model reply, and verification (containment E099, per-hole rules, probes, E100).
 // The sketch is read as syntax and never run. Everything below works on the sketch's text, re-parsed on its own.
@@ -31,7 +31,7 @@ export interface SketchInfo {
   span: [number, number]; // the sketch function in its spec file (tsc errors there are reported before any model call)
   roots: string[]; // restricted call roots: the file's value imports and parameters of a `…Ports` type
   implied: string[]; // calls the sketch itself makes on restricted roots: fills may call these plus spec.calls
-  callees: { path: string; file: string; name: string; type: string; typeNode?: ts.Node }[]; // implied calls into project files
+  callees: { path: string; file: string; name: string; type: string; typeNode?: ts.Node }[]; // top-level project functions the sketch calls
 }
 
 const WRAP = "async function __sketch() {\n";
@@ -137,16 +137,16 @@ export function readSketch(node: ts.Expression, sf: ts.SourceFile, checker: ts.T
   const visit = (n: ts.Node): void => {
     if (ts.isCallExpression(n) && !isHoleCall(n)) {
       const c = calleePath(n.expression);
-      if (c && roots.includes(c.root) && !implied.has(c.path)) {
-        implied.add(c.path);
-        const nameNode = ts.isPropertyAccessExpression(n.expression) ? n.expression.name : n.expression;
-        let sym = imports.has(c.root) ? checker.getSymbolAtLocation(nameNode) : undefined;
-        if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
-        const decl = sym?.valueDeclaration;
-        const rel = decl ? relOf(decl.getSourceFile().fileName) : null;
-        if (decl && rel && (ts.isVariableDeclaration(decl) || ts.isFunctionDeclaration(decl)) && decl.name && ts.isIdentifier(decl.name))
-          callees.push({ path: c.path, file: rel, name: decl.name.text, type: checker.typeToString(checker.getTypeOfSymbolAtLocation(sym!, decl), undefined, ts.TypeFormatFlags.NoTruncation), ...(ts.isVariableDeclaration(decl) && decl.type ? { typeNode: decl.type } : {}) });
-      }
+      if (c && roots.includes(c.root)) implied.add(c.path);
+      // callees: top-level functions of project files (imported or in this file), for PLAN order and the package
+      const nameNode = ts.isPropertyAccessExpression(n.expression) ? n.expression.name : n.expression;
+      let sym = c && !portParams.includes(c.root) ? checker.getSymbolAtLocation(nameNode) : undefined;
+      if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+      const decl = sym?.valueDeclaration;
+      const rel = decl ? relOf(decl.getSourceFile().fileName) : null;
+      const topLevel = decl && (ts.isFunctionDeclaration(decl) ? ts.isSourceFile(decl.parent) : ts.isVariableDeclaration(decl) && ts.isSourceFile(decl.parent.parent.parent));
+      if (c && decl && rel && topLevel && (ts.isVariableDeclaration(decl) || ts.isFunctionDeclaration(decl)) && decl.name && ts.isIdentifier(decl.name) && !callees.some((x) => x.path === c.path))
+        callees.push({ path: c.path, file: rel, name: decl.name.text, type: checker.typeToString(checker.getTypeOfSymbolAtLocation(sym!, decl), undefined, ts.TypeFormatFlags.NoTruncation), ...(ts.isVariableDeclaration(decl) && decl.type ? { typeNode: decl.type } : {}) });
     }
     n.forEachChild(visit);
   };
@@ -172,18 +172,21 @@ export function sketchTypeErrors(program: ts.Program, root: string, specs: Itera
   return out;
 }
 
-/** PLAN order (§8.1): every target after the targets its sketch calls, so a caller's examples see compiled callees. */
-export function calleesFirst(targets: string[], specs: Map<string, { id: string; file: string; symbol: string; sketch?: SketchInfo }>): string[] {
+/** PLAN order (§8.1): every target after the targets it depends on, so its examples run against compiled callees: the
+ *  regions its sketch calls, the regions of the project files its file imports (a prose region's calls are unknown, so
+ *  its imports stand in for them), and the regions before it in its own file. Cycles keep source order. */
+export function calleesFirst(targets: string[], specs: Map<string, { id: string; file: string; symbol: string; sketch?: SketchInfo }>, importsOf: (file: string) => string[]): string[] {
   const idOf = (c: { file: string; name: string }) => [...specs.values()].find((s) => s.file === c.file && s.symbol === c.name)?.id;
   const out: string[] = [];
   const seen = new Set<string>();
   const visit = (id: string) => {
     if (seen.has(id)) return;
     seen.add(id);
-    for (const c of specs.get(id)?.sketch?.callees ?? []) {
-      const d = idOf(c);
-      if (d && targets.includes(d)) visit(d);
-    }
+    const s = specs.get(id);
+    const imported = new Set(s ? importsOf(s.file) : []);
+    const sameFileBefore = targets.slice(0, targets.indexOf(id)).filter((t) => specs.get(t)?.file === s?.file); // source order within a file
+    const deps = [...sameFileBefore, ...(s?.sketch?.callees ?? []).map(idOf), ...targets.filter((t) => imported.has(specs.get(t)?.file ?? ""))];
+    for (const d of deps) if (d && d !== id && targets.includes(d)) visit(d);
     out.push(id);
   };
   targets.forEach(visit);

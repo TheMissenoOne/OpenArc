@@ -16,7 +16,8 @@ The hypothesis behind it:
 ## Start here
 
 - [[Getting Started]]: install, init, compile your first region
-- [[Writing Specs]]: `defineRegion`, examples, blocks, mixed resolution
+- [[Writing Specs]]: `defineRegion`, examples, blocks, sketches, concepts, TSX UI specs
+- [[Palette]]: reusable concepts that ship with OpenArc (auth, load balancer, p2p protocol, login page)
 - [[Configuration]]: `openarc.config.json`; local Ollama or APIs (OpenAI, OpenRouter, Anthropic…) per region
 - [[Context Packages]]: how much the model sees, and when that grows
 - [[Safety Model]]: what the model can and cannot touch, enforced in code

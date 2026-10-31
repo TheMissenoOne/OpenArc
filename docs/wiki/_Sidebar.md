@@ -3,6 +3,7 @@
 - [[Home]]
 - [[Getting Started]]
 - [[Writing Specs]]
+- [[Palette]]
 - [[Configuration]]
 - [[Context Packages]]
 - [[Safety Model]]

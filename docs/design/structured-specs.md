@@ -1,6 +1,6 @@
 # Structured specs: sketches, concepts and UI structure
 
-**Status:** design proposal, for approval. Nothing here is implemented in `stage0/` or `selfhost/`. · **Date:** 2026-10-31 · **Prototype:** `/tmp/claude-1000/-mnt-data-projetos/0a52dddd-ec03-4d58-8441-c8ccfe4d6411/scratchpad/structured-specs/` (throwaway, see §9)
+**Status:** approved and implemented in 0.8.0: phases A (sketches), B (concepts) and C (TSX UI specs), with the open questions decided as recommended; the palette (`stage0/src/palette/`, wiki page Palette) is built on them. Normative text: SPEC §2.5, §2.6, §3.7, §9.6. Not done: the phase A benchmark (needs a model run) and the "later, if needed" items of §13. · **Date:** 2026-10-31 · **Prototype:** `/tmp/claude-1000/-mnt-data-projetos/0a52dddd-ec03-4d58-8441-c8ccfe4d6411/scratchpad/structured-specs/` (throwaway, see §9)
 
 ## 1. Problem
 

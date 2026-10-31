@@ -1,4 +1,4 @@
-// Sketches (SPEC §4.5), no model: hand-written replies stand in for it. Run: node tests/sketch.check.ts
+// Sketches (SPEC §3.7), no model: hand-written replies stand in for it. Run: node tests/sketch.check.ts
 // 1. Extraction: holes (kind, type, description), parameters from the sketch, implied calls, E010 for bad sketches,
 //    and a mistyped hole is OARC-E070 (detail sketch:TS2345) at ANALYZE, before any model call.
 // 2. Containment (E099): per-hole fills and a whole-body reply are accepted with their fills recovered; a whole body

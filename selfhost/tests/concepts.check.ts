@@ -120,8 +120,8 @@ const analyzed = async (files: Record<string, string>, offline = true) => {
   assert.ok(!login.includes("cred.email, trimmed") && !login.includes("email is trimmed"), "never the variant's sketch or examples");
   assert.match(ctx("app.greet"), /## Concept variants you can call\nauth\.password: Strategy<PasswordCred> {2}\/\/ variant of concept auth: .*\nauth\.apiKey: Strategy<\{ apiKey: string \}> {2}\/\/ variant/);
 
-  // ── 4a. PLAN: the callee first
-  assert.deepStrictEqual(engine.plan(p, req, []).filter((id) => id !== "other.inc"), ["auth.password", "app.login", "app.greet", "auth.apiKey"]);
+  // ── 4a. PLAN: callees first (the sketch calls auth.password; app.ts imports auth.ts, so app.greet waits too)
+  assert.deepStrictEqual(engine.plan(p, req, []).filter((id) => id !== "other.inc"), ["auth.password", "auth.apiKey", "app.login", "app.greet"]);
 }
 
 // ── 4b. a compile logs the waiver and records it in the manifest

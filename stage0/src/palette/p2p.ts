@@ -23,7 +23,7 @@ export const framingConcept = arc.defineConcept({
     { name: "an incomplete frame is kept as rest", args: ["$fixture:partial"], expected: { messages: ["hi"], rest: "$fixture:partialRest" } },
     { name: "an empty message survives", args: ["$fixture:emptyMessage"], expected: { messages: [""], rest: [] } },
     { name: "no input, no messages", args: [[]], expected: { messages: [], rest: [] } },
-    { name: "UTF-8 round trip", args: ["$fixture:utf8"], expected: { messages: ["olá ✓"], rest: [] } },
+    { name: "UTF-8 round trip", args: ["$fixture:utf8"], expected: { messages: ["olá ∑"], rest: [] } },
   ],
 });
 
@@ -36,7 +36,7 @@ export const encodeLengthPrefixedSpec = arc.defineRegion<Encode>({
   examples: [
     { args: ["hi"], expected: [0, 0, 0, 2, 104, 105] },
     { args: [""], expected: [0, 0, 0, 0] },
-    { args: ["olá ✓"], expected: [0, 0, 0, 8, 111, 108, 195, 161, 32, 226, 156, 147] },
+    { args: ["olá ∑"], expected: [0, 0, 0, 8, 111, 108, 195, 161, 32, 226, 136, 145] },
   ],
 });
 
@@ -58,7 +58,7 @@ export const decodeLengthPrefixedSpec = arc.defineRegion<Decoder>({
     partial: [[0, 0, 0, 2, 104, 105, 0, 0, 0, 5, 116, 104]],
     partialRest: [0, 0, 0, 5, 116, 104],
     emptyMessage: [[0, 0, 0, 0]],
-    utf8: [[0, 0, 0, 8, 111, 108, 195], [161, 32, 226, 156, 147]],
+    utf8: [[0, 0, 0, 8, 111, 108, 195], [161, 32, 226, 136, 145]],
   },
   examples: [
     { name: "only part of a length prefix", args: [[[0, 0, 1]]], expected: { messages: [], rest: [0, 0, 1] } },
@@ -115,7 +115,7 @@ export const decodeVarintSpec = arc.defineRegion<Decoder>({
     partial: [[2, 104, 105, 5, 116, 104]],
     partialRest: [5, 116, 104],
     emptyMessage: [[0]],
-    utf8: [[8, 111, 108, 195], [161, 32, 226, 156, 147]],
+    utf8: [[8, 111, 108, 195], [161, 32, 226, 136, 145]],
   },
   examples: [
     { name: "a varint cut in the middle", args: [[[130]]], expected: { messages: [], rest: [130] } },

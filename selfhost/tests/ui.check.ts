@@ -21,9 +21,9 @@ import { pendingCopy } from "../tools/palette.ts";
 const root = process.cwd();
 const req: CompileRequest = { root, ids: [], model: { host: "http://h", model: "m", seed: 1, numCtx: 8192 }, sandbox: { nodeBin: "/n/bin/node", nodePrefix: "/n", heapMb: 256, addressSpaceBytes: 2 ** 32, cpuSeconds: 10 } };
 const TAGS = JSON.stringify({ models: [{ name: "qwen3.5:9b", digest: "d1" }] });
-const SPEC = readFileSync(join(root, "src/palette/loginPage.spec.tsx"), "utf8");
-const AUTH = readFileSync(join(root, "src/palette/auth.ts"), "utf8");
-const COMPONENT = readFileSync(join(root, "src/palette/loginPage.tsx"), "utf8");
+const SPEC = readFileSync(join(root, "src/palette/loginPage.spec.tsx"), "utf8").replaceAll("\r\n", "\n"); // a Windows checkout may be CRLF
+const AUTH = readFileSync(join(root, "src/palette/auth.ts"), "utf8").replaceAll("\r\n", "\n"); // a Windows checkout may be CRLF
+const COMPONENT = readFileSync(join(root, "src/palette/loginPage.tsx"), "utf8").replaceAll("\r\n", "\n"); // a Windows checkout may be CRLF
 const BODY = /\/\/ @openarc:begin ui\.loginPage\n([\s\S]*?)\n\/\/ @openarc:end/.exec(COMPONENT)![1]!;
 
 const analyzed = async (spec: string) => {

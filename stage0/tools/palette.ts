@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 /** Replace each `// @openarc:begin <id>` … `// @openarc:end <id>` body with `export const s: T = (params) => arc.todo("<id>");`. */
 export function pendingCopy(text: string): string {
-  return text.replace(/^([ \t]*)\/\/ @openarc:begin (\S+)\n([\s\S]*?)\n[ \t]*\/\/ @openarc:end \2$/gm, (_m, ind: string, id: string, body: string) => {
+  return text.replace(/\r\n/g, "\n").replace(/^([ \t]*)\/\/ @openarc:begin (\S+)\n([\s\S]*?)\n[ \t]*\/\/ @openarc:end \2$/gm, (_m, ind: string, id: string, body: string) => {
     const head = /^\s*(export )?const (\w+): (.+?) = (?:async )?\(([^)]*)\) =>/m.exec(body);
     if (!head) throw new Error(`palette: can't read the declaration of ${id}`);
     return `${ind}// @openarc:begin ${id}\n${ind}${head[1] ?? ""}const ${head[2]}: ${head[3]} = (${head[4]}) => arc.todo("${id}");\n${ind}// @openarc:end ${id}`;

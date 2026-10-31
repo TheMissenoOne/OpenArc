@@ -8,10 +8,11 @@ OpenArc's [palette](../../stage0/src/palette/README.md) in use, as a project Ope
 | `app.serve` | a load-balanced service: health checks, consistent-hash routing, failover | sketch, 1 hole |
 | `app.connect` | two peers negotiate a protocol version with `p2p.handshake` | prose |
 | `app.gossip3` | a 3-peer gossip broadcast over the fake network | sketch, 1 hole |
+| `ui.loginPage` | the palette's login page (React), wired to `app.login` in `src/app/wiring.ts` | TSX UI spec, checked in jsdom |
 
 ```bash
-npm i                    # open-arc from ../../stage0/build (node tools/build.ts && cd build && npm pack)
+npm i                    # open-arc from ../../stage0/build (node tools/build.ts && cd build && npm pack), react, jsdom
 npx tsc -p .             # type-checks as scaffolded: sketches, concepts, examples
-npx openarc graph        # 23 pending regions; PLAN compiles auth.password before app.login
+npx openarc graph        # 24 pending regions; PLAN compiles auth.password before app.login
 npx openarc compile      # needs a model (openarc.config.json)
 ```

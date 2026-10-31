@@ -122,7 +122,7 @@ const B = (ids: string[], o: Partial<lb.Backend> = {}) => ids.map((id) => ({ id,
   assert.deepStrictEqual([w.filter((x) => x === "a").length, w.filter((x) => x === "b").length], [30, 20], "weights hold over whole cycles");
 }
 {
-  const alphabet = ["a", "Z", " ", "é", "✓", "\u{1F600}", "\n", "0"];
+  const alphabet = ["a", "Z", " ", "é", "∑", "\u{1D11E}", "\n", "0"];
   for (let t = 0; t < 300; t++) {
     const msgs = Array.from({ length: Math.floor(rand() * 4) }, () => Array.from({ length: Math.floor(rand() * (t % 10 === 0 ? 200 : 12)) }, () => alphabet[Math.floor(rand() * alphabet.length)]).join(""));
     for (const [enc, dec] of [[p2p.encodeLengthPrefixed, p2p.decodeLengthPrefixed], [p2p.encodeVarint, p2p.decodeVarint]] as const) {

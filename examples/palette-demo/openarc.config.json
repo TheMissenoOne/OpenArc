@@ -15,5 +15,8 @@
       "initialLevel": 0,
       "expandOnFailure": true
     }
+  },
+  "ui": {
+    "dom": "jsdom"
   }
 }
