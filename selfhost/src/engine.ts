@@ -15,7 +15,10 @@ import { selectTargets } from "./plan.ts";
 import { PROMPT_TEMPLATE_VERSION, PROMPT_TEMPLATE, renderTemplate, parseOutput } from "./model.ts";
 import { baseUrlOf, complete, isOllamaCompat } from "./backends.ts";
 import { buildArgv, readHarnessOutput } from "./sandbox.ts";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { createServer, type AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
 import { join, posix, sep } from "node:path";
 import { HARNESS_ENTRY, tierArgv } from "./isolation.ts";
 
@@ -1346,7 +1349,7 @@ function harnessHits(stdout: string): Set<string> {
   return hits;
 }
 
-type SandboxResult = { complete: boolean; passed: number; failed: { name: string; actual?: Json }[]; hits: Set<string>; error?: string };
+export type SandboxResult = { complete: boolean; passed: number; failed: { name: string; actual?: Json }[]; hits: Set<string>; error?: string };
 
 async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId: string, overlay: Map<string, string>, oracle?: { module: string; export: string; inputs: Json[][] }, probe: string[] = []): Promise<SandboxResult> {
   const none = new Set<string>();
@@ -1389,10 +1392,15 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
 }
 
 /** `openarc doctor`: one example through the real sandbox path, in this project. It returns 2 and then the error code
- *  of a file write, a child process and a network request, each of which the sandbox must refuse. */
+ *  of a file write, a child process and a connection to a socket doctor listens on, each of which the sandbox must refuse. */
 export const DOCTOR_EXPECTED: Json = ["2", "ERR_ACCESS_DENIED", "ERR_ACCESS_DENIED", "ERR_ACCESS_DENIED"];
-const DOCTOR_SOURCE = `import { writeFileSync } from "node:fs";
+/** Connection errors that mean "denied": a permission refusal (Node's model, sandbox-exec), or a network namespace of
+ *  its own (bwrap, container) where the socket doctor is listening on does not exist. A timeout or anything else proves
+ *  nothing. */
+export const NETWORK_DENIED: readonly string[] = ["ERR_ACCESS_DENIED", "EPERM", "EACCES", "ECONNREFUSED", "ENETUNREACH"];
+const doctorSource = (escape: string, port: number) => `import { writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const code = async (f: () => unknown): Promise<string> => {
@@ -1404,21 +1412,54 @@ const code = async (f: () => unknown): Promise<string> => {
     return String(x.code ?? x.cause?.code ?? e);
   }
 };
+const reach = () => new Promise<void>((ok, no) => {
+  const s = connect(${port}, "127.0.0.1", () => (s.destroy(), ok()));
+  s.on("error", no);
+  s.setTimeout(3000, () => (s.destroy(), no(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }))));
+});
 export const probeSpec = { id: "doctor.probe", intent: "" };
 export const probe = async (n: number): Promise<string[]> => [
   String(n + 1),
-  await code(() => writeFileSync(join(tmpdir(), "openarc-doctor-escape"), "x")),
+  await code(() => writeFileSync(join(tmpdir(), ${JSON.stringify(escape)}), "x")),
   await code(() => execFileSync(process.execPath, ["-e", ""])),
-  await code(() => fetch("http://1.1.1.1/", { signal: AbortSignal.timeout(3000) })),
+  await code(reach),
 ];
 `;
+/** doctor's verdict on the probe: what to print and whether the sandbox held. `networkExcused`: the node tier on a Node
+ *  without network permission (< 25), where an allowed connection is a known gap (W046), not a failure. */
+export function doctorReport(res: SandboxResult, tier: string, networkExcused: boolean): { lines: string[]; ok: boolean } {
+  if (res.error) return { lines: [`sandbox: ${res.error}`], ok: false };
+  if (!res.complete) return { lines: ["sandbox: harness output incomplete (process exited early?)"], ok: false };
+  const got = res.passed === 1 ? (DOCTOR_EXPECTED as string[]) : res.failed[0]?.actual;
+  if (!Array.isArray(got)) return { lines: [`sandbox: the example did not run: ${JSON.stringify(res.failed[0]?.actual ?? null)}`], ok: false };
+  let ok = got[0] === "2";
+  const lines = [`example: ${ok ? "ok (1 + 1 = 2 inside the sandbox)" : `FAIL (got ${String(got[0])})`}`];
+  for (const [i, what] of ["file write", "child process", "network"].entries()) {
+    const r = String(got[i + 1]);
+    const allowed = r === "allowed";
+    const excused = allowed && what === "network" && networkExcused;
+    // the network probe connects to a socket doctor itself listens on, so only a denial counts as blocked; anything
+    // else (a timeout, an unrelated error) proves nothing either way
+    const unproven = !allowed && what === "network" && !NETWORK_DENIED.includes(r);
+    if (((allowed && !excused) || unproven) && tier !== "unsafe-none") ok = false;
+    lines.push(`${what.padEnd(13)} ${allowed ? (excused ? "ALLOWED (Node < 25 has no network permission; use Node 25+ or an OS sandbox)" : "ALLOWED") : unproven ? `UNVERIFIED (${r})` : `blocked (${r})`}`);
+  }
+  lines.push(ok ? "doctor: ok" : "doctor: FAIL");
+  return { lines, ok };
+}
 export async function sandboxProbe(ports: Ports, req: CompileRequest): Promise<SandboxResult> {
   const spec = { file: "src/__openarc_doctor.ts", symbol: "probe", exportName: "probeSpec", literal: {}, examples: [{ args: [1], expected: DOCTOR_EXPECTED }] };
   const p = await parse(ports, req, []); // the project's own files are staged too, as in a compile (core/ of a file: dep)
   p.specs.set("doctor.probe", spec as unknown as SpecInfo);
+  const escape = `openarc-doctor-escape-${process.pid}-${randomBytes(4).toString("hex")}`;
+  const server = createServer((c) => c.destroy());
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
   try {
-    return await runSandbox(ports, req, p, "doctor.probe", new Map(p.files).set(spec.file, DOCTOR_SOURCE));
+    const port = (server.address() as AddressInfo).port;
+    return await runSandbox(ports, req, p, "doctor.probe", new Map(p.files).set(spec.file, doctorSource(escape, port)));
   } finally {
+    server.close();
+    rmSync(join(tmpdir(), escape), { force: true }); // written only where the sandbox let it through (unsafe-none)
     if (p.sandboxDir) await ports.fs.remove(p.sandboxDir);
   }
 }
@@ -1458,7 +1499,8 @@ export async function stage(ports: Ports, req: CompileRequest, p: Project, candi
     const mine = genBlocks.filter((b) => b.root === rootId);
     const res = await runSandbox(ports, req, p, rootId, overlay, undefined, mine.map((b) => b.id));
     if (res.error || res.failed.length || !res.complete) {
-      diagnostics.push(err("OARC-E090", { id: rootId, detail: `joint:${res.error ?? res.failed.map((f) => f.name).join(",")}` }));
+      const code = res.error?.startsWith("OARC-E092") ? "OARC-E092" : "OARC-E090"; // sandbox unavailable, as per block
+      diagnostics.push(err(code, { id: rootId, detail: `joint:${res.error ?? res.failed.map((f) => f.name).join(",")}` }));
       if (!req.keepGoing) return [];
       hold(rootId);
       continue;
