@@ -2,6 +2,7 @@
 
 - [[Home]]
 - [[Getting Started]]
+- [[Code First]]
 - [[Writing Specs]]
 - [[Palette]]
 - [[Configuration]]

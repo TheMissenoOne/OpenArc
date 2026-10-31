@@ -15,6 +15,7 @@ import { describeBackend, testBackend } from "./backends.ts";
 import { clearStaleLock, releaseOwnLock } from "./lock.ts";
 import { createWatcher, regionKey, type RegionKey } from "./watcher.ts";
 import { watchDirs } from "./dirwatch.ts";
+import { migrate } from "./migrate.ts";
 import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools, type TierChoice } from "./isolation.ts";
 
 const MESSAGES: Record<string, string> = {
@@ -36,6 +37,7 @@ const MESSAGES: Record<string, string> = {
   "OARC-W041": "block region has no behavioral verification (its function has no examples)",
   "OARC-W042": "block held back: its function can't be verified until all its blocks exist (kept in the cache, committed by a later run)",
   "OARC-W043": "region keeps a body that does not satisfy its current spec (its recompile failed; shown as stale)",
+  "OARC-W023": "code-first region has no intent: no JSDoc of its own or inherited (its signature and tests are the only guidance)",
   "OARC-W044": "thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle)",
   "OARC-W045": "region unverified: no passing example or test reaches it (not cached as verified, not committed; add one that does)",
   "OARC-E041": "refine: \"next\" is unsupported in v0",
@@ -201,6 +203,42 @@ function request(root: string, project: { config: OpenArcConfig } | null, ids: s
   };
 }
 
+/** `openarc init`'s code-first starter (only in a project with no src/ yet): an interface, a class with one pending
+ *  method, and its tests. */
+const STARTER: Record<string, string> = {
+  "src/hello.ts": `import * as arc from "open-arc";
+
+/** Greets people by name. */
+export interface Greeter {
+  /**
+   * "Hello, <name>!" with the name trimmed of surrounding spaces;
+   * "Hello, world!" when the name is empty or only spaces.
+   */
+  greet(name: string): string;
+}
+
+export class FriendlyGreeter implements Greeter {
+  greet(name: string): string {
+    return arc.todo();
+  }
+}
+`,
+  "src/hello.test.ts": `import * as arc from "open-arc";
+import { FriendlyGreeter } from "./hello.ts";
+
+arc.test(FriendlyGreeter, "greets by name", (G, expect) => {
+  const g = new G();
+  expect(g.greet("Ada")).toBe("Hello, Ada!");
+  expect(g.greet("  Bob ")).toBe("Hello, Bob!");
+});
+
+arc.test(FriendlyGreeter, "an empty name greets the world", (G, expect) => {
+  expect(new G().greet("")).toBe("Hello, world!");
+  expect(new G().greet("   ")).toBe("Hello, world!");
+});
+`,
+};
+
 const TSCONFIG = {
   compilerOptions: {
     target: "es2023", module: "nodenext", moduleResolution: "nodenext", strict: true, noEmit: true,
@@ -215,9 +253,10 @@ async function analyzeOffline(ports: Ports, root: string, diagnostics: Diagnosti
   return project;
 }
 
-const USAGE = `usage: openarc init [--backend <preset> [--model <id>] [--base-url <url>]] | backends [test [name]] | scaffold | compile [--keep-going] [ids...] | watch [--debounce <ms>] | graph | inspect <id>
+const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> [--model <id>] [--base-url <url>]] | backends [test [name]] | scaffold | compile [--keep-going] [ids...] | watch [--debounce <ms>] | graph | inspect <id>
        openarc freeze|release <id> | resolve <id> --keep|--regen|--unlink
-       openarc extract <file> [--function <name>] [--id <id>]
+       openarc extract <file> [--function <name>] [--id <id>] [--style code|region]
+       openarc migrate <id>
        openarc check <id> --oracle <module>#<export>
        openarc doctor`;
 
@@ -283,6 +322,35 @@ async function check(root: string, ports: Ports, args: string[]): Promise<number
   return res.disagreements.length || res.error ? 1 : 0;
 }
 
+/** `openarc migrate <id>`: one classic function region to code-first (src/migrate.ts), locked and transactional. */
+async function migrateCmd(root: string, ports: Ports, args: string[]): Promise<number> {
+  if (args.length !== 1) {
+    console.error(`openarc: ${args.length ? "bad-flag" : "missing-id"}\n\n${USAGE}`);
+    return 2;
+  }
+  clearStaleLock(root, (l) => console.error(l));
+  if (!(await ports.fs.createExclusive(".openarc/lock"))) {
+    console.error(fmt({ code: "OARC-E095" }));
+    return 1;
+  }
+  try {
+    for (const txid of await recover(ports.fs)) console.error(fmt({ code: "OARC-W094", detail: txid }));
+    const project = await engine.parse(ports, request(root, null, []), []);
+    const res = await migrate(ports, request(root, project, []), project, args[0]!);
+    if (res.refused) {
+      console.error(`refused ${args[0]}: ${res.refused}`);
+      return 1;
+    }
+    const txid = ports.newTxId();
+    for (const [i, f] of res.files.entries()) await ports.fs.write(`.openarc/txn/${txid}/stage/${i}`, f.text);
+    await commit(ports.fs, planJournal(txid, res.files.map((f, i) => ({ target: f.target, staged: `.openarc/txn/${txid}/stage/${i}` }))));
+    console.log(`migrated ${args[0]} to code-first (${res.files[0]!.target}); id, ownership and provenance kept`);
+    return 0;
+  } finally {
+    await ports.fs.remove(".openarc/lock");
+  }
+}
+
 /** `openarc doctor`: the selected isolation tier, then one example through it that must also fail to write a file, start
  *  a process and reach the network. No model. Exit 1 if the sandbox is unavailable or lets something through. */
 async function doctor(root: string, ports: Ports): Promise<number> {
@@ -313,10 +381,28 @@ async function main(argv: string[]): Promise<number> {
   // Same for `backends` and init's --backend flags (cli.parseArgv returns {cmd: "init"} whatever follows).
   if (argv[0] === "backends") return backends(ports, argv.slice(1));
   if (argv[0] === "doctor") return doctor(root, ports);
+  if (argv[0] === "migrate") return migrateCmd(root, ports, argv.slice(1));
+  // init's code-first starter: with --example, or by default at a terminal; --no-example skips it. ponytail: a script
+  // (CI, the checks) gets no starter unless it asks, so an existing `init && write src/` flow is unchanged.
+  const example = argv[0] === "init" && !argv.includes("--no-example") && (argv.includes("--example") || process.stdout.isTTY === true);
+  if (argv[0] === "init") argv = argv.filter((a) => a !== "--example" && a !== "--no-example");
   const initWith = argv[0] === "init" ? initConfig(argv.slice(1)) : DEFAULT_CONFIG;
   if (typeof initWith === "string") {
     console.error(`openarc: ${initWith}\n\n${USAGE}`);
     return 2;
+  }
+  // code-first: `extract --style code|region` is parsed here (cli.parseArgv is a region; same note as `check` above).
+  // The default is code-first: markers inside the body, `@arc id` in the JSDoc; `region` writes a defineRegion spec.
+  let style: "code" | "region" = "code";
+  const si = argv[0] === "extract" ? argv.indexOf("--style") : -1;
+  if (si > 0) {
+    const v = argv[si + 1];
+    if (v !== "code" && v !== "region") {
+      console.error(`openarc: bad-flag\n\n${USAGE}`);
+      return 2;
+    }
+    style = v;
+    argv = [...argv.slice(0, si), ...argv.slice(si + 2)];
   }
   const cmd = parseArgv(argv);
   const diagnostics: Diagnostic[] = [];
@@ -343,6 +429,7 @@ async function main(argv: string[]): Promise<number> {
       await put("tsconfig.json", JSON.stringify(TSCONFIG, null, 2) + "\n");
       await put(manifestPath, '{\n  "schema": 1,\n  "regions": {}\n}\n');
       await put(".openarc/harness.mjs", HARNESS_ENTRY);
+      if (example && (await ports.fs.list("src")).length === 0) for (const [rel, text] of Object.entries(STARTER)) await put(rel, text); // code-first starter
       const ignore = ["lock", "sandbox/", "txn/", "watch-history.jsonl", "attempts/"];
       const had = await ports.fs.read(".openarc/.gitignore");
       const missing = ignore.filter((l) => !(had ?? "").split("\n").includes(l));
@@ -361,7 +448,7 @@ async function main(argv: string[]): Promise<number> {
       }
       if (type !== "module") console.log(`note: package.json ${type === undefined ? 'has no "type"' : `has "type": ${JSON.stringify(type)}`}; OpenArc projects are ES modules (tsc fails with TS1295 otherwise): run \`npm pkg set type=module\``);
       if (initWith !== DEFAULT_CONFIG) console.log(`backend: ${initWith.compilation.defaultBackend}; check it with \`npx openarc backends test\``);
-      console.log("next: write defineRegion specs in src/*.ts, then `npx openarc scaffold` (adds the exported symbols other files import),\nthen `npx tsc -p .`, then `npx openarc compile`");
+      console.log("next: write code in src/*.ts with `return arc.todo();` where the compiler should write the body, and arc.test cases\n(src/hello.ts is a start), then `npx tsc -p .`, then `npx openarc compile` (or `npx openarc watch`).\ndefineRegion specs work too: `npx openarc scaffold` adds their exported symbols");
       return 0;
     }
     case "scaffold": {
@@ -401,7 +488,7 @@ async function main(argv: string[]): Promise<number> {
       try {
         for (const txid of await recover(ports.fs)) diagnostics.push({ code: "OARC-W094", detail: txid });
         const project = await engine.parse(ports, request(root, null, []), diagnostics);
-        res = await engine.extract(ports, request(root, project, []), project, rel, { fn: cmd.fn, id: cmd.id });
+        res = await engine.extract(ports, request(root, project, []), project, rel, { fn: cmd.fn, id: cmd.id, style });
         if (res.files.length) {
           const txid = ports.newTxId();
           for (const [i, f] of res.files.entries()) await ports.fs.write(`.openarc/txn/${txid}/stage/${i}`, f.text);
@@ -414,7 +501,7 @@ async function main(argv: string[]): Promise<number> {
       for (const n of res.skipped) console.log(`already a region: ${n}`);
       for (const r of res.refused) console.error(`refused ${r.name}: ${r.reason}`);
       if (res.files.length) {
-        console.log(`extracted (developer-owned): ${res.extracted.join(", ")}\nreview the [inferred] intents, add examples, then \`openarc release <id>\` to hand a region to the compiler`);
+        console.log(`extracted (developer-owned): ${res.extracted.join(", ")}\n${style === "code" ? "review the JSDoc (the intent), add arc.test cases" : "review the [inferred] intents, add examples"}, then \`openarc release <id>\` to hand a region to the compiler`);
       } else if (!res.refused.length) console.log("nothing to extract");
       return res.refused.length ? 1 : 0;
     }

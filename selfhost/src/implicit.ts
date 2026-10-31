@@ -37,6 +37,7 @@ export interface CodeFirstProject {
   config: { backends: Record<string, unknown> };
   tests?: plan.TestInfo[];
   scaffolds?: Scaffolded[];
+  codeFirstIds?: Set<string>;
 }
 
 const err = (code: Diagnostic["code"], extra: Omit<Diagnostic, "code"> = {}): Diagnostic => ({ code, ...extra });
@@ -188,14 +189,17 @@ export function scaffoldPending(p: CodeFirstProject, diagnostics: Diagnostic[]):
   const used = new Set<string>();
   for (const [rel, text] of p.files) if (rel.startsWith("src/")) for (const n of flatNodes(text)) used.add(n.id);
   const done: Scaffolded[] = [];
+  p.codeFirstIds = new Set();
   for (const [rel, text] of [...p.files].filter(([f]) => regionFile(f))) {
-    if (!text.includes("arc.todo")) continue;
+    if (!text.includes("arc.todo") && !text.includes("@openarc:begin")) continue;
     const sf = p.program!.getSourceFile(`${p.root}/${rel}`)!;
     const nodes = flatNodes(text);
     const edits: { start: number; end: number; text: string }[] = [];
     for (const d of declarations(sf)) {
+      const marked = markedBody(sf, d.decl.body, nodes);
+      if (marked && !enclosed(sf, d, nodes)) p.codeFirstIds.add(marked);
       const call = pendingCall(d.decl.body);
-      if (!call || markedBody(sf, d.decl.body, nodes) || enclosed(sf, d, nodes)) continue;
+      if (!call || marked || enclosed(sf, d, nodes)) continue;
       const line = lineOf(sf, d.headStart) + 1;
       const doc = docOf(d.docNode, sf);
       const arg = call.arguments[0];
@@ -213,6 +217,7 @@ export function scaffoldPending(p: CodeFirstProject, diagnostics: Diagnostic[]):
         continue;
       }
       used.add(id);
+      p.codeFirstIds.add(id);
       const body = d.decl.body;
       const ind = /^[ \t]*/.exec(text.slice(text.lastIndexOf("\n", d.headStart - 1) + 1))![0];
       const stmt = ts.isBlock(body) ? body.statements[0]! : null;

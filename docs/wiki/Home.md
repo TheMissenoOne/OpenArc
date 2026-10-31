@@ -3,7 +3,7 @@
 **Compile typed specs into verified TypeScript with small local models.**
 
 OpenArc treats an LLM as a *constrained compiler backend*, not as a chat partner:
-- **You write the contract:** a function type, an intent and examples.
+- **You write the program:** interfaces, classes and the members you know, with `return arc.todo();` where the compiler should write a body, and tests as TypeScript (`arc.test`).
 - **OpenArc builds a context package for that one function.** It's the code-generation equivalent of a unit test: only what the function needs, never the whole repository.
 - **A local model returns a function body.**
 - **The compiler verifies it:** type-check, static rules, then your examples in a sandbox.
@@ -16,7 +16,8 @@ The hypothesis behind it:
 ## Start here
 
 - [[Getting Started]]: install, init, compile your first region
-- [[Writing Specs]]: `defineRegion`, examples, blocks, sketches, concepts, TSX UI specs
+- [[Code First]]: the main way since 0.9.0: pending bodies in functions and classes, JSDoc intent, `arc.test`, hidden tests, laws
+- [[Writing Specs]]: code first in brief, then `defineRegion`, examples, blocks, sketches, concepts, TSX UI specs
 - [[Palette]]: reusable concepts that ship with OpenArc (auth, load balancer, p2p protocol, login page)
 - [[Configuration]]: `openarc.config.json`; local Ollama or APIs (OpenAI, OpenRouter, Anthropic…) per region
 - [[Context Packages]]: how much the model sees, and when that grows

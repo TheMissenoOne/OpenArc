@@ -1,5 +1,42 @@
 # Writing Specs
 
+## Code first: the main way
+
+Write the program as ordinary TypeScript and leave `return arc.todo();` where the compiler should write a body. The declaration is the spec:
+
+| Part | Comes from |
+|---|---|
+| contract | the signature (generics allowed; `this` for a method) |
+| intent | the JSDoc, or the JSDoc of the interface member it implements |
+| id | the module path, class and member (`lb.balancer.roundRobin.pick`), or `@arc id` |
+| behaviour | `arc.test`, `arc.test.hidden` and `arc.law`: TypeScript, type-checked against the real code, run in the sandbox |
+| context | the class shell (fields, constructor, other members' signatures), the types it reaches, the shown tests |
+| extra settings | `@arc calls\|effects\|deps\|backend\|outputFormat` tags, `arc.configure(target, { … })`, or a `defineRegion` with the same id |
+
+```ts
+export class LeastConnections implements Balancer {
+  readonly backends: Backend[];
+  constructor(backends: Backend[]) {
+    this.backends = backends.map((b) => ({ ...b }));
+  }
+  /** The healthy backend with the fewest connections (ties: first in list order); it then has one more. */
+  pick(key: string): string | null {
+    return arc.todo();
+  }
+}
+
+arc.test(LeastConnections, "picks the minimum, then counts it", (LC, expect) => {
+  const lb = new LC([{ id: "a", healthy: true, connections: 5 }, { id: "b", healthy: true, connections: 1 }]);
+  expect(["1", "2", "3", "4", "5"].map((k) => lb.pick(k))).toEqual(["b", "b", "b", "b", "a"]);
+});
+```
+
+Everything about this form (classes, ids and markers, `expect`, hidden tests, laws, fakes by type, the customization layer, `migrate`) is on [[Code First]].
+
+## More ways to write regions
+
+Every form below predates code-first and stays fully supported: nothing is deprecated, and the forms mix in one project and one file. They are also the customization layer for code-first regions (a `defineRegion` whose `id` is a code-first region's attaches to it).
+
 ## Function regions
 
 ```ts

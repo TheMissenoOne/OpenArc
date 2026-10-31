@@ -124,6 +124,7 @@ export interface Project {
   concepts?: Map<string, concepts.ConceptInfo>; // palette: defineConcept statements, by id
   tests?: testsPlan.TestInfo[]; // code-first: every arc.test/arc.law statement, in file then source order
   scaffolds?: implicit.Scaffolded[]; // code-first: markers inserted in memory inside pending bodies
+  codeFirstIds?: Set<string>; // code-first: every code-first region id (pending or with markers), known before extractSpecs
 }
 
 const err = (code: Diagnostic["code"], extra: Omit<Diagnostic, "code"> = {}): Diagnostic => ({ code, ...extra });
@@ -279,7 +280,8 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           continue;
         }
         const id = literal.id as string;
-        if (literal.intent === undefined && !syn && !uiProp && literal.concept === undefined) { // the model needs some guidance
+        // the model needs some guidance. code-first: a defineRegion that attaches to a declaration has its JSDoc
+        if (literal.intent === undefined && !syn && !uiProp && literal.concept === undefined && !p.codeFirstIds?.has(id)) {
           diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: "intent is required unless sketch, ui or concept is present" }));
           continue;
         }
@@ -404,8 +406,8 @@ export async function scaffoldProject(ports: Ports, p: Project, diagnostics: Dia
 export async function analyze(ports: Ports, req: CompileRequest, p: Project, diagnostics: Diagnostic[], opts: { offline?: boolean } = {}): Promise<void> {
   if (srcFiles(p).length === 0) return;
   p.program = makeProgram(p, p.files);
-  extractSpecs(p, p.program.getTypeChecker(), diagnostics);
   const cfScaffolded = implicit.scaffoldPending(p, diagnostics); // code-first: markers inside pending bodies, in memory
+  extractSpecs(p, p.program.getTypeChecker(), diagnostics);
   if (scaffoldInMemory(p, diagnostics).length || cfScaffolded) {
     p.program = makeProgram(p, p.files, p.program);
     p.specs.clear();
@@ -871,6 +873,7 @@ export function plan(p: Project, req: CompileRequest, diagnostics: Diagnostic[])
       const cfTests = r.spec.codeFirst?.tests.length ?? 0;
       const thin = r.spec.ui || cfTests ? null : r.spec.codeFirst && !r.spec.examples.length ? "tests:0" : thinExamples(r.spec.examples);
       if (thin) diagnostics.push(err("OARC-W044", { id, detail: thin }));
+      if (r.spec.codeFirst && !r.spec.intent) diagnostics.push(err("OARC-W023", { id, file: r.file })); // code-first: no JSDoc anywhere
     }
   }
   return targets;
@@ -1838,7 +1841,7 @@ function newErrors(before: string[], after: string[]): string[] {
   });
 }
 
-export async function extract(ports: Ports, req: CompileRequest, p: Project, rel: string, opts: { fn?: string; id?: string }): Promise<ExtractResult> {
+export async function extract(ports: Ports, req: CompileRequest, p: Project, rel: string, opts: { fn?: string; id?: string; style?: "code" | "region" }): Promise<ExtractResult> {
   const res: ExtractResult = { files: [], extracted: [], skipped: [], refused: [] };
   const refuse = (name: string, reason: string) => res.refused.push({ name, reason });
   const text = p.files.get(rel);
@@ -1885,7 +1888,7 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
     refuse(opts.fn, isMethod ? "class method: regions are top-level functions (§3.2); move it out of the class first" : "no top-level function with that name");
   }
 
-  const inserts: { from: number; to: number; specAt: number; id: string; spec: string[] }[] = [];
+  const inserts: { from: number; to: number; specAt: number; id: string; spec: string[]; apply?: (ls: string[]) => void }[] = [];
   for (const [name, decls] of byName) {
     const exported = decls.some((st) => hasMod(st, ts.SyntaxKind.ExportKeyword)) || listed.has(name);
     if (opts.fn ? name !== opts.fn : !exported) continue;
@@ -1908,6 +1911,35 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
     const sigs = checker.getTypeAtLocation(nameNode).getCallSignatures();
     if (sigs.length !== 1) {
       refuse(name, "overloaded function: a region holds one declaration with one call signature");
+      continue;
+    }
+    if (opts.style === "code") { // code-first (§3.8): markers inside the body, `@arc id` in the JSDoc; generics are fine
+      const body = fnNode.body;
+      const block = body && ts.isBlock(body) ? body : null;
+      const open = block ? lineOf(block.getStart(sf)) : -1, close = block ? lineOf(block.end - 1) : -1;
+      if (!block || open === close || lines[open]!.slice(sf.getLineAndCharacterOfPosition(block.getStart(sf)).character + 1).trim() || lines[close]!.slice(0, sf.getLineAndCharacterOfPosition(block.end - 1).character).trim()) {
+        refuse(name, "the body must be a block whose braces end and start their own lines (or use --style region)");
+        continue;
+      }
+      const id = opts.id ?? implicit.derivedId(rel, text, { name });
+      if (!isValidId(id) || usedIds.has(id)) {
+        refuse(name, isValidId(id) ? `id "${id}" is already used; pass --function ${name} --id <id>` : `invalid id "${id}" (segments are [a-z][a-zA-Z0-9]*)`);
+        continue;
+      }
+      const ind = /^\s*/.exec(lines[from]!)![0];
+      const jd = ts.getJSDocCommentsAndTags(st).filter(ts.isJSDoc).at(-1);
+      inserts.push({
+        from, to, id, specAt: 0, spec: [], apply: (ls) => { // bottom-up: the end marker, the begin marker, then the JSDoc above
+          ls.splice(close, 0, `${ind}  // @openarc:end ${id}`);
+          ls.splice(open + 1, 0, `${ind}  // @openarc:begin ${id}`);
+          if (!jd) return void ls.splice(from, 0, `${ind}/** @arc id ${id} */`);
+          const j0 = lineOf(jd.getStart(sf)), j1 = lineOf(jd.end);
+          if (j0 !== j1) return void ls.splice(j1, 0, `${ind} * @arc id ${id}`);
+          const t = jd.getText(sf);
+          ls.splice(j0, 1, ...ls[j0]!.replace(t, `/**\n${ind} * ${t.slice(3, -2).trim()}\n${ind} * @arc id ${id}\n${ind} */`).split("\n"));
+        },
+      });
+      usedIds.add(id);
       continue;
     }
     if (fnNode.typeParameters?.length || sigs[0]!.typeParameters?.length) {
@@ -1955,15 +1987,20 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
     usedIds.add(id);
   }
   if (!inserts.length) return res;
-  if (bound.has("arc") && !/import \* as arc from "open-arc"/.test(text)) return refuse(rel, "the name `arc` is already bound; specs need `import * as arc from \"open-arc\"`"), res;
+  const classic = inserts.some((i) => !i.apply);
+  if (classic && bound.has("arc") && !/import \* as arc from "open-arc"/.test(text)) return refuse(rel, "the name `arc` is already bound; specs need `import * as arc from \"open-arc\"`"), res;
 
   for (const ins of inserts.sort((a, b) => b.from - a.from)) {
+    if (ins.apply) {
+      ins.apply(lines);
+      continue;
+    }
     const ind = /^\s*/.exec(lines[ins.from]!)![0];
     lines.splice(ins.to + 1, 0, `${ind}// @openarc:end ${ins.id}`);
     lines.splice(ins.from, 0, `${ind}// @openarc:begin ${ins.id}`);
     lines.splice(ins.specAt, 0, ...ins.spec);
   }
-  if (!/import \* as arc from "open-arc"/.test(text)) lines.splice(lines[0]?.startsWith("#!") ? 1 : 0, 0, 'import * as arc from "open-arc";');
+  if (classic && !/import \* as arc from "open-arc"/.test(text)) lines.splice(lines[0]?.startsWith("#!") ? 1 : 0, 0, 'import * as arc from "open-arc";');
   const out = lines.join("\n");
 
   // The result must type-check no worse than before, and analyze as developer-owned function regions.
@@ -1986,7 +2023,7 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
   for (const { id } of [...inserts].reverse()) {
     const r = p.regions.find((x) => x.id === id)!;
     manifest.regions[id] = {
-      kind: "function", parent: null, file: rel, symbol: r.spec.symbol, ownership: "developer",
+      kind: "function", parent: null, file: rel, symbol: r.spec.symbol, ...(r.spec.codeFirst ? { declaration: r.spec.codeFirst.declaration } : {}), ownership: "developer",
       hash: r.hash, specHash: r.specHash, fingerprint: null, provenance: { source: "extracted", at: ports.now() },
     };
     res.extracted.push(id);

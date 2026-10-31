@@ -32,7 +32,7 @@ npm i -D open-arc
 npx openarc init
 ```
 
-`init` creates `openarc.config.json`, `tsconfig.json` (strict, `erasableSyntaxOnly`) and `.openarc/`.
+`init` creates `openarc.config.json`, `tsconfig.json` (strict, `erasableSyntaxOnly`) and `.openarc/`. At a terminal, or with `--example`, it also writes a code-first starter in an empty `src/` (`src/hello.ts` and `src/hello.test.ts`); `--no-example` skips it.
 
 OpenArc projects are ES modules. Recent npm versions make `npm init -y` write `"type": "commonjs"`, and `tsc` then fails with `TS1295`; that is what `npm pkg set type=module` above fixes. If you skip it, `init` prints a one-line note telling you to run it. It never edits your `package.json` itself.
 
@@ -40,52 +40,100 @@ Plain `init` sets up local Ollama (`qwen3.5:9b`). To start with another backend 
 
 ## Your first region
 
-`src/tasks.ts`:
+`npx openarc init --example` (or plain `init` at a terminal) writes a starter: an interface and a class with one pending method, and its tests. Or write it yourself.
+
+`src/hello.ts`:
 
 ```ts
 import * as arc from "open-arc";
 
-type NormalizeTitle = (title: string) => string;
+/** Greets people by name. */
+export interface Greeter {
+  /**
+   * "Hello, <name>!" with the name trimmed of surrounding spaces;
+   * "Hello, world!" when the name is empty or only spaces.
+   */
+  greet(name: string): string;
+}
 
-export const normalizeTitleSpec = arc.defineRegion<NormalizeTitle>({
-  id: "tasks.normalizeTitle",
-  intent: "Trim, collapse internal whitespace to one space, capitalize the first letter.",
-  examples: [
-    { args: ["  buy   milk "], expected: "Buy milk" },
-    { args: ["x"], expected: "X" },
-    { args: ["   "], expected: "" },
-  ],
+export class FriendlyGreeter implements Greeter {
+  greet(name: string): string {
+    return arc.todo();
+  }
+}
+```
+
+`src/hello.test.ts`:
+
+```ts
+import * as arc from "open-arc";
+import { FriendlyGreeter } from "./hello.ts";
+
+arc.test(FriendlyGreeter, "greets by name", (G, expect) => {
+  const g = new G();
+  expect(g.greet("Ada")).toBe("Hello, Ada!");
+  expect(g.greet("  Bob ")).toBe("Hello, Bob!");
+});
+
+arc.test(FriendlyGreeter, "an empty name greets the world", (G, expect) => {
+  expect(new G().greet("")).toBe("Hello, world!");
+  expect(new G().greet("   ")).toBe("Hello, world!");
 });
 ```
 
-A wrong example, such as `expected: 42`, is a type error in your editor before OpenArc ever runs.
+The body `return arc.todo();` makes `FriendlyGreeter.greet` a region, `hello.friendlyGreeter.greet`. Its signature is the contract, the interface's JSDoc is its intent (an undocumented member inherits it), and the tests are TypeScript: a wrong test, such as `g.greet(42)` or `toBe(1)`, is a type error in your editor before OpenArc ever runs.
 
 ```bash
-npx openarc scaffold   # adds markers + a typed placeholder (no model involved)
-npx tsc -p .           # optional: after scaffold, so imports of other files' regions resolve
+npx tsc -p .           # pending bodies and tests type-check as written
+npx openarc graph      # hello.friendlyGreeter.greet  F pending  0 ex 2 tests  src/hello.ts
 npx openarc compile
 ```
 
-Real output (qwen3.5:9b on an RX 7600):
+The log looks like this (illustrative: the timings and sizes depend on the model and machine):
 
 ```
-  tasks.normalizeTitle: attempt 1 via local (qwen3.5:9b), context L0 973 chars, 1.1s
-  tasks.normalizeTitle: ✗ OARC-E070 TS2304 line 17: Cannot find name 'rest'.
-  tasks.normalizeTitle: attempt 2 via local (qwen3.5:9b), context L1 1037 chars, 1.9s
-  tasks.normalizeTitle: ✓ tsc, static, examples:3/3
-done: exit 0 · 2 model call(s) · 3.5s
+  hello.friendlyGreeter.greet: attempt 1 via local (qwen3.5:9b), context L0 2012 chars, 1.4s
+  hello.friendlyGreeter.greet: ✓ tsc, static, tests:2/2
+done: exit 0 · 1 model call(s) · 2.3s
 ```
 
-The first attempt failed type-checking. A missing name counts as a context problem, so attempt 2 got a larger context package (L1) plus the error, and passed.
+The model saw the class, the interface with its JSDoc, and the two tests. The body it returned type-checked and passed both tests in the sandbox, so OpenArc wrote it in. When an attempt fails, the next one gets the failing assertions (`line 6: expect(g.greet("  Bob ")).toBe("Hello, Bob!") / got "Hello,   Bob !"; expected "Hello, Bob!"`).
 
 ## What you get
 
 ```ts
-// @openarc:begin tasks.normalizeTitle
-export const normalizeTitle: NormalizeTitle = (title) => {
-  return title.trim().replace(/\s+/g, ' ').charAt(0).toUpperCase() + title.trim().replace(/\s+/g, ' ').slice(1);
-};
-// @openarc:end tasks.normalizeTitle
+export class FriendlyGreeter implements Greeter {
+  greet(name: string): string {
+    // @openarc:begin hello.friendlyGreeter.greet
+    const n = name.trim();
+    return `Hello, ${n || "world"}!`;
+    // @openarc:end hello.friendlyGreeter.greet
+  }
+}
 ```
 
-It's ordinary TypeScript: edit it, Ctrl+Click it, commit it. Run `compile` again and it makes **0 model calls**, because nothing changed. If you edit the body by hand, OpenArc reports `OARC-W060` and never touches the region again until you run `openarc release tasks.normalizeTitle`.
+It's ordinary TypeScript: edit it, Ctrl+Click it, commit it. The markers inside the body are the region's identity from now on, so you can rename the class or move the file. Run `compile` again and it makes **0 model calls**, because nothing changed. If you edit the body by hand, OpenArc reports `OARC-W060` and never touches the region again until you run `openarc release hello.friendlyGreeter.greet`.
+
+Next: [[Code First]] for classes, hidden tests, laws and fakes; [[Writing Specs]] for `defineRegion`, blocks, sketches, concepts and UI specs, which all keep working.
+
+## The `defineRegion` form
+
+The same region written as a spec, which OpenArc has supported since 0.1 and still does:
+
+```ts
+import * as arc from "open-arc";
+
+type Greet = (name: string) => string;
+
+export const greetSpec = arc.defineRegion<Greet>({
+  id: "hello.greet",
+  intent: "\"Hello, <name>!\" with the name trimmed; \"Hello, world!\" when it is empty or only spaces.",
+  examples: [
+    { args: ["Ada"], expected: "Hello, Ada!" },
+    { args: ["  Bob "], expected: "Hello, Bob!" },
+    { args: [""], expected: "Hello, world!" },
+  ],
+});
+```
+
+`npx openarc scaffold` then adds `export const greet: Greet = (name) => arc.todo("hello.greet");` between markers (no model involved), and `compile` replaces it. A wrong example, such as `expected: 42`, is a type error too.

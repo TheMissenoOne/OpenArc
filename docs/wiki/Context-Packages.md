@@ -51,6 +51,10 @@ The hash of the context package is part of the fingerprint. If any type a region
 
 If the spec has `calls`, the package also says "You may call exactly: …" (see [[Writing Specs]]).
 
+## Code-first regions
+
+A code-first region (see [[Code First]]) gets a **Contract** section instead of the fixed signature: its declaration with the JSDoc in place and `<<<BODY>>>` for the body; for a class member, the whole class shell (heritage, fields, the constructor, every other member's signature and JSDoc, marked `implemented` or `pending: compiled jointly with this member`), after the shell of a project base class. The interfaces it implements come through the type closure. Then a **Tests** section: the source of the shown tests that target the region, with the module-level constants of their file that they read, and `// plus N hidden test(s), not shown`. Hidden tests never appear, and a failing one reaches the repair prompt by name only. When the package is over budget, the tests' source is replaced by a summary of their literal assertions (`rr.pick("x") → "a"`, `new RR(three).markDown("z") throws "unknown backend z"`) before any other section is dropped. The fingerprint hashes the stable view: other members by signature whatever their state, so committing one member doesn't make its siblings stale.
+
 ## Sketches, concepts and UI specs
 
 - **Sketch regions** replace the fixed signature with the sketch itself, holes shown as `«1»`, `«2»`…, and a `Holes` section (each hole's type and description). The model writes fills, not a body: for the palette's `auth.password`, two short expressions and one statement. `Functions the sketch calls` lists the signatures of the project functions it calls. A sketch never escalates past L1.

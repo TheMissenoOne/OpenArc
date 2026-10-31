@@ -1,6 +1,6 @@
 # OpenArc — Phase 0 Technical Specification
 
-**Version:** 0.4.0-draft (0.8.0 adds §2.5 concepts, §2.6 UI structure specs, §3.7 sketches, §9.6 the UI harness). Revised after self-hosting (`selfhost/WALKTHROUGH.md`) and after the stage 0 implementation (`stage0/`). · **Date:** 2026-10-31 · **Status:** for review, not implemented
+**Version:** 0.5.0-draft (0.8.0 adds §2.5 concepts, §2.6 UI structure specs, §3.7 sketches, §9.6 the UI harness; 0.9.0 adds §2.7 code-first tests, §3.8 code-first regions and `openarc migrate`). Revised after self-hosting (`selfhost/WALKTHROUGH.md`) and after the stage 0 implementation (`stage0/`). · **Date:** 2026-10-31 · **Status:** for review, not implemented
 
 The keywords MUST, MUST NOT, SHOULD, and MAY are normative. Diagnostics use the code `OARC-Exxx` (error) or `OARC-Wxxx` (warning). Section 11 lists every code.
 
@@ -11,8 +11,8 @@ The keywords MUST, MUST NOT, SHOULD, and MAY are normative. Diagnostics use the 
 | Component | v0 |
 |---|---|
 | Source | TypeScript ≥ 5.8, with `erasableSyntaxOnly: true`, `strict: true` |
-| Spec DSL | `defineRegion<F>` (function regions), `defineBlock` (block regions); since 0.8.0 also sketches (`sketch` with `arc.hole<T>()`, §3.7), concepts (`defineConcept`, §2.5) and UI structure specs (`ui` in a `*.spec.tsx` file, §2.6) |
-| Region identification | Line-comment markers + a manifest |
+| Spec DSL | Since 0.9.0 the main form is **code-first** (§2.7, §3.8): a function, method, getter or arrow whose whole body is `arc.todo()` is a region, tests are `arc.test`/`arc.test.hidden`/`arc.law`, and `arc.configure` and JSDoc `@arc` tags customise. Also `defineRegion<F>` (function regions), `defineBlock` (block regions); since 0.8.0 also sketches (`sketch` with `arc.hole<T>()`, §3.7), concepts (`defineConcept`, §2.5) and UI structure specs (`ui` in a `*.spec.tsx` file, §2.6) |
+| Region identification | Line-comment markers + a manifest; a pending code-first region is identified by a derived id until its first commit writes markers inside its body (§3.8) |
 | Ownership | Non-overlapping, nested, hash-based |
 | Model backend | One Ollama instance, structured output |
 | Verification | tsc, static effect/import check, developer examples in a sandbox (tiered by OS, §9.2) |
@@ -166,7 +166,33 @@ The tree (with the vocabulary version) joins the spec hash. UI regions need a DO
 
 ---
 
-## 3. Region grammar
+### 2.7 Code-first regions and tests (since 0.9.0)
+
+`open-arc` adds (in `core/test.ts`, re-exported by the package root):
+
+```ts
+export function todo(id?: string): never;   // the id is optional for a code-first region (§3.8)
+export function test<T extends AnyFn | Ctor>(target: T, name: string, body: (subject: T, expect: Expect, fakes: Fakes) => void | Promise<void>): void;
+test.hidden = …same signature…;               // held out from the model (§8.5, §8.8)
+export function law<T extends AnyFn | Ctor>(target: T, name: string, body: (subject: T, expect: Expect, gen: Gen) => void | Promise<void>,
+                                          o?: { runs?: number; seed?: number }): void;   // default 50 runs, seed 1
+export function configure(target: AnyFn | Ctor, config: RegionConfig): void;             // a no-op at runtime
+interface RegionConfig { calls?; effects?; deps?; tolerance?; backend?; outputFormat?; examples?: Json[]; intent? }
+interface Matchers<T> { toBe; toEqual(expected, { tolerance?, exact? }?); toMatch; toHaveLength; toContain; toThrow(message?); toReject(message?): Promise<void> }
+interface Gen { int(lo, hi); bool(); pick(xs); string({ max?, alphabet? }?); array(item, { min?, max? }?) }
+interface Fakes { of<T>(init?): T; named<T>(name, init?): T; snapshot(instance): Json }
+```
+
+**Static reading (§2.2 applies).** A test is a top-level expression statement `arc.test(…)`, `arc.test.hidden(…)` or `arc.law(…)` in any `.ts`/`.tsx` file under `src/` or `tests/` (not `tests/fakes/` or `tests/fixtures/`). The target MUST be an identifier or a property access (`C.prototype.m` narrows the test to that member), the name a string literal, the body an inline arrow or function expression, and a law's options static JSON; anything else is E010 (detail `test:<target|name|body|options>`). `arc.configure(target, <static JSON>)` likewise (`configure:not-static`); its target MUST resolve, through the checker, to a code-first region (`configure:not-a-region:<text>`). Test bodies are never run outside the sandbox (§9.3).
+
+**`expect`** is deterministic: `toBe` is `Object.is` except that `-0` equals `0`; `toEqual` is the example equality of §9.3 with its options; `toThrow` takes a function and `toReject` a promise, and a string must be a substring of the message (a RegExp must match it); an `OpenArcTodoError` is never an assertion failure but marks the test pending. Assertions are soft: a failed `expect` is recorded with its index and the test continues; any other exception ends the test (`threw`).
+
+**`gen`** is mulberry32 (§9.5) seeded with `seed × 1000 + run`; every draw, including an array's length, is recorded, and a failing law reports `failed at run r/N (seed s); draws [...]`. There is no shrinking.
+
+**Fakes by type.** `fakes.of<T>(init?)` is resolved when the test is read: the one `export default defineFake<T>(…)` in `tests/fakes/` whose `T` is the same type (by checker identity). None is E010 `fake:<T>`, two or more `fake:<T>:ambiguous` (one diagnostic per call site). `fakes.named(<file name>, init?)` is the explicit form; `fakes.snapshot(instance)` is that instance's `snapshot()` as JSON.
+
+**Which tests run for a region:** those whose target is the region's declaration, its class, or a class its class extends (transitively); `C.prototype.m` targets only member `m`.
+
 
 ### 3.1 Markers
 
@@ -191,7 +217,9 @@ The compiler finds its spec with `defineRegion` whose `id` equals the marker id,
 
 **(B) Block region.** One or more complete statements, contiguous, all in the *same* block of an enclosing function body (or of a nested block). Its spec is `defineBlock` with the matching id. Block regions MUST be nested (directly or transitively) inside an (F) region (`OARC-E032`).
 
-Anything else (a partial statement, a class member, top-level non-function statements, statements from two different blocks): `OARC-E033`.
+**(M) Code-first region** (since 0.9.0). The begin marker is the first line of a function, method, getter or arrow body block and the end marker its last line; between them is the whole statement list (§3.8).
+
+Anything else (a partial statement, a class member outside (M), top-level non-function statements, statements from two different blocks): `OARC-E033`.
 
 A marker id with no spec: `OARC-E012`. A spec with no markers is **pending** (§8.1 scaffolds it).
 
@@ -252,6 +280,24 @@ A function region's spec may carry its body as a **sketch**: `sketch: async (a, 
 
 Block regions stay: a block is a statement hole in developer-owned text, held by markers. A sketch puts the structure in the spec, gives expression holes and one model call per region.
 
+### 3.8 Code-first regions (since 0.9.0)
+
+**Discovery.** In a `src/` file that is not `*.test.ts(x)`, a declaration is a **code-first region** when it is a top-level `function` with a body, a top-level `const` bound to an arrow or function expression, or a method, get accessor or arrow-valued property of a top-level named class, and either (a) its whole body is `{ return arc.todo(…); }`, `{ arc.todo(…); }` or the arrow expression `arc.todo(…)` (it is **pending**), or (b) its body's first and last lines are the begin and end markers of one id (position **M**). A declaration that lies inside a marker pair is never code-first (a classic placeholder `export const f: F = (x) => arc.todo("id")` has the same shape). Constructors, setters, nested functions and object-literal methods are not regions.
+
+**Contract.** The declaration's own signature, including type parameters and, for a member, `this`. A pending region MUST have an explicit return type (or, for an arrow, a typed `const`/property): otherwise `arc.todo()` infers `never` (`OARC-E022`, and the declaration is not a region).
+
+**Intent.** The JSDoc: description, `@param`, `@returns`, `@throws`. A member without JSDoc inherits that of the same-named member of the interfaces and base classes in its heritage clause. JSDoc `@arc <key> <value>` tags configure the region (§2.7 layers below); `@arc id`, `@arc module`, `@arc backend` and `@arc outputFormat` take one word, `@arc calls|effects|deps` a list (`none` is empty). A region with no intent at all gets `OARC-W023` at PLAN.
+
+**Ids.** `<module>[.<class>].<member>`: `<module>` is the path under `src/` without the extension or a trailing `index`, split at `/` and `.`, each segment normalised as §2.3 (or `/** @arc module <id> */` at the top of the file); `<class>` is left out when it equals the file's base name (case-insensitive), and a top-level function named like its file is not repeated. `@arc id <id>` or `arc.todo("<id>")` overrides the whole id. Two declarations with one id: E011.
+
+**Markers inside the body.** At ANALYZE the compiler inserts, in memory only, the markers around a pending body's single statement (an expression body becomes `{ return <expr>; }`), so every later step sees an (M) region. At STAGE, a pending region that is not committed in the run gets its original text back, so a pending body is never rewritten on disk. A committed body is written between its markers as statements, indented one level inside the declaration. From then on the markers are the identity: a renamed method, class or file keeps the id; `@arc id` that disagrees with the markers is `OARC-E064` (rename explicitly by editing both).
+
+**Layers.** A code-first region's settings come from up to three places: JSDoc `@arc` tags, `arc.configure(target, …)`, and a `defineRegion` whose `id` is the region's (it **attaches**: no second region is created, no placeholder is scaffolded, its `intent` is optional and is appended to the JSDoc, and its `F` must be mutually assignable with the declaration's type, else E020 detail `defineRegion-type`). `calls`, `effects`, `deps`, `tolerance`, `outputFormat` and `backend` MAY be set in one layer only (`OARC-E013`, detail `<field>:<layers in the order jsdoc, configure, defineRegion>`); `examples` and intents add up. `openarc.config.json` `regions[id]` still wins for `backend`, `outputFormat` and `contextLevel`. JSON examples are for top-level functions only (E010 `examples:method`) that are exported (`examples:not-exported`). A `backend` that is not configured is E010 `backend:<name>`.
+
+**Classes.** The class shell (heritage, fields with initializers, the constructor, every member's head and JSDoc) is developer-owned; only the statements between a member's markers are the region. The code-first members of one class form a **group** that PLAN compiles in source order and §8.10 verifies jointly.
+
+**Migration.** `openarc migrate <id>` turns one classic function region into this form (§10).
+
 ---
 
 ## 4. Hashing
@@ -275,6 +321,8 @@ Line endings (since 0.7.0): a file whose every line ends in CRLF is held as LF i
 
 `specHash = sha256(canonicalJson(specLiteral) + "\n" + printType(F))`. Here `canonicalJson` means sorted keys and no whitespace, and `printType` uses `checker.typeToString` with `NoTruncation`. For (B), the `printType` part is the canonical JSON of `{reads, writes}`.
 
+For a code-first region (§3.8) the spec literal is `{id, $head, $doc, $intent, …merged layers (not backend or outputFormat), examples, $tests}`: the declaration's head with whitespace collapsed, its JSDoc as written (or inherited), an attached intent, and the source of every test that targets it (hidden ones included) preceded by the test-file constants it reads. Its `printType` part is the checker-printed signature.
+
 Since 0.8.0 the spec literal also holds, for a sketch region, `$sketch` (the normalised sketch and the fills-protocol version, §3.7); for a UI region, `$ui` (the structure tree and the vocabulary version, §2.6); and for a concept variant, `$concept` (the concept's hash, §2.5).
 
 ### 4.3 Fingerprint (cache key)
@@ -293,7 +341,7 @@ fingerprint = sha256(canonicalJson({
 }))
 ```
 
-The implementation also hashes `context`: the hash of the stable view of the initial context package (§8.8), which shows sibling regions by signature and never by body, so committing one region does not change its siblings' fingerprints.
+The implementation also hashes `context`: the hash of the stable view of the initial context package (§8.8), which shows sibling regions by signature and never by body, so committing one region does not change its siblings' fingerprints. For a code-first member the stable view includes the class shell (other members by head and JSDoc, without `implemented`/`pending` notes), a project base class's shell, and the interfaces through the type closure.
 
 ---
 
@@ -310,6 +358,7 @@ Path: `.openarc/manifest.json`. It is committed to version control. It is writte
       "parent": null,                   // id | null
       "file": "src/tasks/create.ts",    // POSIX, relative to project root
       "symbol": "normalizeTitle",       // function regions only
+      "declaration": "RoundRobin.pick", // code-first regions only (§3.8); display
       "ownership": "compiler",          // §6
       "hash": "sha256:…",               // hash at last commit
       "specHash": "sha256:…",           // spec hash at last commit
@@ -320,7 +369,7 @@ Path: `.openarc/manifest.json`. It is committed to version control. It is writte
         "model": "qwen2.5-coder:14b@sha256:…",
         "outputFormat": "json",          // §8.4.1
         "attempts": 2,
-        "verifiedBy": ["tsc", "static", "examples:3/3"],
+        "verifiedBy": ["tsc", "static", "examples:3/3"], // code-first: also "tests:<passed>/<run>[ (n inconclusive: pending regions)]", "hidden:<n>"
         "tokens": { "prompt": 4307, "completion": 982 }, // every model call that produced this body, failed attempts included (§8.4.2); absent when the backend reports none
         "at": "2026-10-31T12:00:00Z"
       }
@@ -382,6 +431,8 @@ A `compiler` region whose current specHash differs from `m.specHash`, or whose f
 
 A changed id is treated as removal of the old id (`OARC-E062` until resolved with `--unlink`) plus a new region. v0 does not track renames.
 
+Code-first regions (§3.8): while pending, the id is derived from the declaration, so renaming the method, class or file just changes it (nothing generated is lost). Once committed, the markers inside the body are the id, so renaming the declaration, the class or the file keeps it; deleting the markers is E062 as above, and an `@arc id` that differs from the markers is E064.
+
 ---
 
 ## 7. Static verification rules
@@ -393,7 +444,7 @@ Static rules are applied to the owned text of each **candidate** body, and to th
 3. Forbidden free identifiers, unless allowed by `effects`: `process`, `globalThis`, `global`, `window`, `self`, `eval`, `Function`, `fetch`, `XMLHttpRequest`, `WebSocket`, `Deno`, `Bun`, `setTimeout`, `setInterval`, `queueMicrotask` (`OARC-E073`).
 4. Effect-gated identifiers: `Date`, `performance` need `clock`; `Math.random` and `crypto.getRandomValues`, `crypto.randomUUID`, `crypto.randomBytes` need `random`; `console` needs `log` (`OARC-E074`). Any other use of `crypto` is pure: `createHash` on `crypto` imported from `node:crypto` needs no effect. A name the file binds (its imports and top-level declarations, **plus the candidate's requested imports**) is not the global of the same name. Before 0.6.3 the requested imports were not counted, so `import crypto from "node:crypto"` requested by the model still read as the global and `hash.sha256Tagged` failed three times with `'crypto' requires effect 'random'`. The pure uses of `Date` are exempt: `Date.parse(…)`, `Date.UTC(…)`, `new Date(<at least one argument>)`, and `Date` as a type. `Date.now()` and `new Date()` with no argument read the clock and stay gated.
 5. Any other capability (DB, network, filesystem, env) MUST arrive as a parameter of `F` (ports or injected dependencies). There is no effect token for it. This is what lets examples run against fakes.
-6. Call allowlist, only when the spec has `calls` (§2.1). For every call expression in the body, the compiler computes the callee path from identifiers and property accesses (`engine.parse`, `ports.fs.remove`, `recover`; an element access prints as `x[]`). If the path's root identifier is **restricted**, the path MUST equal an entry of `calls` or fall under one of its `prefix.*` entries (`OARC-E098`, detail = the path; message `call not allowed by spec: <path> (allowed: …)`). Restricted roots are the file's import bindings (named, default and namespace, plus the candidate's requested imports) and the parameters of the enclosing function whose type is `Ports`. Calls on locals (`diagnostics.push`, `staged.map`), on functions the body declares, and on globals (governed by rules 3 and 4) are not restricted. Only calls are checked: an alias (`const f = engine.parse; f()`) is not traced. The rule stops a model that wanders into the wrong step; the sandbox remains the security boundary. For a sketch region, the rule applies to each fill, with the implied allowlist (§3.7).
+6. Call allowlist, only when the spec has `calls` (§2.1). For every call expression in the body, the compiler computes the callee path from identifiers and property accesses (`engine.parse`, `ports.fs.remove`, `recover`; an element access prints as `x[]`). If the path's root identifier is **restricted**, the path MUST equal an entry of `calls` or fall under one of its `prefix.*` entries (`OARC-E098`, detail = the path; message `call not allowed by spec: <path> (allowed: …)`). Restricted roots are the file's import bindings (named, default and namespace, plus the candidate's requested imports) and the parameters of the enclosing function whose type is `Ports`; for a code-first member (§3.8), also `this.<field>` for every field whose declared type is a project interface (a port held by the instance: `@arc calls this.net.send`). Calls on locals (`diagnostics.push`, `staged.map`), on functions the body declares, and on globals (governed by rules 3 and 4) are not restricted. Only calls are checked: an alias (`const f = engine.parse; f()`) is not traced. The rule stops a model that wanders into the wrong step; the sandbox remains the security boundary. For a sketch region, the rule applies to each fill, with the implied allowlist (§3.7).
 7. Containment, for sketch regions (§3.7): the candidate body MUST be the sketch with every hole replaced by some code and nothing else changed (`OARC-E099 sketch not preserved: body line <n> has … where the sketch has …`). The check walks both ASTs in parallel: an expression hole matches one expression, a statement hole 0..n statements (backtracking); every other node has the same kind and children and every token the same text, except that string literals compare by value; comments and whitespace are ignored. It yields the fills that rules 6 and §3.4 then check.
 
 ---
@@ -412,14 +463,15 @@ any state ──error──> ABORT (no writes; diagnostics printed; exit code 1)
 
 | State | Does | Fails with |
 |---|---|---|
-| PARSE | Load the tsconfig program. Find spec calls (§2.2) and markers (§3.1) | E010, E030, E031, W001 |
+| PARSE | Load the tsconfig program, with the test files under `tests/` (§2.7). Find spec calls (§2.2) and markers (§3.1) | E010, E030, E031, W001 |
+| ANALYZE (code-first) | Insert markers inside pending code-first bodies in memory, derive ids, read declarations, JSDoc, tests and `arc.configure`, merge the layers, build the static test plan (§2.7, §3.8) | E010, E011, E013, E020, E022, E064 |
 | ANALYZE | Pair specs with markers. Build the region tree. Compute hashes and ownership (§6.2), block contracts (§3.5) and fingerprints | E011, E012, E021, E032–E035, E061–E063 |
 | VALIDATE | Contract binding (§2.4) on the **current** code. Example typing (tsc). `refine` | E020, E041, E070 |
-| PLAN | Select targets: pending regions, plus `compiler` regions whose fingerprint ≠ `m.fingerprint`, restricted to the requested ids and their descendants. Skip `developer`/`conflicted` regions with W060/E061. Order: children before parents (post-order), and a sketch's callees before it (§3.7). Parents are generated with children as opaque `«openarc-child»` slots. | — |
+| PLAN | Select targets: pending regions, plus `compiler` regions whose fingerprint ≠ `m.fingerprint`, restricted to the requested ids and their descendants. Skip `developer`/`conflicted` regions with W060/E061. Order: children before parents (post-order), and a sketch's callees before it (§3.7); the members of a class in source order (§3.8). A code-first target with neither tests nor examples gets `OARC-W044` (detail `tests:0`), and one with no intent `OARC-W023`. Parents are generated with children as opaque `«openarc-child»` slots. | — |
 | GENERATE | A UI region whose project has no DOM is E092 here, before any model call (§2.6). Cache lookup by fingerprint. On a miss, call the model (§8.4). An output that is not valid JSON is logged with its reason (`✗ output was not valid: <detail>`). Every failed attempt is saved (§8.11). A `compiler` region that ends without a candidate gets `OARC-W043` (§6.3.1). A connection error (`ECONNREFUSED`, `fetch failed`) is retried once after 10 s. After 3 consecutive E080s in one run, the remaining targets are skipped without calling the backend (E080, detail `stopped:3-consecutive`) | E080 (backend unreachable), E081 (schema invalid) |
 | STATIC | Splice the candidate into an in-memory copy. Apply §7 | E070–E074 |
-| SANDBOX | Run the examples of the enclosing (F) region(s) (§9); for a UI region, the DOM checks of §9.6 | E090 (example failed), E091 (timeout/limit), E092 (sandbox unavailable), E100 (§3.7), W045 |
-| repair | If STATIC or SANDBOX fails and attempts < 3, go back to GENERATE with a repair prompt (§8.5). Otherwise ABORT for this run. E100 and E092 stop the region's attempts at once | E082 (attempts exhausted) |
+| SANDBOX | Run the examples of the enclosing (F) region(s) (§9), and for a code-first region its examples and planned tests (§9.3); for a UI region, the DOM checks of §9.6 | E090 (example failed), E091 (timeout/limit), E092 (sandbox unavailable), E100 (§3.7), W045 |
+| repair | If STATIC or SANDBOX fails and attempts < 3, go back to GENERATE with a repair prompt (§8.5). Otherwise ABORT for this run. E100, E092 and a test-registry mismatch (§9.3) stop the region's attempts at once | E082 (attempts exhausted) |
 | STAGE | Write every changed file to `.openarc/txn/<txid>/`, plus the new manifest. When PLAN found no targets but ownership changed (a W060 transition to `developer`, a new hand-written region), STAGE and COMMIT still run with the manifest alone, so the transition is recorded once and a later spec change is detected as E061. Write `.openarc/txn/<txid>/journal.json` listing `{target, backupOf}`. Before writing, every changed target is re-read: if it differs from the text PARSE read (the developer saved during the run), nothing is staged or committed | E093 (I/O), E096 |
 | COMMIT | For each file: copy the original to the journal backup, then `rename(staged, target)`. Then rename the manifest. Delete the journal last. | — |
 
@@ -478,7 +530,7 @@ Each model call records the tokens the provider reports: Ollama `prompt_eval_cou
 
 ### 8.5 Repair prompt
 
-This is the original request plus the previous `body` plus the diagnostics (code, message, and for E090 the example name with expected and actual values, printed faithfully as in §9.3). Attempts are capped at 3 total per node per run.
+This is the original request plus the previous `body` plus the diagnostics (code, message, and for E090 the example name with expected and actual values, printed faithfully as in §9.3). For a failed test (§2.7): `OARC-E090 test "<name>" failed[ (<law run, seed and draws>)]:` then, per failing assertion, `line <n>: <expect(…) source>` and `got …; expected …`, and `threw: …` if it threw. A failed **hidden** test is `OARC-E090 hidden test failed: "<name>"` and nothing else: the harness never sends a hidden test's values out of the sandbox. Attempts are capped at 3 total per node per run.
 
 At temperature 0 with a fixed seed, a retry prompt that is byte-identical to the previous attempt's prompt can only return the same body. So the *n*-th consecutive identical prompt is sent with temperature 0.4 (n = 1), then 0.7 (n ≥ 2), and seed `seed + attempt − 1`. A different prompt goes back to the configured sampling. An attempt that passes with varied sampling records `provenance.sampling: {temperature, seed}` and keeps it in its cache entry. Anthropic's API rejects sampling fields, so the variation doesn't reach that provider.
 
@@ -494,7 +546,7 @@ The model never writes files. It returns `{body, imports}` as data, and the comp
 
 1. **Containment.** `body` must parse, with no syntax errors, as exactly one statement when wrapped as `async function __region() {\n<body>\n}`. A body that closes its braces to escape (`}; export const xSpec = …; function q() {`) is rejected. Markers belong to the compiler: a marker-shaped line (`// @openarc:begin …` or `// @openarc:end …`, even inside a template literal) and any comment still mentioning `@openarc:` are rejected. Before these checks the compiler **strips** every comment whose text contains `@openarc:` but is not marker-shaped (`// matches @openarc: markers`), a non-semantic normalisation it logs (`stripped n comment(s) mentioning @openarc:`); the prefix inside strings, regexes and templates is inert and kept. In selfhost-compile-3, `markers.scanMarkers` lost all three attempts to such comments. → `OARC-E097`
 2. **Splice.** After splicing, every line outside the region's markers is byte-identical to before. The only exception is added import lines (`import { … } from "…"`, `import type { … } from "…"`, `import x from "…"`, `import x, { … } from "…"`), which the compiler writes for imports that passed §7.2. → `OARC-E097`
-3. **Spec integrity.** At STAGE, only files under `src/` may change, never tests, fakes or core. In every changed file, the text of every `defineRegion`/`defineBlock`/`defineConcept` statement is byte-identical to the file on disk. → `OARC-E097` (detail `spec-integrity`), and nothing is written. A sketch and a `ui` structure are part of their spec statement, and `*.spec.tsx` files are never written by the compiler. Fills are spliced by the compiler; containment (§7 rule 7) is an extra structural check inside the region. A UI component's static checks parse the body as TSX.
+3. **Spec integrity.** At STAGE, only files under `src/` may change, never tests, fakes or core. In every changed file, the text of every `defineRegion`/`defineBlock`/`defineConcept` statement, and since 0.9.0 of every top-level `arc.test`/`arc.test.hidden`/`arc.law`/`arc.configure` statement, is byte-identical to the file on disk; test files under `tests/` are never written. → `OARC-E097` (detail `spec-integrity`), and nothing is written. A sketch and a `ui` structure are part of their spec statement, and `*.spec.tsx` files are never written by the compiler. Fills are spliced by the compiler; containment (§7 rule 7) is an extra structural check inside the region. A UI component's static checks parse the body as TSX.
 4. **Examples are static.** The harness receives the examples from the compiler's static extraction (§2.2) through `harness-plan.json`, not from the module's runtime `spec.examples`. A body that mutates its spec object at runtime cannot weaken its own tests. The sandbox mounts the stage read-only.
 
 The executable form is `selfhost/tests/write-scope.check.ts`.
@@ -526,11 +578,13 @@ Since 0.8.0:
 - **Concept variants** (§2.5): a `Concept` section; the laws are among the examples. **Prose regions** that import variants get `Concept variants you can call` with the same one-line summaries.
 - **UI regions** (§2.6): `Structure (required; checked in the rendered DOM)` (the tree printed as TSX), `What the structure words mean` (one line per word used), and `UI rules`. Examples include their `script` and `dom`.
 
+Since 0.9.0, **code-first regions** (§3.8): a `Task` section and a `Contract (fixed)` section replace the fixed signature: the declaration with its JSDoc in place and `<<<BODY>>>`; for a member, the whole class shell (heritage, fields, the constructor, every other member's JSDoc, own or inherited, and head, noted `implemented` or `pending: compiled jointly with this member; tests may call it`), preceded by the shell of each project base class. The type roots are the signatures and the class shell, never bodies. `Intent` is shown only for an attached or configured intent (`More intent`). After the examples, `Tests your body must pass (TypeScript, run in a sandbox)`: the module-level `const` statements of the tests' files that the shown tests read, the shown tests' source, and `// plus <n> hidden test(s), not shown`. When the package is over budget, that section is first replaced by a summary of the literal assertions (`<call> → <literal>`, `<call> throws <message>`, plus a count of the rest), before any optional section is dropped.
+
 The hash of the initial context package's **stable view** is part of the fingerprint (§4.3). A change in any type the region depends on therefore invalidates the cache. The stable view lists every other region of the file by signature, pending or not, takes type closures from signatures only (parameter and return types, never bodies), and leaves out the level-2 full file. The prompt itself still omits pending siblings (there is nothing to call yet). Before 0.6.3 the fingerprint hashed the prompt, so committing one region added its signature to its siblings' packages and changed their fingerprints: in watch mode, compiling `text.titleCase` re-queued the just-compiled `text.slugify`.
 
 ### 8.9 Model output normalisation [F13]
 
-Small models often return a whole function when asked for a body. If a function region's `body` parses as a single function declaration or a `const` bound to an arrow or function expression, the compiler unwraps it to the inner statements (or `return <expr>;`). Markdown fences are stripped. This normalisation runs **before** the write-scope checks. A sketch region that gets a `body` instead of `fills` keeps it as a whole body; containment (§7 rule 7) recovers its fills or rejects it.
+Small models often return a whole function when asked for a body. If a function region's `body` parses as a single function declaration or a `const` bound to an arrow or function expression, the compiler unwraps it to the inner statements (or `return <expr>;`). Markdown fences are stripped. A reply that is a single class member (`pick(key: string): T { … }`, as a code-first region's whole method) is unwrapped to its statements too. This normalisation runs **before** the write-scope checks. A sketch region that gets a `body` instead of `fills` keeps it as a whole body; containment (§7 rule 7) recovers its fills or rejects it.
 
 ### 8.10 Joint verification of sibling blocks [F14]
 
@@ -542,6 +596,8 @@ A generated block is committed **only** if its function passed that joint check 
 - At verification, a block that no passing example reached while every example was conclusive is **unverified** (`OARC-W045`, detail `unreached:<function id>`): it is not cached and not reported as verified. If some examples were inconclusive (sibling blocks pending), the block is *provisional*: cached, logged as provisional, and decided by the joint check.
 - Sketch regions get one probe per hole, `globalThis.__openarcHit?.("<id>#<n>")`, as the first part of the fill (a comma expression for an expression hole, a statement for a statement hole). A hole no passing example reaches is `OARC-W045` with detail `hole:<id>#<n>` (§3.7). The harness reports `hits` on failing outcomes too; only passing ones count as coverage, and a failing one without hits is E100.
 - At the joint check, every generated block of the function must be reached by at least one passing example. Otherwise all of that function's generated blocks are held back as with W042: the unreached ones with `OARC-W045`, the others with `OARC-W042` (detail `unreached:<ids>`).
+
+**Code-first groups** (since 0.9.0). The same rules apply to the code-first members of one class (a top-level function is a group of one): each member's verification probes every member of its group, a test that fails only on a still-pending region is inconclusive, and a member reached by no passing test or example while every outcome was conclusive is `OARC-W045` (detail `unreached:<id>`). At STAGE every group with a generated member is re-run once with all candidates in place (its tests are the union of its generated members'): a real failure is `OARC-E090` (detail `joint:<outcomes>`) and aborts the run, or under `--keep-going` holds the group back; inconclusive outcomes on regions that stay pending are tolerated; a generated member that no passing outcome reaches holds the group back (W045 for it, W042 for the others).
 
 The fix is in the examples: `compile.run` gained one that compiles a one-region project end to end, so every block is reached. If a sibling block is still pending (it failed under `--keep-going`, or it was outside the requested ids), the joint check cannot run: the generated blocks of that function are **held back** (`OARC-W042`, detail `waiting:<function id>`) and stay pending on disk and in the manifest. Their verified bodies stay in the cache, so a later run that completes the siblings commits them without a model call. Under `--keep-going`, a failed joint check holds back that function's blocks (`OARC-E090`) instead of aborting the run.
 
@@ -555,7 +611,7 @@ Every failed attempt (invalid output, STATIC, or SANDBOX failure, including a ca
 
 | Tier | Source | Can fail a compile |
 |---|---|---|
-| Authoritative | `examples` written by the developer in specs, and concept laws expanded with a variant's fixtures (§2.5); project tests under `tests/` that are not in `tests/advisory/` | yes |
+| Authoritative | `examples` written by the developer in specs, and concept laws expanded with a variant's fixtures (§2.5); `arc.test`, `arc.test.hidden` and `arc.law` (§2.7), hidden ones included; project tests under `tests/` that are not in `tests/advisory/` | yes |
 | Derived | Generated mechanically from authoritative data: the contract-binding check (§2.4); since 0.8.0 the UI structure, accessibility and wiring checks derived from a `ui` tree (§9.6) | yes |
 | Advisory | Model-written tests, under `tests/advisory/` | no; reported only (`OARC-W096`) |
 
@@ -611,11 +667,15 @@ The executable form is `selfhost/src/sandbox.ts` (`sandbox.buildArgv`). The foll
 
 For each example, the harness decodes the value tokens `"$NaN"`, `"$Infinity"`, `"$-Infinity"` and `"$undefined"` in `args` and `expected` (fake refs are left alone), calls `S(...args)`, awaits the result, and compares it to `expected` with **example equality**: deep equality that is strict about structure (arrays, plain objects with the same own keys; anything else through `isDeepStrictEqual`), except for numbers. Two numbers match when both are NaN, or `a === b` (so `-0` equals `0`), or both are finite and `|a − b| ≤ tolerance × max(1, |a|, |b|)`, where `tolerance` is the example's, else the spec's, else `1e-9`. With `exact: true` numbers match only under `Object.is` (NaN still equals NaN). `fakesAfter` snapshots compare as JSON under the same rules. A failing outcome records `actual` with `-0`, NaN, ±Infinity and `undefined` as the tokens `"$-0"`, `"$NaN"`, `"$Infinity"`, `"$-Infinity"`, `"$undefined"`, and messages print them unquoted (`got [-0,1,NaN]`). Output on stdout is JSON lines `{name, ok, actual?}`, followed by a final `{done: n}`. A thrown error counts as a failure, with the actual result recorded as `{throws: message}`, except in a `throws` example: there the call must throw or reject (`OpenArcTodoError` still counts as pending), and a string `throws` must be a substring of the error's message. A `throws` example that returns fails with `actual: {returned: <value>}`; one whose message doesn't match fails with `{throws: message}`. `fakesAfter` is checked after the throw as usual. A run is **complete** only if the `done` line is present and `n` equals the number of outcome lines. Generated code can call `process.exit()`, so a missing `done` line counts as a failure (`OARC-E090`, detail `incomplete`) even if every printed outcome passed. [F8]
 
+**Tests (since 0.9.0).** The harness plan entry of a code-first region carries `tests: {all, run, fakes?}`: `all` lists every test statement of every project file that has one (`{file, kind, hidden, name}`, files sorted, statements in source order), `run` the indexes of the tests selected for the regions being verified, and `fakes` the fake names to preload. The staged copy of every file with tests is rewritten, in the stage only: each `expect(x)` becomes `expect(x, <index>)` and each `fakes.of<T>(…)` gets its fake's name as the first argument. After the examples, `core/test-runner.ts` imports the files of the selected tests and compares what registered, attributed to its calling module by stack frame, with `all`: for every file that registered a test or was imported, the sequence of `{kind, hidden, name}` MUST be equal, else the single outcome `test-registry` fails (`OARC-E090` detail `test-registry:<file>: planned […], registered […]`) and the region stops. Then each selected test runs once (a law `runs` times) with the hit attribution of the coverage probe; outcome lines are named `test "<name>"` / `law "<name>"`; a failing one carries `{checks, failures: [{i, detail}] (at most 8), threw?, law?}`, a pending one `{pending: <id>}`, and a hidden one only `{hidden: true}`.
+
 ### 9.4 Fakes [F6]
 
 An example argument may be `{"$fake": "<name>", "init"?: <Json>}`. The harness replaces it with the instance from `tests/fakes/<name>.ts`, whose default export is `defineFake<T>((init) => ({ instance, snapshot }))`. Within one example, a name denotes one instance.
 
 `fakesAfter: { "<name>": <Json> }` compares `snapshot()` after the call. For functions returning `void`, `expected` is omitted (enforced by the type), and `fakesAfter` is the assertion.
+
+In a code-first test, `fakes.of<T>()` resolves the fake by type and `fakes.snapshot(instance)` replaces `fakesAfter` (§2.7).
 
 Fakes are developer-authored and authoritative (§9.1). They run inside the sandbox under the same static rules as regions. The compiler checks that `T` is assignable to the parameter type at that position.
 
@@ -623,7 +683,7 @@ Fakes are developer-authored and authoritative (§9.1). They run inside the sand
 
 ### 9.5 Thin examples and differential checks
 
-At PLAN, a function target whose examples are fewer than 3 (`OARC-W044`, detail `examples:<n>`), or of which none has an edge-case argument anywhere in its `args` (`""`, `[]`, `{}`, `0`, a negative number, `null`, or a NaN/Infinity/undefined token; detail `no-edge-case`), gets a warning. It is a syntactic heuristic and never fails a compile.
+At PLAN, a function target whose examples are fewer than 3 (`OARC-W044`, detail `examples:<n>`), or of which none has an edge-case argument anywhere in its `args` (`""`, `[]`, `{}`, `0`, a negative number, `null`, or a NaN/Infinity/undefined token; detail `no-edge-case`), gets a warning. It is a syntactic heuristic and never fails a compile. A code-first target with at least one test is not checked for thin examples; one with neither tests nor examples gets detail `tests:0`.
 
 `openarc check <id> --oracle <module>#<export>` runs a compiled function region against a reference implementation. `<module>` is a project-relative path; that one file is copied into the sandbox stage. Inputs are the argument lists of the region's examples whose values are only numbers, strings, booleans, and arrays or objects of those, followed by seeded variations (mulberry32, seed 1, 60 inputs in total, deduplicated): numbers become 0, their negation, a neighbour or a random value of similar magnitude; strings get a character inserted or deleted, become empty, upper-cased or doubled, or are swapped for another example's string at the same position; booleans flip; array elements and object values are varied in place; a top-level array changes length only when the examples' lengths differ at that position. The harness plan entry carries `oracle: {module, export, inputs}`, and the harness calls both functions on a fresh clone of each input. They agree when both return values that are equal under §9.3 (with the spec's tolerance) or when both throw. Each disagreement prints the args and both results; the command exits 1 if there is any.
 
@@ -646,13 +706,15 @@ Fakes may sit anywhere inside the props (a function-valued prop can be `{"$fake"
 2. The command inserts markers and a `defineBlock({id, intent: "TODO"})` at module scope, and records `{kind: "block", ownership: "developer", source: "extracted"}`. The body is unchanged, so no regeneration happens until `openarc release`.
 3. It MAY ask the model to propose an `intent`. The proposal is written as `intent` prefixed with `"[inferred] "`, which is left for the developer to remove.
 
-**`openarc extract <file> [--function <name>] [--id <id>]`** adopts existing functions as (F) regions. It is deterministic and never calls a model.
+**`openarc extract <file> [--function <name>] [--id <id>] [--style code|region]`** adopts existing functions as regions. It is deterministic and never calls a model. Since 0.9.0 the CLI's default is `--style code`: for each candidate (top-level functions and arrow consts as in 1. below; generics allowed), the markers go on their own lines just inside the body block (position M, §3.8; a body whose braces don't end and start their own lines is refused), `@arc id <id>` is added to the JSDoc (a one-line JSDoc is expanded, none becomes `/** @arc id <id> */`), the id defaults to the derived id of §3.8, no spec statement or import is added, and the manifest entry carries `declaration`. `--style region` is the form below.
 1. Candidates are the top-level `function` declarations and `const S = (...) => ...` / `= function (...) {...}` statements of a file under `src/`: every exported one, or only `--function <name>` (exported or not). `--id` requires `--function`.
 2. For each, the command writes, above the declaration (and above its JSDoc, which stays attached and outside the markers), `type <Name>Fn = <signature>;`, where the signature is printed by the type checker as a non-generic arrow type, and then `export const <name>Spec = arc.defineRegion<<Name>Fn>({ id, intent: ["[inferred] <first JSDoc line | TODO describe>"], examples: [] })`. `symbol` is added when the id's last segment differs from the function name. Markers go around the declaration lines. `import * as arc from "open-arc"` is added if missing.
 3. The id defaults to `<file-stem>.<functionName>`, each segment normalised to §2.3 (separators camel-cased, leading non-letters dropped, first letter lowercased).
 4. Each region is recorded as `{kind: "function", ownership: "developer", fingerprint: null, provenance: {source: "extracted"}}` with the hashes ANALYZE computes. The declaration's text is unchanged byte for byte, so nothing is regenerated until `openarc release <id>`. Editing the spec of a developer region is E061 as usual (`resolve --keep` accepts it).
 5. It refuses, with a message and exit code 1: overloaded functions, generic functions (type parameters can't be expressed in a non-generic `F`), default-exported anonymous functions, class methods, declarations that share a line with other code, invalid or already-used ids, and any result that type-checks worse than the original file or fails ANALYZE.
 6. It is idempotent: a declaration already inside a region is skipped. File and manifest are written in one transaction (§8.1 STAGE/COMMIT) under the lock (§8.3).
+
+**`openarc migrate <id>`** (since 0.9.0) converts one classic function region to code-first form, in one transaction under the lock: `export const S: F = (a, b) => …` between markers becomes `[export] [async] function S(a: A, b: B): R { …markers inside… }`, with parameter and return types printed from `F`; the intent becomes the JSDoc with `@arc id <id>`; `calls`, `effects`, `deps`, `tolerance` and non-empty `examples` move to `arc.configure(S, {…})` after the function; the `defineRegion` statement is removed (a type alias stays). The manifest entry keeps its id, ownership, fingerprint and provenance (plus `provenance.migrated`), with the new owned-text `hash` and `specHash` recorded, so the move is neither a hand edit (W060) nor a spec change (E061). It refuses: a region with block children, a sketch, a `ui` structure or a concept; a conflicted region; a spec export used from another file; a spec statement after its markers; and a result that type-checks worse or no longer analyzes as a code-first region.
 
 ---
 
@@ -666,8 +728,11 @@ A diagnostic is `{code, id?, file?, line?, detail?}`. It has **no message field*
 | E010 | spec not statically evaluable |
 | E011 | duplicate region id (or concept id) |
 | E012 | marker id with no spec |
+| E013 | code-first region configured twice: a field set in more than one layer (§3.8; detail `<field>:<layers>`) |
 | E020 | implementation not assignable to spec type F |
 | E021 | declared symbol ≠ spec.symbol |
+| E022 | a pending code-first region has no explicit return type (§3.8) |
+| W023 | a code-first region has no intent: no JSDoc, own or inherited, and none attached (§3.8; at PLAN) |
 | E030 | unmatched marker |
 | E031 | crossed marker nesting |
 | E032 | block region outside a function region |
@@ -678,14 +743,15 @@ A diagnostic is `{code, id?, file?, line?, detail?}`. It has **no message field*
 | W041 | block region has no behavioral verification (parent has no examples) |
 | W042 | block held back: its function can't be verified until all its blocks exist (§8.10) |
 | W043 | region keeps a body that does not satisfy its current spec (its compile failed; displayed `stale`, §6.3.1) |
-| W044 | thin examples: fewer than 3, or none with an edge case (§9.5) |
-| W045 | block or sketch hole unverified: no passing example reaches it (§8.10; detail `unreached:<function id>` or `hole:<id>#<n>`) |
+| W044 | thin examples: fewer than 3, or none with an edge case (§9.5); `tests:0` for a code-first region with neither tests nor examples |
+| W045 | block, code-first region or sketch hole unverified: no passing example or test reaches it (§8.10; detail `unreached:<function id>`, `unreached:<id>` or `hole:<id>#<n>`) |
 | E041 | `refine: "next"` unsupported in v0 |
 | E050 | unknown manifest schema |
 | W060 | manual edit detected; region is now developer-managed |
 | E061 | spec changed on a developer-managed region |
 | E062 | region markers removed |
 | E063 | region moved to a different parent |
+| E064 | `@arc id` disagrees with the markers inside a code-first body (§3.8, §6.4) |
 | E070 | type error |
 | E071 | import not in `deps` |
 | E072 | dynamic import / require |
@@ -695,7 +761,7 @@ A diagnostic is `{code, id?, file?, line?, detail?}`. It has **no message field*
 | E081 | model output does not match schema |
 | E082 | repair attempts exhausted |
 | E083 | child slot missing or duplicated |
-| E090 | example failed |
+| E090 | example or test failed; details `joint:<outcomes>` (§8.10), `test-registry:<…>` (§9.3) |
 | E091 | sandbox timeout or resource limit |
 | E092 | sandbox unavailable (the configured tier, §9.2); for UI regions, no DOM (detail `dom:not-configured`, `dom:jsdom-missing`, `dom:react-missing`, `dom:react-dom-missing`, §2.6) |
 | W046 | weaker isolation: Node permission model only (no OS sandbox) |
@@ -765,6 +831,18 @@ Required cases (minimum):
 | 030 | a variant missing a fixture | E010 `fixture-missing:<name>` |
 | 031 | a TSX spec with `.map` | E010 `ui:child-expression:…` |
 | 032 | a UI region without `ui.dom` | E092 `dom:not-configured`, no model call |
+| 033 | a class with two pending methods and tests that call both | compiled in source order, markers inside each body, verified jointly; the pending bodies of members not compiled are written back as written |
+| 034 | a committed code-first class renamed | same ids, `compiler` state |
+| 035 | a pending method without a return type | E022 |
+| 036 | `@arc id` different from the markers | E064 |
+| 037 | `calls` in a JSDoc tag and in `arc.configure` | E013 `calls:jsdoc,configure` |
+| 038 | a test failing one of three assertions | E090 with that assertion's line and source in the repair prompt; the other two reported ok |
+| 039 | a hidden test failing | the repair prompt names it, with no values or source |
+| 040 | a failing law | its run, seed and draws in the repair prompt |
+| 041 | `fakes.of<T>()` with no fake for `T`, and with two | E010 `fake:<T>`, `fake:<T>:ambiguous` |
+| 042 | a class member no passing test reaches | W045 `unreached:<id>`, W042 for its siblings, nothing committed |
+| 043 | a test registered at runtime outside the static plan | E090 `test-registry:…`, the region stops |
+| 044 | `openarc migrate` of a compiler-owned region | code-first form; same id, ownership and provenance; no W060 or E061 |
 
 ---
 
@@ -792,6 +870,7 @@ The configuration sits at the project root, like `package.json`, and selects the
 
 - `outputFormat`: `"json"` (default) or `"code"`, on a backend or in `regions.<id>` (which wins); §8.4.1. Any other value is `OARC-E051`.
 - `sandbox.isolation`: `"auto"` (default), `"bwrap"`, `"sandbox-exec"`, `"node"`, `"container"` or `"unsafe-none"` (§9.2). `sandbox.containerImage` sets the container tier's image.
+- Code-first (since 0.9.0) needs no configuration: module ids are derived from paths under `src/`, and test files are the `.ts`/`.tsx` files under `src/` and `tests/` (not `tests/fakes/` or `tests/fixtures/`) that call `arc.test`, `arc.law` or `arc.configure`. `regions.<id>` applies to code-first ids as to any other.
 - `ui.dom`: `"jsdom"` (since 0.8.0) opts into UI regions (§2.6): their checks render components in the project's own `jsdom` (with `react` and `react-dom`), installed as devDependencies. Any other value is E051.
 
 - `provider` is one of:

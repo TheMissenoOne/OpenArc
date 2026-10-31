@@ -155,6 +155,7 @@ const BODIES: Record<string, string> = {
   "RoundRobin.pick": "const hs = this.healthy();\nif (hs.length === 0) return null;\nconst b = hs[this.next % hs.length]!;\nthis.next = (this.next + 1) % hs.length;\nreturn b.id;",
   "RoundRobin.markDown": "const b = this.backends.find((x) => x.id === id);\nif (!b) throw new Error(`unknown backend ${id}`);\nb.healthy = false;",
   "hash32": "let h = 2166136261;\nfor (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619) >>> 0;\nreturn h;",
+  "FriendlyGreeter.greet": "const n = name.trim();\nreturn `Hello, ${n || \"world\"}!`;",
   "Peer.receive": "if (this.seen.includes(msg.id)) return false;\nthis.seen.push(msg.id);\nthis.delivered.push(msg.body);\nif (msg.ttl > 0) {\n  const next = [...this.peers].sort().filter((x) => x !== from && x !== msg.origin && x !== this.self).slice(0, 2);\n  for (const to of next) await this.net.send(this.self, to, { ...msg, ttl: msg.ttl - 1 });\n}\nreturn true;",
 };
 // passes the shown tests and the law, fails the hidden fairness test (after 30 picks it always answers "a")
@@ -259,7 +260,28 @@ try {
   assert.match(c.out, /OARC-W045 lb\.roundRobin\.markDown {2}.*unreached:lb\.roundRobin\.markDown/, c.out);
   assert.match(c.out, /OARC-W042 lb\.roundRobin\.pick {2}.*unreached:lb\.roundRobin\.markDown/, c.out);
   assert.equal(src("src/lb/balancer.ts"), FIXTURE["src/lb/balancer.ts"], "the pending bodies are as written");
-  console.log("codetests.check: real sandbox compiles ok (json and code, joint class check, hidden by name, registry E090, W045, cache)");
+  // `openarc init --example`: the code-first starter, compiled as is
+  const starter = realpathSync(mkdtempSync(join(tmpdir(), "openarc-starter-")));
+  try {
+    cpSync(join(proj, "core"), join(starter, "core"), { recursive: true });
+    mkdirSync(join(starter, "node_modules"));
+    symlinkSync(process.platform === "win32" ? join(starter, "core") : "../core", join(starter, "node_modules", "open-arc"), "junction");
+    symlinkSync(join(root, "node_modules", "typescript"), join(starter, "node_modules", "typescript"), "junction");
+    writeFileSync(join(starter, "package.json"), JSON.stringify({ name: "st", private: true, type: "module", dependencies: { "open-arc": "file:./core" } }));
+    const init = await cli(starter, "init", "--example");
+    assert.match(init.out, /created: .*src\/hello\.ts, src\/hello\.test\.ts/, init.out);
+    assert.match((await cli(starter, "init", "--example")).out, /^already initialised/, "nothing rewritten");
+    writeFileSync(join(starter, "openarc.config.json"), config("json"));
+    format = "json";
+    const g = await cli(starter, "graph");
+    assert.match(g.out, /hello\.friendlyGreeter\.greet +F pending +0 ex 2 tests +src\/hello\.ts/, g.out);
+    const c2 = await cli(starter, "compile");
+    assert.match(c2.out, /hello\.friendlyGreeter\.greet: ✓ tsc, static, tests:2\/2/, c2.out);
+    assert.equal(c2.code, 0, c2.out);
+  } finally {
+    rmSync(starter, { recursive: true, force: true });
+  }
+  console.log("codetests.check: real sandbox compiles ok (json and code, joint class check, hidden by name, registry E090, W045, cache, init starter)");
 } finally {
   server.close();
   rmSync(proj, { recursive: true, force: true });

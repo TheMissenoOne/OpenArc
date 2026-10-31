@@ -10,7 +10,34 @@ npx openarc extract src/text-utils.ts --function slug --id text.makeSlug
 
 ## What it writes
 
-Given
+Since 0.9.0 the default output is code-first (see [[Code First]]): the markers go inside the body, the JSDoc gets an `@arc id`, and no spec statement is added. Given
+
+```ts
+/** Adds two numbers. */
+export function add(a: number, b: number): number {
+  return a + b;
+}
+```
+
+in `src/text-utils.ts`, `extract` produces
+
+```ts
+/**
+ * Adds two numbers.
+ * @arc id textUtils.add
+ */
+export function add(a: number, b: number): number {
+  // @openarc:begin textUtils.add
+  return a + b;
+  // @openarc:end textUtils.add
+}
+```
+
+plus a developer-owned manifest entry. The JSDoc is the intent; add `arc.test` cases for its behaviour, then `openarc release textUtils.add` when the compiler may regenerate it. Generic functions are fine in this form. A body must be a block whose braces end and start their own lines (`function f() { return 1; }` on one line is refused); class methods are not extracted yet.
+
+### `--style region`: the `defineRegion` form
+
+`npx openarc extract src/text-utils.ts --style region` writes the earlier form. Given
 
 ```ts
 /** Adds two numbers. */

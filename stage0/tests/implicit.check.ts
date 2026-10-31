@@ -12,6 +12,7 @@ import type { CompileRequest, Diagnostic, Ports } from "../src/types.ts";
 import fakePorts from "./fakes/ports.memory.ts";
 import * as engine from "../src/engine.ts";
 import { run } from "../src/compile.ts";
+import { migrate } from "../src/migrate.ts";
 
 const root = process.cwd();
 const req: CompileRequest = { root, ids: [], model: { host: "http://h", model: "m", seed: 1, numCtx: 8192 }, sandbox: { nodeBin: "/n/bin/node", nodePrefix: "/n", heapMb: 256, addressSpaceBytes: 2 ** 32, cpuSeconds: 10 } };
@@ -88,6 +89,10 @@ export function concrete(): number {
   assert.match(p.files.get("src/geo/shapes.ts")!, /area\(\): number \{\n {4}\/\/ @openarc:begin shapes\.circle\.area\n {4}return arc\.todo\(\);\n {4}\/\/ @openarc:end shapes\.circle\.area\n {2}\}/);
   assert.match(p.files.get("src/geo/shapes.ts")!, /export const half = \(n: number\): number => \{\n {2}\/\/ @openarc:begin shapes\.half\n {2}return arc\.todo\(\);\n/, "an expression body becomes a block");
   assert.equal(p.disk.get("src/geo/shapes.ts"), SHAPES);
+  // PLAN: no tests and no examples is W044 tests:0; no JSDoc at all (own, inherited or attached) is W023, not E010
+  const planned: Diagnostic[] = [];
+  engine.plan(p, req, planned);
+  assert.deepStrictEqual(codes(planned).filter((c) => c.includes("shapes.unit") || c.includes("shapes.custom") || c.includes("shapes.half")), ["OARC-W044 shapes.half tests:0", "OARC-W044 shapes.unit tests:0", "OARC-W023 shapes.unit", "OARC-W044 shapes.custom tests:0", "OARC-W023 shapes.custom"]);
   // derived ids without @arc module: the path under src/; a class named like its file, a function named like its file
   const plain = await analyzed({
     "src/lb/RoundRobin.ts": 'import * as arc from "open-arc";\nexport class RoundRobin {\n  pick(key: string): string {\n    return arc.todo();\n  }\n}\n',
@@ -251,4 +256,34 @@ ${extra}`;
   assert.notEqual(await h(SRC(""), TEST.replace("toBe(2)", "toBe(2.0)")), base, "test source");
   assert.equal(await h(SRC("export function sibling(): number {\n  return 1;\n}\n")), base, "an unrelated declaration");
 }
-console.log("implicit: discovery (functions, methods, getters, arrows, generics), ids, E022/E011, markers inside the body, joint class verification (W042/W045), identity after a rename, E064, layers (E013/E020/backend), spec hash ok");
+// ── 5. extract --style code and migrate (phase 2)
+{
+  const SRC = '/** Slug of a title. */\nexport function slug(t: string): string {\n  return t.toLowerCase();\n}\n\nexport const head = <T>(xs: T[]): T | undefined => {\n  return xs[0];\n};\n\nexport function one(): number { return 1; }\n';
+  const fake = fakePorts({ files: { "src/text/utils.ts": SRC } });
+  const p = await engine.parse(fake.instance as Ports, req, []);
+  const res = await engine.extract(fake.instance as Ports, req, p, "src/text/utils.ts", { style: "code" });
+  assert.deepStrictEqual(res.extracted, ["text.utils.slug", "text.utils.head"], "generics are fine in code-first form");
+  assert.match(res.refused[0]!.reason, /^the body must be a block whose braces/);
+  assert.equal(res.files[0]!.text, '/**\n * Slug of a title.\n * @arc id text.utils.slug\n */\nexport function slug(t: string): string {\n  // @openarc:begin text.utils.slug\n  return t.toLowerCase();\n  // @openarc:end text.utils.slug\n}\n\n/** @arc id text.utils.head */\nexport const head = <T>(xs: T[]): T | undefined => {\n  // @openarc:begin text.utils.head\n  return xs[0];\n  // @openarc:end text.utils.head\n};\n\nexport function one(): number { return 1; }\n');
+  const m = JSON.parse(res.files[1]!.text).regions;
+  assert.deepStrictEqual([m["text.utils.slug"].ownership, m["text.utils.slug"].declaration], ["developer", "slug"]);
+  const again = await analyzed({ "src/text/utils.ts": res.files[0]!.text, ".openarc/manifest.json": res.files[1]!.text });
+  assert.deepStrictEqual([codes(again.ds), again.p.regions.map((r) => r.state)], [[], ["developer", "developer"]], "the body is kept byte for byte");
+
+  // migrate: a classic region becomes a declaration; id, ownership, provenance kept; not a hand edit or a spec change
+  const CLASSIC = 'import * as arc from "open-arc";\ntype Clamp = (x: number, lo: number, hi: number) => number;\n\nexport const clampSpec = arc.defineRegion<Clamp>({\n  id: "m.clamp",\n  intent: "x limited to [lo, hi].",\n  calls: [],\n  examples: [{ args: [5, 0, 3], expected: 3 }],\n});\n\n// @openarc:begin m.clamp\nexport const clamp: Clamp = (x, lo, hi) => {\n  if (x < lo) return lo;\n  return x > hi ? hi : x;\n};\n// @openarc:end m.clamp\n';
+  const before = await analyzed({ "src/m.ts": CLASSIC });
+  const r0 = before.p.regions[0]!;
+  const manifest = JSON.stringify({ schema: 1, regions: { "m.clamp": { kind: "function", parent: null, file: "src/m.ts", symbol: "clamp", ownership: "compiler", hash: r0.hash, specHash: r0.specHash, fingerprint: "f", provenance: { source: "generated", model: "x" } } } });
+  const mf = fakePorts({ files: { "src/m.ts": CLASSIC, ".openarc/manifest.json": manifest } });
+  const mig = await migrate(mf.instance as Ports, req, await engine.parse(mf.instance as Ports, req, []), "m.clamp");
+  assert.equal(mig.refused, undefined);
+  assert.equal(mig.files[0]!.text, 'import * as arc from "open-arc";\ntype Clamp = (x: number, lo: number, hi: number) => number;\n\n/**\n * x limited to [lo, hi].\n * @arc id m.clamp\n */\nexport function clamp(x: number, lo: number, hi: number): number {\n  // @openarc:begin m.clamp\n  if (x < lo) return lo;\n  return x > hi ? hi : x;\n  // @openarc:end m.clamp\n}\n\narc.configure(clamp, {"calls":[],"examples":[{"args":[5,0,3],"expected":3}]});\n');
+  const after = await analyzed({ "src/m.ts": mig.files[0]!.text, ".openarc/manifest.json": mig.files[1]!.text });
+  assert.deepStrictEqual([codes(after.ds), after.p.regions.map((r) => [r.id, r.state, r.spec.examples.length])], [[], [["m.clamp", "compiler", 1]]]);
+  assert.deepStrictEqual(JSON.parse(mig.files[1]!.text).regions["m.clamp"].provenance, { source: "generated", model: "x", migrated: "2026-01-01T00:00:00.000Z" });
+  const blockParent = 'import * as arc from "open-arc";\ntype F = (x: number) => number;\nexport const fSpec = arc.defineRegion<F>({ id: "m.f", intent: "x" });\nexport const gSpec = arc.defineBlock({ id: "m.f.g", intent: "y" });\n// @openarc:begin m.f\nexport const f: F = (x) => {\n  let y = 0;\n  // @openarc:begin m.f.g\n  y = x;\n  // @openarc:end m.f.g\n  return y;\n};\n// @openarc:end m.f\n';
+  const bp = fakePorts({ files: { "src/m.ts": blockParent } });
+  assert.match((await migrate(bp.instance as Ports, req, await engine.parse(bp.instance as Ports, req, []), "m.f")).refused!, /has block regions/);
+}
+console.log("implicit: discovery (functions, methods, getters, arrows, generics), ids, E022/E011, markers inside the body, joint class verification (W042/W045), identity after a rename, E064, layers (E013/E020/backend), spec hash, W023, extract --style code, migrate ok");
