@@ -1,0 +1,12 @@
+{
+  "name": "openarc-ui-fixture",
+  "private": true,
+  "description": "The DOM for tests/ui.check.ts: npm i here to run the UI checks for real (without it they are skipped)",
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "jsdom": "^26.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}

@@ -53,6 +53,11 @@ jobs:
         working-directory: stage0
         run: node tools/run-examples.ts --strict
 
+      # the DOM for tests/ui.check.ts (jsdom, react): without it the UI compile through the sandbox is skipped
+      - name: Install the UI fixture
+        working-directory: stage0/tests/fixtures/ui
+        run: npm ci
+
       # includes tests/sandbox.check.ts: doctor + a real compile against a fake Ollama server, through this OS's sandbox
       - name: Checks
         working-directory: stage0
@@ -87,6 +92,10 @@ jobs:
           npx tsc -p .
           npx openarc graph | tee graph.txt
           grep -q 'demo.inc .*pending' graph.txt
+          # the palette's compiled modules import; loginPage (a .tsx component, not compiled) is not exported
+          node --input-type=module -e 'const a = await import("open-arc/palette/auth"); if (typeof a.magicLink !== "function") process.exit(1)'
+          if node --input-type=module -e 'await import("open-arc/palette/loginPage")' 2> err.txt; then echo "open-arc/palette/loginPage must not resolve"; exit 1; fi
+          grep -q ERR_PACKAGE_PATH_NOT_EXPORTED err.txt
 
       - name: Sandbox self-test (openarc doctor)
         run: |

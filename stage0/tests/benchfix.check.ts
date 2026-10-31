@@ -177,6 +177,15 @@ const config = (regions: object = {}) => JSON.stringify({
   assert.notEqual(await fp({}), await fp({ "cm.dec": { outputFormat: "json" } }));
 }
 
+// regression (0.8.0): a pending region whose body starts with a blank line keeps `export` when the engine rewrites it
+{
+  const src = spec("cm.dec", "dec") + '// @openarc:begin cm.dec\n\nexport const dec: Inc = (n) => arc.todo("cm.dec");\n// @openarc:end cm.dec\n';
+  const fake = fakePorts({ files: { "src/cm-lib.ts": lib, "src/cm.ts": src, [M]: '{"schema":1,"regions":{}}', "openarc.config.json": config() }, http: [TAGS, chat("return n - 1;", 40, 4)] });
+  const res = await run(fake.instance as Ports, req);
+  assert.equal(res.exit, 0, JSON.stringify(res.diagnostics));
+  assert.match((fake.snapshot() as Snap).files["src/cm.ts"]!, /^export const dec: Inc = \(n\) => \{\n {2}return n - 1;\n\};$/m);
+}
+
 // ── 2 + 4a. types: a recursive alias in F, and throws examples
 {
   const src = [

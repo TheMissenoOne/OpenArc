@@ -154,11 +154,11 @@ const staging = (ports: Ports) => {
   assert.ok(text.includes("  x = n * 2;") && text.includes("  x = x + 1;"), "both committed");
   assert.ok(!text.includes("__openarcHit"), "the probe never reaches the committed source");
 }
-// the harness records hits only for passing examples
+// the harness records hits for every example; only passing ones count as coverage (harnessHits), failing ones feed E100
 {
   const spec = { id: "h", intent: "", examples: [{ args: [1], expected: 1 }, { args: [2], expected: 0 }] } as unknown as RegionSpec<AnyFn>;
   const fn = (n: number) => ((globalThis as { __openarcHit?: (id: string) => void }).__openarcHit?.(`b${n}`), n === 1 ? 1 : 2);
-  assert.deepStrictEqual(await runExamples(root, fn, spec), [{ name: "#1", ok: true, hits: ["b1"] }, { name: "#2", ok: false, actual: 2 }]);
+  assert.deepStrictEqual(await runExamples(root, fn, spec), [{ name: "#1", ok: true, hits: ["b1"] }, { name: "#2", ok: false, actual: 2, hits: ["b2"] }]);
 }
 
 // ── 3. requested imports are bindings; `random` covers only the random members

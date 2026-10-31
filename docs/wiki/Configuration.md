@@ -99,6 +99,7 @@ Export the key in your shell (`export OPENROUTER_API_KEY=...`) and point `compil
 | `compilation.fallbackBackend` | used on the last attempt |
 | `regions.<id>` | per-region `backend`, starting `contextLevel` and `outputFormat` (wins over the backend's) |
 | `sandbox.nodeBin` | defaults to the running Node's resolved binary (never a version-manager shim) |
+| `ui.dom` | `"jsdom"` (since 0.8.0): opt into UI regions. Their checks render components in the project's own `jsdom`, `react` and `react-dom` (devDependencies). Without it a UI region is `OARC-E092` (`dom:not-configured`). See "UI specs" in [[Writing Specs]] |
 | `sandbox.isolation` | `"auto"` (default): `bwrap` on Linux when it works, `sandbox-exec` on macOS, else `node` (`OARC-W046`). Or one of `"bwrap"`, `"sandbox-exec"`, `"node"`, `"container"`, `"unsafe-none"`; a tier that isn't available here is `OARC-E092`. `"none"` is invalid: only `"unsafe-none"` turns the sandbox off, with an error-level `OARC-W047` on every run. See [[Safety Model]] |
 | `sandbox.containerImage` | the `container` tier's image, default `docker.io/library/node:<this Node's version>-slim` (it needs `timeout` from coreutils) |
 | `sandbox.heapMb`, `sandbox.cpuSeconds`, `sandbox.addressSpaceBytes` | heap cap (default 512), CPU limit (default 20 s; the wall-clock timeout is this plus 20 s), virtual address space for `prlimit` on Linux (default 32 GiB) |
@@ -120,6 +121,8 @@ Export the key in your shell (`export OPENROUTER_API_KEY=...`) and point `compil
 | `"code"` | one fenced code block: optional `import` lines at the top, then the function's body statements (or the block's statements) | nothing: plain text output, no schema |
 
 In `"code"` mode the compiler drops `<think>…</think>` blocks, takes the first fence tagged `ts`, `typescript` or nothing (a reply with no fence at all is taken whole), and turns its leading `import` lines into imports. Named, default (`import x from "m"`), namespace (`import * as x from "m"`) and `import type` forms are accepted; renames inside braces and side-effect imports are an `OARC-E081` (`bad-import:…`), and so is a fence cut off at the output cap (`unclosed-fence`). After that the body goes through exactly the same checks as a `"json"` reply: whole-function unwrapping, the import rules (`OARC-E071`), the write-scope guards (`OARC-E097`), the static rules, `calls`, the type check, the sandboxed examples and the coverage probe.
+
+A sketch region (`defineRegion({ sketch })`) replies `{"fills": {...}, "imports": [...]}` in `"json"` mode, under a schema with one string per hole. In `"code"` mode it replies with the whole sketch, holes filled, as one code block; the containment check (`OARC-E099`) recovers the fills and rejects any change outside the holes.
 
 `"code"` exists to measure whether writing code as an escaped JSON string under constrained decoding costs small models accuracy (the 2026-10-31 benchmark's finding 6). The default stays `"json"` until that is measured. The output format is part of the fingerprint and of `provenance.outputFormat`, so switching it recompiles the regions it applies to.
 

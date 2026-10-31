@@ -24,16 +24,21 @@ type EncodedEach<T, D extends 0[]> = T extends number
   : T extends undefined
     ? T | "$undefined"
     : T extends AnyFn
-      ? T
+      ? T | FakeRef // a function-valued field can be a fake (UI props: { $fake: "action#onLogin" })
       : T extends object
         ? { [K in keyof T]: Encoded<T[K], [...D, 0]> }
         : T;
 /** Each positional argument may be a FakeRef instead of its value. */
 export type FakeArgs<P extends readonly unknown[]> = { [K in keyof P]: Encoded<P[K]> | FakeRef };
-/** void-returning functions are checked by side effects (fakesAfter), so they take no `expected`. `throws` replaces
- *  `expected`: the call must throw (or reject); a string must appear in the error's message. */
+/** void-returning functions are checked by side effects (fakesAfter), so they take no `expected`; nor do functions that
+ *  return `unknown` (UI components, checked in the DOM). `throws` replaces `expected`: the call must throw (or reject);
+ *  a string must appear in the error's message. */
 type Expect<F extends AnyFn> =
-  | ([Awaited<ReturnType<F>>] extends [void] ? { expected?: never; throws?: never } : { expected: Encoded<Awaited<ReturnType<F>>>; throws?: never })
+  | ([Awaited<ReturnType<F>>] extends [void]
+    ? { expected?: never; throws?: never }
+    : unknown extends Awaited<ReturnType<F>>
+      ? { expected?: Json; throws?: never }
+      : { expected: Encoded<Awaited<ReturnType<F>>>; throws?: never })
   | { throws: true | string; expected?: never };
 
 export type Example<F extends AnyFn> = {
@@ -45,12 +50,27 @@ export type Example<F extends AnyFn> = {
   tolerance?: number;
   /** compare numbers bit-exactly (Object.is: -0 differs from 0, no tolerance); NaN still equals NaN */
   exact?: boolean;
+  /** UI regions: steps run in a DOM after the component renders, elements found by accessible name */
+  script?: UiStep[];
+  /** UI regions: what the DOM shows after the script */
+  dom?: { text?: string[]; notText?: string[]; enabled?: UiTarget[]; disabled?: UiTarget[] };
 } & Expect<F>;
+
+/** An element by role and accessible name ("button", "Sign in"). */
+export type UiTarget = { role: string; name: string };
+export type UiStep = { fill: { label: string; value: string } } | { click: UiTarget };
+/** A UI structure tree, as the compiler reads it from `ui:` (and as the vocabulary builds it for the type checker). */
+export interface UiNode {
+  tag: string;
+  props: { [k: string]: unknown };
+  children: (UiNode | string)[];
+}
 
 export interface RegionSpec<F extends AnyFn> {
   id: string;
   symbol?: string;
-  intent: string | string[]; // array form is joined with single spaces (static, no .join call)
+  /** Required unless `sketch`, `ui` or `concept` is present (else OARC-E010). Array form is joined with single spaces (static, no .join call). */
+  intent?: string | string[];
   effects?: Effect[];
   deps?: string[];
   examples?: Example<F>[];
@@ -59,6 +79,45 @@ export interface RegionSpec<F extends AnyFn> {
   refine?: "concrete" | "next";
   /** Allowlist of imported or port functions the body may call ("engine.parse", "ports.fs.remove", "engine.*"). Absent: unrestricted. */
   calls?: string[];
+  /** The body as typed TypeScript with `arc.hole<T>("…")` gaps. Read as syntax, never run; the model fills only the holes. */
+  sketch?: F;
+  /** This region is a variant of the concept with that id: the concept's laws become authoritative examples. */
+  concept?: string;
+  /** Values substituted for "$fixture:<name>" in the concept's laws. */
+  fixtures?: { [name: string]: Json };
+  /** law name -> why that law does not apply to this variant (printed and recorded in the manifest). */
+  waive?: { [law: string]: string };
+  /** UI regions (in a `*.spec.tsx` file): the component's rough structure in the open-arc/ui vocabulary. Read as syntax. */
+  ui?: (...args: Parameters<F>) => UiNode;
+}
+
+/** A concept law: an example template. Any "$fixture:<name>" string in it is replaced by the variant's fixtures[name]. */
+export interface Law {
+  name: string;
+  args: Json[];
+  expected?: Json;
+  fakesAfter?: { [fake: string]: Json };
+  tolerance?: number;
+  exact?: boolean;
+}
+
+/** A family of regions (variants) that share an intent and laws. Compiled once per variant, used by import. */
+export interface ConceptSpec {
+  id: string;
+  intent: string | string[];
+  laws: Law[];
+  /** Optional: the name of a type (in the concept's file) that every variant's F must instantiate. */
+  interface?: string;
+}
+
+export function defineConcept(spec: ConceptSpec): ConceptSpec {
+  return spec;
+}
+
+/** A typed gap in a sketch. As an expression it stands for one value of type T; as a statement, for 0..n statements.
+ *  Sketches are read as syntax and never run, so this only throws if called by mistake. */
+export function hole<T = void>(description: string): T {
+  throw new Error(`openarc: arc.hole is a sketch placeholder, not runnable code: ${description}`);
 }
 
 export interface BlockSpec {

@@ -115,7 +115,7 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
   const code = b.outputFormat === "code"; // plain text: no schema of any kind is sent
   if (b.provider === "ollama") {
     const cfg = { host: hostOf(b), model: b.model, seed, numCtx: b.maxContextTokens };
-    const req = buildRequest(system, user, cfg, OUTPUT_SCHEMA);
+    const req = buildRequest(system, user, cfg, b.outputSchema?.loose ?? OUTPUT_SCHEMA);
     if (code) delete (req as Partial<typeof req>).format;
     // The output cap: without num_predict a confused model can generate for minutes and still return truncated JSON.
     req.options = { ...req.options, temperature, num_predict: maxTokens };
@@ -133,7 +133,7 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
     if (b.provider === "openai") {
       const response_format: Json = b.structuredOutput === "json_object"
         ? { type: "json_object" }
-        : { type: "json_schema", json_schema: { name: "openarc_region", strict: true, schema: STRICT_OUTPUT_SCHEMA } };
+        : { type: "json_schema", json_schema: { name: "openarc_region", strict: true, schema: b.outputSchema?.strict ?? STRICT_OUTPUT_SCHEMA } };
       const body: Json = {
         model: b.model,
         temperature,
@@ -167,7 +167,7 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
       max_tokens: maxTokens,
       system,
       messages: [{ role: "user", content: user }],
-      ...(code ? {} : { output_config: { format: { type: "json_schema", schema: OUTPUT_SCHEMA } } }),
+      ...(code ? {} : { output_config: { format: { type: "json_schema", schema: b.outputSchema?.loose ?? OUTPUT_SCHEMA } } }),
     };
     const headers: Record<string, string> = { ...b.headers, "x-api-key": key!, "anthropic-version": ANTHROPIC_VERSION };
     const res = JSON.parse(await ports.http.postJson(`${baseUrlOf(b)}/messages`, body, headers)) as { stop_reason?: string; content?: { type: string; text?: string }[]; usage?: { input_tokens?: number; output_tokens?: number } };

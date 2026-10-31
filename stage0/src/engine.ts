@@ -22,6 +22,10 @@ import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, posix, sep } from "node:path";
 import { HARNESS_ENTRY, bwrapReadPaths, tierArgv } from "./isolation.ts";
+// palette (structured specs, SPEC §2.5, §2.6, §3.7): concepts, UI specs and sketches; hooks below are marked `palette:`
+import * as sketch from "./sketch.ts";
+import * as concepts from "./concepts.ts";
+import * as ui from "./ui.ts";
 
 const versionAt = (rel: string): string | undefined => {
   try {
@@ -54,6 +58,8 @@ export interface SpecInfo {
   params: string[];
   isAsync: boolean;
   typeNode?: ts.TypeNode;
+  sketch?: sketch.SketchInfo; // palette: the body as typed code with holes (§3.7)
+  ui?: ui.UiInfo; // palette: the component's structure, read from a *.spec.tsx file (§2.6)
 }
 
 export interface ManifestEntry {
@@ -108,6 +114,7 @@ export interface Project {
   crlf: Set<string>; // files that are CRLF on disk: held as LF in `files` (hashes match on every OS), written back as CRLF
   provenance: Map<string, { [k: string]: Json }>;
   e080Streak: number; // consecutive OARC-E080s in this run; generate stops calling the backend at 3
+  concepts?: Map<string, concepts.ConceptInfo>; // palette: defineConcept statements, by id
 }
 
 const err = (code: Diagnostic["code"], extra: Omit<Diagnostic, "code"> = {}): Diagnostic => ({ code, ...extra });
@@ -124,7 +131,7 @@ async function listTs(ports: Ports, dir: string): Promise<string[]> {
   const out: string[] = [];
   for (const name of await ports.fs.list(dir)) {
     const rel = `${dir}/${name}`;
-    if (name.endsWith(".ts")) out.push(rel);
+    if (/\.tsx?$/.test(name)) out.push(rel); // palette: .tsx for UI specs and components
     else if (!name.includes(".")) out.push(...(await listTs(ports, rel)));
   }
   return out;
@@ -224,6 +231,8 @@ function staticJson(n: ts.Expression): Json | undefined {
 const intentText = (v: Json | undefined) => (Array.isArray(v) ? v.join(" ") : typeof v === "string" ? v : "");
 
 function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnostic[]) {
+  p.concepts = new Map(); // palette
+  const once = (d: Diagnostic) => diagnostics.some((x) => x.code === d.code && x.id === d.id && x.file === d.file && x.detail === d.detail) || diagnostics.push(d); // extraction runs again after scaffolding
   for (const [rel] of srcFiles(p)) {
     const sf = p.program!.getSourceFile(abs(p, rel))!;
     for (const stmt of sf.statements) {
@@ -233,14 +242,28 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
         if (!init || !ts.isCallExpression(init) || !ts.isIdentifier(decl.name)) continue;
         const callee = init.expression.getText(sf);
         const kind = /defineRegion$/.test(callee) ? "function" : /defineBlock$/.test(callee) ? "block" : null;
+        if (/defineConcept$/.test(callee)) { // palette: a concept is static JSON, read like a spec (§2.5)
+          const c = concepts.readConcept(init.arguments[0] ? staticJson(init.arguments[0]) : undefined, rel);
+          const cline = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
+          if ("error" in c) once(err("OARC-E010", { file: rel, line: cline, detail: c.error }));
+          else if (p.concepts.has(c.id)) once(err("OARC-E011", { file: rel, line: cline, detail: `duplicate concept id ${c.id} (first declared in ${p.concepts.get(c.id)!.file})` }));
+          else p.concepts.set(c.id, c);
+        }
         if (!kind) continue;
-        const literal = init.arguments[0] ? staticJson(init.arguments[0]) : undefined;
+        // palette: `sketch` and `ui` are read as syntax, not as JSON
+        const arg = init.arguments[0], own = (k: string) => (arg && ts.isObjectLiteralExpression(arg) ? arg.properties.find((x): x is ts.PropertyAssignment => ts.isPropertyAssignment(x) && x.name.getText(sf) === k) : undefined);
+        const syn = own("sketch"), uiProp = own("ui");
+        const literal = arg ? staticJson(syn || uiProp ? ts.factory.updateObjectLiteralExpression(arg as ts.ObjectLiteralExpression, (arg as ts.ObjectLiteralExpression).properties.filter((x) => x !== syn && x !== uiProp)) : arg) : undefined;
         const line = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
         if (!literal || typeof literal !== "object" || Array.isArray(literal) || typeof literal.id !== "string") {
           diagnostics.push(err("OARC-E010", { file: rel, line }));
           continue;
         }
         const id = literal.id as string;
+        if (literal.intent === undefined && !syn && !uiProp && literal.concept === undefined) { // the model needs some guidance
+          diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: "intent is required unless sketch, ui or concept is present" }));
+          continue;
+        }
         if (literal.calls !== undefined && !(Array.isArray(literal.calls) && literal.calls.every((c) => typeof c === "string"))) {
           diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: "calls must be an array of strings" }));
           continue;
@@ -260,6 +283,33 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           isAsync = checker.typeToString(sig.getReturnType()).startsWith("Promise<");
           if (literal.refine === "next") diagnostics.push(err("OARC-E041", { id, file: rel }));
         }
+        let sk: sketch.SketchInfo | undefined; // palette: a sketch fixes the parameter names and joins the spec hash
+        if (syn) {
+          const r = kind === "function" ? sketch.readSketch(syn.initializer, sf, checker, (f) => (f.startsWith(p.root + "/") && !f.includes("/node_modules/") ? f.slice(p.root.length + 1) : null)) : { error: "sketch:function-regions-only" };
+          if ("error" in r) {
+            diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: r.error }));
+            continue;
+          }
+          sk = r;
+          params = r.params;
+          literal.$sketch = sketch.sketchHashText(r);
+        }
+        let u: ui.UiInfo | undefined; // palette: the structure tree joins the spec hash; react is an allowed import
+        if (uiProp) {
+          const r = kind === "function" ? ui.readUi(uiProp.initializer, sf) : { error: "ui:function-regions-only" };
+          if ("error" in r) {
+            diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: r.error }));
+            continue;
+          }
+          const typeProblem = ui.uiTypeProblem(typeNode, sf, checker);
+          if (typeProblem) {
+            diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: typeProblem }));
+            continue;
+          }
+          u = r;
+          literal.$ui = { tree: r.root as unknown as Json, vocabulary: ui.VOCABULARY_VERSION };
+          literal.deps = [...new Set([...((literal.deps as string[] | undefined) ?? []), "react"])];
+        }
         p.specs.set(id, {
           id, kind, file: rel, exportName: decl.name.text, literal,
           symbol: typeof literal.symbol === "string" ? literal.symbol : id.split(".").at(-1)!,
@@ -268,11 +318,12 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           examples: (literal.examples as Json[] | undefined) ?? [],
           intent: intentText(literal.intent),
           ...(Array.isArray(literal.calls) ? { calls: literal.calls as string[] } : {}),
-          typeText, signature, params, isAsync, typeNode,
+          typeText, signature, params, isAsync, typeNode, ...(sk ? { sketch: sk } : {}), ...(u ? { ui: u } : {}),
         });
       }
     }
   }
+  concepts.applyConcepts(p.specs, p.concepts, checker, p.program!, p.root).forEach(once); // palette: laws -> examples
 }
 
 // ───────────────────────────── scaffold (§3.6) ─────────────────────────────
@@ -294,6 +345,12 @@ export function scaffoldInMemory(p: Project, diagnostics: Diagnostic[]): string[
     if (markerIds.has(s.id)) continue;
     if (s.kind === "block") {
       diagnostics.push(err("OARC-W013", { id: s.id, file: s.file }));
+      continue;
+    }
+    if (s.ui) { // palette: a UI region lives in its component file, next to the *.spec.tsx
+      const d = ui.scaffoldUi(p.files, s);
+      if (d) diagnostics.push(d);
+      else done.push(s.id);
       continue;
     }
     const text = p.files.get(s.file)!;
@@ -335,6 +392,7 @@ export async function analyze(ports: Ports, req: CompileRequest, p: Project, dia
     extractSpecs(p, p.program.getTypeChecker(), diagnostics);
   }
   const checker = p.program.getTypeChecker();
+  diagnostics.push(...sketch.sketchTypeErrors(p.program, p.root, p.specs.values())); // palette: a sketch must type-check before any model call (§3.7)
 
   for (const [rel, text] of srcFiles(p)) {
     const lines = linesOf(text);
@@ -565,7 +623,7 @@ function moduleSignatures(sf: ts.SourceFile, checker: ts.TypeChecker, sameFile?:
     } else if (ts.isVariableStatement(st)) {
       for (const d of st.declarationList.declarations) {
         if (!ts.isIdentifier(d.name) || sameFile?.skip.has(d.name.text)) continue;
-        if (d.initializer && ts.isCallExpression(d.initializer) && /define(Region|Block)$/.test(d.initializer.expression.getText(sf))) continue;
+        if (d.initializer && ts.isCallExpression(d.initializer) && /define(Region|Block|Concept)$/.test(d.initializer.expression.getText(sf))) continue;
         const t = d.type ? d.type.getText(sf) : checker.typeToString(checker.getTypeAtLocation(d.name), undefined, ts.TypeFormatFlags.NoTruncation);
         lines.push(`const ${d.name.text}: ${t}`);
         const fn = d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer)) ? d.initializer : null;
@@ -631,13 +689,15 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   const sections: [string, string][] = [];
   const rootSpec = p.specs.get(r.root)!;
 
-  if (r.kind === "function") {
+  if (r.kind === "function" && s.sketch) sections.push(...sketch.sketchHead(s.sketch, s.symbol, s.typeText, s.signature)); // palette
+  else if (r.kind === "function") {
     sections.push(["Fixed signature (write ONLY the statements inside the braces)", `export const ${s.symbol}: ${s.typeText} = ${s.isAsync ? "async " : ""}(${s.params.join(", ")}) => {\n  /* your body */\n};\n// ${s.typeText} = ${s.signature}`]);
   } else {
     sections.push(["Task", `Write ONLY the statements that replace arc.pending("${s.id}") inside function ${rootSpec.symbol}. Do not return, break or continue out of the block; report results by assigning the 'let' variables below.${rootSpec.isAsync ? " await is allowed." : ""}`]);
     sections.push(["Variables in scope", r.scope.join("\n")]);
   }
   const typeRoots: ts.Node[] = s.typeNode ? [s.typeNode] : [];
+  if (s.sketch) typeRoots.push(...s.sketch.callees.flatMap((c) => (c.typeNode ? [c.typeNode] : []))); // palette
   const helperLines: string[] = [];
   // Every level: the file's imports and its other implemented top-level values (same-file helpers and regions).
   const importLines = sf.statements.filter(ts.isImportDeclaration).map((d) => d.getText(sf));
@@ -690,7 +750,9 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   if (sameFileLines.length) sections.push([`Already in ${r.file} (call these, don't re-implement them)`, sameFileLines.join("\n")]);
   if (helperLines.length) sections.push(["Helpers you may call", helperLines.join("\n\n")]);
   sections.push(["Intent", s.intent || "(none)"]);
-  if (s.calls) sections.push(["Calls allowed", `You may call exactly: ${s.calls.join(", ") || "nothing"}. Any other call on an import or a port is rejected (OARC-E098); calls on local variables and on functions you define in the body are fine.`]);
+  sections.push(...concepts.extraSections(p.specs, p.concepts ?? new Map(), s, p.files.get(r.file)!), ...ui.uiSections(s)); // palette: concept, callees, UI structure
+  if (s.sketch) sections.push(sketch.sketchCalls(s.sketch, s.calls));
+  else if (s.calls) sections.push(["Calls allowed", `You may call exactly: ${s.calls.join(", ") || "nothing"}. Any other call on an import or a port is rejected (OARC-E098); calls on local variables and on functions you define in the body are fine.`]);
   if (r.kind === "function") {
     sections.push(["Effects allowed", s.effects.join(", ") || "none"]);
     sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
@@ -757,17 +819,19 @@ function enclosingSource(p: Project, r: RegionInfo): string {
 // ───────────────────────────── PLAN ─────────────────────────────
 
 export function plan(p: Project, req: CompileRequest, diagnostics: Diagnostic[]): string[] {
-  const { targets, skipped } = selectTargets(
+  const { targets: selected, skipped } = selectTargets(
     p.regions.map((r) => ({ id: r.id, parent: r.parent, state: r.state, stale: r.stale })),
     req.ids,
   );
+  // palette: callees compile before their callers (§8.1): a sketch's calls, and the regions of the files a file imports
+  const targets = sketch.calleesFirst(selected, p.specs, (f) => [...importedSpecifiers(p.files.get(f) ?? "")].flatMap((x) => resolveLocal(p, f, x) ?? []));
   diagnostics.push(...skipped);
   for (const id of targets) {
     const r = p.regions.find((x) => x.id === id)!;
     if (r.kind === "block" && (p.specs.get(r.root)?.examples.length ?? 0) === 0) diagnostics.push(err("OARC-W041", { id }));
     else if (r.kind === "block") diagnostics.push(err("OARC-W040", { id }));
     else {
-      const thin = thinExamples(r.spec.examples);
+      const thin = r.spec.ui ? null : thinExamples(r.spec.examples); // palette: UI examples are interaction scripts
       if (thin) diagnostics.push(err("OARC-W044", { id, detail: thin }));
     }
   }
@@ -802,10 +866,10 @@ interface Attempt {
 }
 
 /** Normalise model output (F13): strip fences; unwrap a whole function when only a body was asked for. */
-export function unwrapBody(body: string, kind: "function" | "block"): string {
+export function unwrapBody(body: string, kind: "function" | "block", tsx = false): string {
   let b = body.trim().replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/, "").trim();
   if (kind !== "function") return b;
-  const sf = ts.createSourceFile("b.ts", b, ts.ScriptTarget.Latest, true);
+  const sf = ts.createSourceFile(tsx ? "b.tsx" : "b.ts", b, ts.ScriptTarget.Latest, true);
   if (sf.statements.length !== 1) return b;
   const st = sf.statements[0]!;
   let fn: ts.FunctionLikeDeclaration | undefined;
@@ -873,8 +937,8 @@ const callAllowed = (calls: string[], path: string) => calls.some((c) => c === p
 const RANDOM_MEMBERS = new Set(["getRandomValues", "randomUUID", "randomBytes"]);
 
 /** Static rules (§7) on a candidate body. Best-effort: the sandbox is the real boundary. */
-export function staticCheck(body: string, effects: string[], fileBound: Set<string> = new Set(), policy?: CallPolicy): { diag: Diagnostic; message: string }[] {
-  const sf = ts.createSourceFile("c.ts", `async function __w() {\n${body}\n}`, ts.ScriptTarget.Latest, true);
+export function staticCheck(body: string, effects: string[], fileBound: Set<string> = new Set(), policy?: CallPolicy, tsx = false): { diag: Diagnostic; message: string }[] {
+  const sf = ts.createSourceFile(tsx ? "c.tsx" : "c.ts", `async function __w() {\n${body}\n}`, ts.ScriptTarget.Latest, true);
   const out: { diag: Diagnostic; message: string }[] = [];
   const local = new Set<string>(); // names the body itself declares
   const scopes = new Map<string, ts.Node[]>(); // name -> the nodes its declarations are visible in
@@ -943,11 +1007,11 @@ export function staticCheck(body: string, effects: string[], fileBound: Set<stri
 
 /** A comment that merely mentions the marker prefix ("// matches @openarc: markers") is removed before splicing: a safe,
  *  non-semantic normalisation (§8.7). A marker-SHAPED comment (`// @openarc:begin|end …`) is kept, so guardBody rejects it. */
-export function stripMarkerComments(body: string): { body: string; stripped: number } {
+export function stripMarkerComments(body: string, tsx = false): { body: string; stripped: number } {
   if (!body.includes("@openarc:")) return { body, stripped: 0 };
   const pre = "async function __region() {\n";
   const text = `${pre}${body}\n}\n`;
-  const sf = ts.createSourceFile("s.ts", text, ts.ScriptTarget.Latest, true);
+  const sf = ts.createSourceFile(tsx ? "s.tsx" : "s.ts", text, ts.ScriptTarget.Latest, true);
   const drop = new Map<number, number>(); // body offsets: start -> end, so a comment seen twice counts once
   const walk = (n: ts.Node): void => {
     const kids = n.getChildren(sf);
@@ -974,13 +1038,13 @@ export function stripMarkerComments(body: string): { body: string; stripped: num
 }
 
 /** The body must parse as exactly one function body: it cannot close its braces and escape the region. */
-export function guardBody(body: string): string | null {
+export function guardBody(body: string, tsx = false): string | null {
   // Markers are recognised on comment tokens only (F2), so the marker prefix inside a string or regex is inert and
   // allowed (the marker scanner itself needs it). Reject marker-shaped LINES (line-based locators must never be
   // fooled, even by a template-literal line) and any comment that mentions the marker prefix.
   if (linesOf(body).some((l) => /^\s*\/\/\s*@openarc:/.test(l))) return "OARC-E097 body contains a marker-shaped line (markers belong to the compiler)";
   const text = `async function __region() {\n${body}\n}\n`;
-  const sf = ts.createSourceFile("g.ts", text, ts.ScriptTarget.Latest, true);
+  const sf = ts.createSourceFile(tsx ? "g.tsx" : "g.ts", text, ts.ScriptTarget.Latest, true);
   const comments: string[] = [];
   const walk = (n: ts.Node): void => {
     const kids = n.getChildren(sf);
@@ -989,7 +1053,7 @@ export function guardBody(body: string): string | null {
   };
   walk(sf);
   if (comments.some((c) => c.includes("@openarc:"))) return "OARC-E097 body has a comment mentioning @openarc: (markers belong to the compiler)";
-  const syntax = ts.transpileModule(text, { reportDiagnostics: true, compilerOptions: { target: ts.ScriptTarget.ES2023 } }).diagnostics ?? [];
+  const syntax = ts.transpileModule(text, { reportDiagnostics: true, ...(tsx ? { fileName: "g.tsx" } : {}), compilerOptions: { target: ts.ScriptTarget.ES2023, ...(tsx ? { jsx: ts.JsxEmit.Preserve } : {}) } }).diagnostics ?? [];
   if (syntax.length) return `OARC-E097 body has syntax errors: ${ts.flattenDiagnosticMessageText(syntax[0]!.messageText, " ")}`;
   if (sf.statements.length !== 1) return "OARC-E097 body escapes its region (it does not parse as a single function body)";
   return null;
@@ -1017,11 +1081,11 @@ export function guardSplice(before: string, after: string, id: string): string |
   return remaining.length === o1.length ? null : `OARC-E097 text outside region ${id} was removed`;
 }
 
-/** Texts of every spec statement (defineRegion/defineBlock) in a file, in order. */
+/** Texts of every spec statement (defineRegion/defineBlock/defineConcept) in a file, in order. */
 export function specStatements(text: string): string[] {
   const sf = ts.createSourceFile("s.ts", text, ts.ScriptTarget.Latest, true);
   return sf.statements
-    .filter((st) => ts.isVariableStatement(st) && st.declarationList.declarations.some((d) => d.initializer && ts.isCallExpression(d.initializer) && /define(Region|Block)$/.test(d.initializer.expression.getText(sf))))
+    .filter((st) => ts.isVariableStatement(st) && st.declarationList.declarations.some((d) => d.initializer && ts.isCallExpression(d.initializer) && /define(Region|Block|Concept)$/.test(d.initializer.expression.getText(sf))))
     .map((st) => st.getText(sf));
 }
 
@@ -1046,7 +1110,7 @@ function regionBodyLines(r: RegionInfo, body: string): string[] {
   const inner = linesOf(body.replace(/\r/g, "")).map((l) => (l.trim() ? `${r.indent}  ${l}` : ""));
   if (r.kind === "block") return linesOf(body.replace(/\r/g, "")).map((l) => (l.trim() ? `${r.indent}${l}` : ""));
   const s = r.spec;
-  const exported = r.bodyLines[0]?.trimStart().startsWith("export") ?? true;
+  const exported = r.bodyLines.find((l) => l.trim())?.trimStart().startsWith("export") ?? true; // a leading blank line keeps export
   return [
     `${r.indent}${exported ? "export " : ""}const ${s.symbol}: ${s.typeText} = ${s.isAsync ? "async " : ""}(${s.params.join(", ")}) => {`,
     ...inner,
@@ -1137,6 +1201,12 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   let repeats = 0;
   let spent: Tokens | null = null; // every model call for this region in this run (provenance.tokens)
   let cachedTokens: Tokens | null = null; // a cache hit carries the tokens that produced its body
+  for (const [law, why] of concepts.waivers(r.spec)) ports.log(`  ${id}: law "${law}" waived: ${why}`); // palette
+  const dom = r.spec.ui ? await ui.domProblem(ports, p.config.ui?.dom) : null; // palette: UI checks need the project's DOM
+  if (dom) {
+    diagnostics.push(err("OARC-E092", { id, detail: dom })); // no unverified fallback, and no model call wasted
+    return { candidate: null, modelCalls: 0 };
+  }
   const cachePath = `.openarc/cache/${r.fingerprint.replace("sha256:", "")}.json`;
   const cached = await ports.fs.read(cachePath);
   // A compiler-owned region that fails keeps its old body, which may not satisfy the current spec: say so (display: stale).
@@ -1168,7 +1238,9 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       const digest = await modelDigest(ports, p, backend, diagnostics);
       if (digest === null) return backendDown();
       const context = attempt === 1 && level === initialLevel(p, r) ? r.context0 : buildContext(p, r, level, backend);
-      const rendered = renderTemplate(code ? CODE_PROMPT_TEMPLATE : PROMPT_TEMPLATE, {
+      // palette: a sketch region uses the fills protocol; in "code" format the model returns the whole filled sketch as
+      // one code block and verify's containment check (E099) recovers the fills
+      const rendered = renderTemplate(r.spec.sketch ? (code ? sketch.SKETCH_CODE_PROMPT_TEMPLATE : sketch.SKETCH_PROMPT_TEMPLATE) : code ? CODE_PROMPT_TEMPLATE : PROMPT_TEMPLATE, {
         context,
         repair: previous ? `## Your previous attempt failed\nPrevious body:\n${previous.body}\n\nProblems:\n${previous.problems.join("\n")}\n\nFix these problems.` : "",
       });
@@ -1182,8 +1254,8 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       try {
         ({ text: raw, tokens } = await completeWithUsage(
           ports,
-          sampling ? { ...backend, ...sampling } : backend,
-          code ? CODE_SYSTEM : "You are a compiler backend. You output JSON only: {\"body\": string, \"imports\": [{\"from\": string, \"names\": string[], \"default\"?: string}]}. body is TypeScript statements only, with no markdown.",
+          { ...(sampling ? { ...backend, ...sampling } : backend), ...(r.spec.sketch && !code ? { outputSchema: sketch.fillsSchema(r.spec.sketch) } : {}) },
+          r.spec.sketch ? (code ? sketch.SKETCH_CODE_SYSTEM : sketch.SKETCH_SYSTEM) : code ? CODE_SYSTEM : "You are a compiler backend. You output JSON only: {\"body\": string, \"imports\": [{\"from\": string, \"names\": string[], \"default\"?: string}]}. body is TypeScript statements only, with no markdown.",
           rendered.text,
         ));
         spent = addTokens(spent, tokens);
@@ -1194,7 +1266,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       p.e080Streak = 0;
       modelCalls++;
       const split = code ? { raw, defaults: new Map<number, string>() } : splitDefaults(raw);
-      const parsed = code ? parseCodeOutput(raw) : parseOutput(split.raw);
+      const parsed = code ? parseCodeOutput(raw) : r.spec.sketch ? sketch.parseFills(split.raw, r.spec.sketch) : parseOutput(split.raw); // palette: fills
       const varied = sampling ? ` (identical prompt: temperature ${sampling.temperature}, seed ${sampling.seed})` : "";
       ports.log(`  ${id}: attempt ${attempt} via ${backend.name} (${backend.model}), context L${level} ${context.length} chars${varied}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
       if (!parsed.ok) {
@@ -1207,8 +1279,9 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       body = parsed.body;
       imports = parsed.imports.map((im, i) => (split.defaults.has(i) ? { ...im, default: split.defaults.get(i)! } : im));
     }
-    body = unwrapBody(body, r.kind);
-    const clean = stripMarkerComments(body);
+    const tsx = r.file.endsWith(".tsx"); // palette: UI components are parsed as TSX
+    body = unwrapBody(body, r.kind, tsx);
+    const clean = stripMarkerComments(body, tsx);
     if (clean.stripped) {
       ports.log(`  ${id}: stripped ${clean.stripped} comment${clean.stripped === 1 ? "" : "s"} mentioning @openarc: (markers belong to the compiler)`);
       body = clean.body;
@@ -1216,11 +1289,17 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     const result = await verify(ports, req, p, r, body, imports);
     if (result.ok) {
       if (attempt === 1 && cached) spent = cachedTokens;
+      if (result.holes?.length) { // palette: a hole no passing example reaches is unverified (W045): not cached, not committed
+        for (const n of result.holes) diagnostics.push(err("OARC-W045", { id, detail: `hole:${id}#${n}` }));
+        ports.log(`  ${id}: unverified: no passing example reaches hole(s) ${result.holes.map((n) => `«${n}»`).join(", ")} (${result.verifiedBy.join(", ")}); add an example that does`);
+        return giveUp();
+      }
       // A block that no passing example reaches is never cached or counted as verified (W045); the joint check at STAGE
       // holds it back. One reached by none YET, while sibling blocks are still pending, is provisional: cached, and
       // committed only once the joint check sees a passing example reach it.
       if (!(attempt === 1 && cached) && !result.unverified) await ports.fs.write(cachePath, JSON.stringify({ body, imports, ...(sampling ? { sampling } : {}), ...(spent ? { tokens: spent } : {}) }));
-      p.provenance.set(id, { source: "generated", backend: at.backend.name, model: at.backend.model, outputFormat: at.backend.outputFormat!, contextLevel: at.level, attempts: attempt, verifiedBy: result.verifiedBy, ...(sampling ? { sampling } : {}), ...(spent ? { tokens: spent } : {}) });
+      const waived = Object.fromEntries(concepts.waivers(r.spec)); // palette: waived laws are recorded with the body
+      p.provenance.set(id, { source: "generated", backend: at.backend.name, model: at.backend.model, outputFormat: at.backend.outputFormat!, contextLevel: at.level, attempts: attempt, verifiedBy: result.verifiedBy, ...(sampling ? { sampling } : {}), ...(spent ? { tokens: spent } : {}), ...(Object.keys(waived).length ? { waived } : {}) });
       if (result.unverified) {
         diagnostics.push(err("OARC-W045", { id, detail: `unreached:${r.root}` }));
         ports.log(`  ${id}: unverified: no passing example of ${r.root} reaches this block (${result.verifiedBy.join(", ")})`);
@@ -1231,9 +1310,13 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     ports.log(`  ${id}: ✗ ${result.problems[0]?.slice(0, 160)}`);
     await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, body, imports: imports as unknown as Json, problems: result.problems });
     previous = { body, problems: result.problems };
+    if (result.stop) { // palette: OARC-E100, no fill can fix it
+      diagnostics.push(result.stop);
+      return giveUp();
+    }
     // Escalation by failure type: a missing name means a context problem, so expand; otherwise repair at the same level.
     // The last attempt switches to the fallback backend when one is configured.
-    if (c.context.expandOnFailure && result.missingContext && level < 2) level = (level + 1) as ContextLevel;
+    if (c.context.expandOnFailure && result.missingContext && level < (r.spec.sketch ? 1 : 2)) level = (level + 1) as ContextLevel;
     if (attempt === c.maxAttempts - 1 && c.fallbackBackend) stage = 1;
   }
   diagnostics.push(err("OARC-E082", { id, detail: previous?.problems[0]?.slice(0, 200) }));
@@ -1246,6 +1329,8 @@ interface Verified {
   verifiedBy: string[];
   missingContext: boolean;
   unverified?: boolean; // a block that passing examples never reach while every example was conclusive (W045)
+  holes?: number[]; // palette: sketch holes no passing example reaches (W045)
+  stop?: Diagnostic; // palette: OARC-E100, stop the repair loop
 }
 
 /** Specifiers a file imports from. */
@@ -1267,13 +1352,17 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   // Requested imports are file bindings too: `import crypto from "node:crypto"` makes `crypto` a binding, not the global.
   const bound = fileBindings(base);
   for (const i of imports) localNames(i).forEach((n) => bound.add(n));
-  const st = staticCheck(body, r.spec.effects, bound, callPolicy(p, r, imports));
+  // palette: a sketch region's body must be its sketch with only the holes filled (E099); fills keep §3.4 and the implied calls
+  const sk = r.spec.sketch ? sketch.checkSketchBody(r.spec.sketch, body, r.spec.calls ?? [], imports.flatMap(localNames)) : null;
+  if (sk?.problems.length) return fail(sk.problems);
+  const tsx = r.file.endsWith(".tsx"); // palette
+  const st = staticCheck(body, r.spec.effects, bound, sk ? undefined : callPolicy(p, r, imports), tsx);
   if (st.length) return fail(st.map((s) => `${s.diag.code} ${s.message}`));
   if (r.kind === "block") {
     const rs = checkRestrictions(body, p.specs.get(r.root)?.isAsync ?? false, []);
     if (rs.length) return fail(rs.map((d) => `OARC-E035 not allowed in a block: ${d.detail}`));
   }
-  const escape = guardBody(body);
+  const escape = guardBody(body, tsx);
   if (escape) return fail([escape]);
   // splice into the in-memory copy (with this run's accepted candidates) and type-check
   const typeOnly = (from: string, name: string) => {
@@ -1301,16 +1390,22 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   const verifiedBy = ["tsc", "static"];
   // examples in the sandbox: the region's own (function) or its enclosing function's (block)
   const rootSpec = p.specs.get(r.root)!;
-  if (rootSpec.examples.length) {
-    const res = await runSandbox(ports, req, p, r.root, overlay, undefined, r.kind === "block" ? [r.id] : []);
+  if (rootSpec.examples.length || rootSpec.ui) {
+    // palette: a sketch's sandbox copy carries one coverage probe per hole
+    const sbOverlay = sk ? new Map(overlay).set(r.file, mergeImports(spliceRegion(base, r.id, regionBodyLines(r, sketch.spliceFills(r.spec.sketch!, sk.fills, r.id))), imports, typeOnly)) : overlay;
+    const res = await runSandbox(ports, req, p, r.root, sbOverlay, undefined, r.kind === "block" ? [r.id] : []);
     const pendingSiblings = (o: { actual?: Json }) =>
       typeof o.actual === "object" && o.actual !== null && !Array.isArray(o.actual) && typeof o.actual.pending === "string" && r.kind === "block";
     const real = res.failed.filter((o) => !pendingSiblings(o));
     if (res.error) return fail([res.error]);
+    const conflict = sk && real.length ? sketch.sketchConflict(res.stdout ?? "", r.id) : null; // palette: OARC-E100
+    if (conflict) return { ...fail([`OARC-E100 example "${conflict.detail}" fails without reaching any hole: the sketch decides it, so no fill can fix it`]), stop: conflict };
     if (real.length || (!res.complete && r.kind === "function"))
       return fail(real.map((o) => `OARC-E090 example "${o.name}" failed: got ${showValue(o.actual)}; expected ${showValue(exampleExpected(rootSpec, o.name))}`).concat(res.complete ? [] : ["OARC-E090 harness output incomplete (process exited early?)"]));
-    verifiedBy.push(`examples:${res.passed}/${rootSpec.examples.length}${res.failed.length ? ` (${res.failed.length} inconclusive: sibling blocks pending)` : ""}`);
+    verifiedBy.push(`examples:${res.passed}/${rootSpec.ui ? res.passed + res.failed.length : rootSpec.examples.length}${res.failed.length ? ` (${res.failed.length} inconclusive: sibling blocks pending)` : ""}`);
     if (r.kind === "block") verifiedBy.push(`via:${r.root}`);
+    const holes = sk ? sketch.unreachedHoles(r.spec.sketch!, r.id, res.hits) : [];
+    if (holes.length) return { ok: true, problems: [], verifiedBy, missingContext: false, holes }; // palette: W045 per hole
     if (r.kind === "block" && !res.hits.has(r.id)) {
       verifiedBy.push("unreached");
       if (!res.failed.length) {
@@ -1365,7 +1460,7 @@ function harnessHits(stdout: string): Set<string> {
   return hits;
 }
 
-export type SandboxResult = { complete: boolean; passed: number; failed: { name: string; actual?: Json }[]; hits: Set<string>; error?: string };
+export type SandboxResult = { complete: boolean; passed: number; failed: { name: string; actual?: Json }[]; hits: Set<string>; error?: string; stdout?: string };
 
 async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId: string, overlay: Map<string, string>, oracle?: { module: string; export: string; inputs: Json[][] }, probe: string[] = []): Promise<SandboxResult> {
   const none = new Set<string>();
@@ -1391,7 +1486,9 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
   const spec = p.specs.get(rootId)!;
   // Examples are passed from the compiler's STATIC extraction: a body that mutates spec.examples at runtime cannot weaken its own tests.
   const tolerance = typeof spec.literal.tolerance === "number" ? { tolerance: spec.literal.tolerance } : {};
-  await ports.fs.write(`${dir}/.openarc/harness-plan.json`, JSON.stringify({ [rootId]: { module: spec.file, symbol: spec.symbol, specExport: spec.exportName, examples: spec.examples, ...tolerance, ...(oracle ? { oracle } : {}) } }));
+  // palette: a UI region's module is its component file; the harness gets the structure tree for the derived checks
+  const uiPlan = spec.ui ? { module: p.regions.find((x) => x.id === rootId)!.file, ui: spec.ui as unknown as Json } : {};
+  await ports.fs.write(`${dir}/.openarc/harness-plan.json`, JSON.stringify({ [rootId]: { module: spec.file, symbol: spec.symbol, specExport: spec.exportName, examples: spec.examples, ...tolerance, ...(oracle ? { oracle } : {}), ...uiPlan } }));
   const sb = p.config.sandbox ?? {};
   const limits = {
     nodeBin: req.sandbox.nodeBin, nodePrefix: req.sandbox.nodePrefix, heapMb: sb.heapMb ?? req.sandbox.heapMb,
@@ -1402,7 +1499,7 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
     : tierArgv(tier, { ...limits, root: p.root, stageDir: join(p.root, dir), containerImage: req.sandbox.containerImage });
   const res = await ports.proc.run(argv, ((sb.cpuSeconds ?? req.sandbox.cpuSeconds) + 20) * 1000);
   if (res.timedOut) return { complete: false, passed: 0, failed: [], hits: none, error: "OARC-E091 sandbox timed out" };
-  const summary = { ...readHarnessOutput(res.stdout), hits: harnessHits(res.stdout) };
+  const summary = { ...readHarnessOutput(res.stdout), hits: harnessHits(res.stdout), stdout: res.stdout };
   // no outcome line at all (only stderr: a crash before the first example): one diagnostic, not one failure per line
   if (!summary.complete && summary.passed === 0 && summary.failed.every((f) => f.name === "<unparseable>"))
     return { ...summary, error: `OARC-E090 harness crashed (exit ${res.code}): ${crashLine(res.stdout)}` };

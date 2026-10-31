@@ -85,4 +85,15 @@ assert.equal(showValue(toJson(undefined)), "undefined");
   // segDist printed NaN as "got null"; the value is now shown as NaN
   assert.equal(showValue(toJson(Math.hypot(NaN, 1))), "NaN");
 }
-console.log("equality: tolerance, -0, NaN, tokens, faithful printing, fitLine repro ok");
+// runExamples: a fake inside an argument (a function-valued field) is resolved like a positional one, and fakesAfter sees it
+{
+  type Notify = (job: { id: string; onDone: (id: string) => Promise<unknown>; now: () => Promise<number> }) => Promise<number>;
+  const notify: Notify = async (job) => (await job.onDone(job.id), job.now());
+  const spec = arc.defineRegion<Notify>({
+    id: "t.notify",
+    intent: "",
+    examples: [{ args: [{ id: "j1", onDone: { $fake: "action#onDone" }, now: { $fake: "action#now", init: { returns: [42] } } }], expected: 42, fakesAfter: { "action#onDone": { calls: [["j1"]] } } }],
+  });
+  assert.deepStrictEqual(await runExamples(process.cwd(), notify, spec as unknown as RegionSpec<AnyFn>), [{ name: "#1", ok: true }]);
+}
+console.log("equality: tolerance, -0, NaN, tokens, faithful printing, fitLine repro, nested fakes ok");

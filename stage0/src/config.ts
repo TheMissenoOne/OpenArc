@@ -37,6 +37,9 @@ export interface BackendConfig {
   headers?: Record<string, string>; // extra headers, e.g. OpenRouter's HTTP-Referer / X-Title
   structuredOutput?: "json_schema" | "json_object"; // openai only, default json_schema
   ollamaCompat?: boolean; // openai only: the endpoint is Ollama's /v1 (default: baseUrl ends in :11434/v1). Sends keep_alive and reasoning_effort "none"
+  /** Set by the engine per request, never read from the file: the structured-output schema to use instead of the
+   *  `{body, imports}` one (sketch regions reply `{fills, imports}`). `strict` is for OpenAI json_schema. */
+  outputSchema?: { loose: Json; strict: Json };
   outputFormat?: OutputFormat; // default "json"; a region's own outputFormat wins (src/output-format.ts)
 }
 
@@ -67,6 +70,9 @@ export interface OpenArcConfig {
     isolation?: Isolation;
     containerImage?: string; // container tier, default docker.io/library/node:<this Node's version>-slim
   };
+  /** UI regions (§2.6): the DOM the harness renders components in, from the project's devDependencies. Without it, UI
+   *  regions fail with OARC-E092 (dom:not-configured); there is no unverified fallback. */
+  ui?: { dom?: "jsdom" };
 }
 
 export const DEFAULT_CONFIG: OpenArcConfig = {
@@ -98,6 +104,8 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
   const iso = c.sandbox?.isolation;
   if (iso !== undefined && !ISOLATIONS.includes(iso))
     return { config: DEFAULT_CONFIG, error: `openarc.config.json: sandbox.isolation must be one of ${ISOLATIONS.join(", ")}${(iso as string) === "none" ? ' (no sandbox at all is spelled "unsafe-none")' : ""}` };
+  if (c.ui !== undefined && (typeof c.ui !== "object" || c.ui === null || (c.ui.dom !== undefined && c.ui.dom !== "jsdom")))
+    return { config: DEFAULT_CONFIG, error: 'openarc.config.json: ui.dom must be "jsdom" (installed as a devDependency of the project)' };
   for (const [name, b] of Object.entries(c.backends)) {
     const bad = (why: string) => ({ config: DEFAULT_CONFIG, error: `openarc.config.json: backend "${name}": ${why}` });
     if (typeof b !== "object" || b === null) return bad("must be an object");
