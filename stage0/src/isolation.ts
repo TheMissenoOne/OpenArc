@@ -52,11 +52,20 @@ export function probeTools(): Tools {
   if (probed) return probed;
   const bwrap = process.platform === "linux" && onPath("bwrap") && onPath("prlimit") &&
     spawnSync("bwrap", ["--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "true"], { stdio: "ignore", timeout: 10_000 }).status === 0;
+  let engine: string | null | undefined;
   return (probed = {
     bwrap,
     sandboxExec: process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec"),
-    container: onPath("podman") ? "podman" : onPath("docker") ? "docker" : null,
+    // ponytail: a getter, so only runs that ask for the container tier (or doctor) pay for `podman info`
+    get container() {
+      return engine === undefined ? (engine = containerEngine()) : engine;
+    },
   });
+}
+
+/** podman, else docker, whichever is on PATH AND answers `info`: a binary with a stopped daemon is no container tier. */
+export function containerEngine(): string | null {
+  return ["podman", "docker"].find((e) => onPath(e) && spawnSync(e, ["info"], { stdio: "ignore", timeout: 15_000 }).status === 0) ?? null;
 }
 
 const real = (p: string) => {
@@ -107,7 +116,10 @@ function packageLinks(nm: string): string[] {
       return [];
     }
   };
-  return entries(nm).flatMap((name) => (name.startsWith("@") ? entries(join(nm, name)).map((n) => join(nm, name, n)) : [join(nm, name)])).filter(isLink);
+  // a scope: the scope directory itself (it may be a link to elsewhere) and then each package in it
+  return entries(nm)
+    .flatMap((name) => (name.startsWith("@") ? [join(nm, name), ...entries(join(nm, name)).map((n) => join(nm, name, n))] : [join(nm, name)]))
+    .filter(isLink);
 }
 
 function linkedPackages(nm: string): string[] {
@@ -198,3 +210,10 @@ export function tierArgv(tier: Exclude<SandboxTier, "bwrap">, a: TierArgs): stri
 
 /** Node's permission model denies network only from v25.0.0 (--allow-net); before that the node tier has no network isolation. */
 export const nodeBlocksNetwork = (version = process.versions.node) => Number(version.split(".")[0]) >= 25;
+
+/** The version of the Node binary that runs the harness (sandbox.nodeBin), "unknown" if it does not answer. */
+export function nodeVersionOf(nodeBin: string): string {
+  if (nodeBin === process.execPath) return process.versions.node;
+  const r = spawnSync(nodeBin, ["--version"], { encoding: "utf8", timeout: 10_000 });
+  return /^v(\d+\.\d+\.\d+)/.exec(r.stdout ?? "")?.[1] ?? "unknown";
+}

@@ -4,16 +4,19 @@
 // 2. The non-bwrap argv: same Node flags as bwrap (no --allow-*), the stage path as argv[3], symlinked deps readable.
 // 3. CRLF: hashing a CRLF region equals hashing it with LF; a compile keeps a CRLF file CRLF.
 // 4. The lock's identity falls back to pid + mtime when a filesystem reports inode 0.
+// 5. PR #8 review: a symlinked @scope is granted with its own links; the container tier needs an engine that answers;
+//    W046 judges sandbox.nodeBin's Node; the lock is read through one descriptor and an unreadable moved lock counts
+//    as live; doctor's verdict; a joint check with no sandbox is E092.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Json } from "open-arc";
-import type { CompileRequest } from "../src/types.ts";
-import { chooseTier, readPaths, sbplProfile, tierArgv, type Tools } from "../src/isolation.ts";
+import type { CompileRequest, Diagnostic, Ports } from "../src/types.ts";
+import { chooseTier, containerEngine, nodeBlocksNetwork, nodeVersionOf, readPaths, sbplProfile, tierArgv, type Tools } from "../src/isolation.ts";
 import { parseConfig } from "../src/config.ts";
 import { normalizeOwnedText, sha256Tagged } from "../src/hash.ts";
-import { lockIdentity, statIdentity } from "../src/lock.ts";
+import { clearStaleLock, lockIdentity, readLock, sameLock, statIdentity } from "../src/lock.ts";
 import { run } from "../src/compile.ts";
 import * as engine from "../src/engine.ts";
 import fakePorts from "./fakes/ports.memory.ts";
@@ -131,11 +134,114 @@ import fakePorts from "./fakes/ports.memory.ts";
   try {
     const f = join(dir, "lock");
     writeFileSync(f, "123");
-    assert.match(lockIdentity(f), process.platform === "win32" ? /^(ino:\d+|pid:123@[\d.]+)$/ : /^ino:\d+$/);
+    assert.match(lockIdentity(f), process.platform === "win32" ? /^(ino:\d+\|pid:123|pid:123@[\d.]+)$/ : /^ino:\d+\|pid:123$/);
+    assert.notEqual(statIdentity({ ino: 7, mtimeMs: 1 }, "123"), statIdentity({ ino: 7, mtimeMs: 1 }, "456"), "a reused inode with another pid differs");
     assert.equal(statIdentity({ ino: 0, mtimeMs: 5.5 }, "123"), "pid:123@5.5", "no inode: pid + mtime");
     assert.notEqual(statIdentity({ ino: 0, mtimeMs: 5.5 }, "123"), statIdentity({ ino: 0, mtimeMs: 5.5 }, "456"), "a replacement lock (other pid) differs");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// ── 5. PR #8 review fixes
+{
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "openarc-pr8-")));
+  const link = (target: string, at: string) => symlinkSync(process.platform === "win32" ? join(dir, target) : join("..", target), at, "junction");
+  try {
+    // a whole @scope linked elsewhere, holding a plain package and a link to a third place: both real paths granted
+    mkdirSync(join(dir, "ext", "pkg"), { recursive: true });
+    mkdirSync(join(dir, "far"));
+    mkdirSync(join(dir, "node_modules"));
+    link("ext", join(dir, "node_modules", "@t"));
+    symlinkSync(process.platform === "win32" ? join(dir, "far") : join("..", "far"), join(dir, "ext", "lnk"), "junction");
+    const reads = readPaths(dir, dir);
+    for (const want of [join(dir, "ext"), join(dir, "far")]) assert.ok(reads.includes(want), `${want} in ${reads}`);
+
+    // W046: the harness's Node is sandbox.nodeBin's; a binary that does not answer is "unknown" = not blocking
+    assert.equal(nodeVersionOf(process.execPath), process.versions.node);
+    assert.equal(nodeVersionOf(join(dir, "no-such-node")), "unknown");
+    assert.equal(nodeBlocksNetwork("unknown"), false);
+    if (process.platform !== "win32") {
+      // ponytail: shell-script fakes, POSIX only; the logic under test is the same on Windows
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      const fake = (name: string, body: string) => (writeFileSync(join(bin, name), `#!/bin/sh
+${body}
+`), chmodSync(join(bin, name), 0o755));
+      fake("node24", "echo v24.1.0");
+      assert.equal(nodeVersionOf(join(bin, "node24")), "24.1.0");
+      assert.equal(nodeBlocksNetwork(nodeVersionOf(join(bin, "node24"))), false, "a Node 24 nodeBin has no network permission");
+      // container: a binary whose engine does not answer `info` is no container tier
+      const path = process.env.PATH;
+      process.env.PATH = bin;
+      try {
+        fake("podman", "exit 125");
+        fake("docker", "exit 1");
+        assert.equal(containerEngine(), null, "binaries present, engines down");
+        fake("docker", "exit 0");
+        assert.equal(containerEngine(), "docker", "podman down, docker answers");
+      } finally {
+        process.env.PATH = path;
+      }
+    }
+
+    // the lock: identity and pid from one descriptor; a pid-less lock judged by that descriptor's mtime
+    const lockDir = join(dir, "proj", ".openarc");
+    mkdirSync(lockDir, { recursive: true });
+    const lock = join(lockDir, "lock");
+    writeFileSync(lock, "123");
+    const l = readLock(lock);
+    assert.equal(l.text, "123");
+    assert.equal(l.id, lockIdentity(lock));
+    assert.equal(sameLock(lock, l.id), true);
+    assert.equal(sameLock(join(lockDir, "gone"), l.id), false, "an unreadable moved lock is not 'the same': it is put back");
+    writeFileSync(lock, "");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    const warned: string[] = [];
+    clearStaleLock(join(dir, "proj"), (w) => warned.push(w));
+    assert.equal(existsSync(lock), false, "a pid-less lock older than 10 s is removed");
+    assert.match(warned[0] ?? "", /no pid, older than 10s/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  // doctor's verdict
+  const res = (actual: string[] | null, complete = true): engine.SandboxResult =>
+    ({ complete, passed: 0, failed: actual ? [{ name: "#1", actual }] : [], hits: new Set() });
+  const verdict = (actual: string[] | null, tier = "bwrap", complete = true, excused = false) => engine.doctorReport(res(actual, complete), tier, excused);
+  assert.equal(verdict(["2", "EROFS", "EACCES", "ECONNREFUSED"]).ok, true, "bwrap: own network namespace");
+  assert.equal(verdict(["2", "EROFS", "EACCES", "ETIMEDOUT"]).ok, false, "a timeout is not proof of denial");
+  assert.match(verdict(["2", "EROFS", "EACCES", "ENOTFOUND"]).lines.join("\n"), /network +UNVERIFIED \(ENOTFOUND\)/);
+  assert.equal(verdict(["2", "EROFS", "EACCES", "allowed"]).ok, false);
+  assert.equal(verdict(["2", "ERR_ACCESS_DENIED", "ERR_ACCESS_DENIED", "allowed"], "node", true, true).ok, true, "Node < 25 on the node tier: W046, not a failure");
+  assert.equal(verdict(["2", "EPERM", "EPERM", "EPERM"], "sandbox-exec", false).ok, false, "incomplete harness output is no pass");
+  assert.match(verdict(["2", "EPERM", "EPERM", "EPERM"], "sandbox-exec", false).lines[0]!, /incomplete/);
+  assert.equal(verdict(null).ok, false);
+
+  // a joint check with the sandbox unavailable reports E092, as the per-block path does
+  const blockSrc = [
+    'import * as arc from "open-arc";',
+    "type Run = (n: number) => number;",
+    'export const runSpec = arc.defineRegion<Run>({ id: "fx.run", intent: "double", examples: [{ args: [1], expected: 2 }] });',
+    'export const aSpec = arc.defineBlock({ id: "fx.run.a", intent: "x = n * 2" });',
+    "// @openarc:begin fx.run",
+    "export function run(n: number): number {",
+    "  let x = n;",
+    "  // @openarc:begin fx.run.a",
+    '  arc.pending("fx.run.a");',
+    "  // @openarc:end fx.run.a",
+    "  return x;",
+    "}",
+    "// @openarc:end fx.run",
+    "",
+  ].join("\n");
+  const req: CompileRequest = { root: process.cwd(), ids: [], model: { host: "http://h", model: "m", seed: 1, numCtx: 8192 }, sandbox: { nodeBin: "/n/bin/node", nodePrefix: "/n", heapMb: 256, addressSpaceBytes: 2 ** 32, cpuSeconds: 10, unavailable: "bwrap-unavailable" } };
+  const ports = fakePorts({ files: { "src/fx.ts": blockSrc } }).instance as Ports;
+  const p = await engine.parse(ports, req, []);
+  await engine.analyze(ports, req, p, [], { offline: true });
+  const diagnostics: Diagnostic[] = [];
+  await engine.stage(ports, req, p, [{ id: "fx.run.a", body: "x = n * 2;", imports: [], verifiedBy: [] }], "tx", diagnostics);
+  assert.deepStrictEqual(diagnostics.map((d) => d.code), ["OARC-E092"], JSON.stringify(diagnostics));
 }
 console.log("isolation.check: ok");
