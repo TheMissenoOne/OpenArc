@@ -513,7 +513,7 @@ async function main(argv: string[]): Promise<number> {
       }
       const state = engine.displayState(project, r);
       const note = state === "stale" ? { stale: "the spec changed since this body was verified; it may not satisfy the current examples (openarc compile)" } : {};
-      console.log(JSON.stringify({ id: r.id, kind: r.kind, file: r.file, parent: r.parent, state, ownership: r.state, ...note, intent: r.spec.intent, examples: r.spec.examples.length, manifest: project.manifest.regions[r.id] ?? null }, null, 2));
+      console.log(JSON.stringify({ id: r.id, kind: r.kind, file: r.file, parent: r.parent, state, ownership: r.state, ...note, intent: r.spec.intent, examples: r.spec.examples.length, tokens: project.manifest.regions[r.id]?.provenance.tokens ?? null, manifest: project.manifest.regions[r.id] ?? null }, null, 2));
       return 0;
     }
     case "freeze":

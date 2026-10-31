@@ -11,7 +11,7 @@
 | `openarc compile --keep-going` | commit what passed; failed regions stay pending; exit 1. Blocks whose function can't pass its examples yet (a sibling failed) are held back (W042). Stops calling the backend after 3 consecutive E080s |
 | `openarc watch [--debounce <ms>]` | keep running: on each relevant save, analyse, queue stale regions and compile them one at a time (one model in memory). Failed regions wait for their spec to change; an unreachable backend pauses the queue. See [[Watch Mode]] |
 | `openarc graph` | region tree: kind, state (`stale` for a compiler region whose spec changed since its body was verified), number of examples, file |
-| `openarc inspect <id>` | spec, state (`stale` as in `graph`, with `ownership` alongside), manifest entry and provenance (model, context level, attempts, sampling, checks) |
+| `openarc inspect <id>` | spec, state (`stale` as in `graph`, with `ownership` alongside), `tokens` (`{prompt, completion}` the model used to produce the current body, failed attempts included; `null` when the backend reports none or the body isn't generated), manifest entry and provenance (model, output format, context level, attempts, sampling, tokens, checks) |
 | `openarc check <id> --oracle <module>#<export>` | differential test: run the compiled region and a reference implementation on its examples' arguments plus 60 seeded variations, in the sandbox, and list every disagreement; exit 1 if any. See "Thin examples" in [[Writing Specs]] |
 | `openarc doctor` | report Node, the platform, the tools found and the selected sandbox tier, then run one example in that sandbox which also tries a file write, a child process and a network request; each must be refused. No model. Exit 1 if the tier is unavailable or anything gets through (except the network on Node < 25 in the `node` tier, which is reported) |
 | `openarc freeze <id>` | make a region developer-owned |
@@ -31,7 +31,7 @@
 | `.openarc/harness.mjs` | yes | sandbox entry point |
 | `.openarc/sandbox/`, `txn/`, `lock` | no | runtime only (`.openarc/.gitignore`). `lock` holds the PID of its holder; a lock whose holder is gone is removed with a warning |
 | `.openarc/watch-history.jsonl` | no | `openarc watch` dispatch log, last 1000 entries (`.openarc/.gitignore`) |
-| `.openarc/attempts/<id>/<n>.json` | no | every failed attempt: body (or the raw invalid output), imports, problems, context level, prompt hash, sampling; the last 20 per region (`.openarc/.gitignore`; `openarc init` adds the line to an existing file) |
+| `.openarc/attempts/<id>/<n>.json` | no | every failed attempt: body (or the raw invalid output), imports, problems, output format, context level, prompt hash, sampling, tokens (`{prompt, completion}` as the backend reported them: Ollama `prompt_eval_count`/`eval_count`, OpenAI `usage.prompt_tokens`/`completion_tokens`, Anthropic `usage.input_tokens`/`output_tokens`; `null` when it reports none); the last 20 per region (`.openarc/.gitignore`; `openarc init` adds the line to an existing file) |
 
 ## Diagnostics
 

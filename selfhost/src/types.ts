@@ -72,6 +72,7 @@ export interface ImportDecl {
   from: string;
   names: string[];
   default?: string; // a default import's local name (import x from "from"); absent for named-only imports
+  namespace?: string; // a namespace import's local name (import * as x from "from"); only from outputFormat "code"
 }
 export type ModelOutput =
   | { ok: true; body: string; imports: ImportDecl[] }
@@ -105,6 +106,7 @@ export interface SandboxConfig {
   addressSpaceBytes: number; // >= 16 GiB: V8's cage plus the WASM type stripper (amaro) reserve virtual memory
   cpuSeconds: number;
   regionId: string;
+  extraReadPaths: string[]; // real paths outside the stage the harness must read: node_modules and symlinked packages elsewhere (isolation.bwrapReadPaths)
 }
 export interface ExampleOutcome {
   name: string;
@@ -174,7 +176,7 @@ export interface CompileRequest {
   ids: string[];
   keepGoing?: boolean; // commit the targets that passed; failed ones stay pending
   model: ModelConfig;
-  sandbox: Omit<SandboxConfig, "stageDir" | "regionId"> & {
+  sandbox: Omit<SandboxConfig, "stageDir" | "regionId" | "extraReadPaths"> & {
     isolation?: SandboxTier; // absent: bwrap (sandbox.buildArgv)
     unavailable?: string; // the configured tier is unavailable here: every sandbox run is OARC-E092 with this detail
     containerImage?: string;

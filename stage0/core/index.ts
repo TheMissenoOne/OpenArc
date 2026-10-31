@@ -16,22 +16,25 @@ export interface FakeRef {
 /** JSON has no NaN, Infinity or undefined: in `args` and `expected` these string tokens stand for them (the harness decodes them). */
 export type NumberToken = "$NaN" | "$Infinity" | "$-Infinity";
 /** T, where a number may also be written as a NumberToken and undefined as "$undefined". */
-export type Encoded<T> = [Json] extends [T] ? T : EncodedEach<T>; // Json already admits the string tokens (and recursing into it never ends)
-type EncodedEach<T> = T extends number
+export type Encoded<T, D extends 0[] = []> = D["length"] extends 8 ? T : [Json] extends [T] ? T : EncodedEach<T, D>; // Json already admits the string tokens (and recursing into it never ends)
+// D counts the nesting depth. A recursive alias (`type Nested = Array<number | Nested>`) would otherwise recurse forever
+// (TS2589 on the spec's own `args`). ponytail: from depth 8 on a value is checked as plain T, without the tokens.
+type EncodedEach<T, D extends 0[]> = T extends number
   ? T | NumberToken
   : T extends undefined
     ? T | "$undefined"
     : T extends AnyFn
       ? T
       : T extends object
-        ? { [K in keyof T]: Encoded<T[K]> }
+        ? { [K in keyof T]: Encoded<T[K], [...D, 0]> }
         : T;
 /** Each positional argument may be a FakeRef instead of its value. */
 export type FakeArgs<P extends readonly unknown[]> = { [K in keyof P]: Encoded<P[K]> | FakeRef };
-/** void-returning functions are checked by side effects (fakesAfter), so they take no `expected`. */
-type Expect<F extends AnyFn> = [Awaited<ReturnType<F>>] extends [void]
-  ? { expected?: never }
-  : { expected: Encoded<Awaited<ReturnType<F>>> };
+/** void-returning functions are checked by side effects (fakesAfter), so they take no `expected`. `throws` replaces
+ *  `expected`: the call must throw (or reject); a string must appear in the error's message. */
+type Expect<F extends AnyFn> =
+  | ([Awaited<ReturnType<F>>] extends [void] ? { expected?: never; throws?: never } : { expected: Encoded<Awaited<ReturnType<F>>>; throws?: never })
+  | { throws: true | string; expected?: never };
 
 export type Example<F extends AnyFn> = {
   name?: string;
