@@ -35,8 +35,8 @@ const compileTs = readFileSync(`${root}/src/compile.ts`, "utf8");
     const r = p.regions.find((x) => x.id === id)!;
     return engine.staticCheck(body, r.spec.effects, new Set(), engine.callPolicy(p, r)).map((s) => `${s.diag.code} ${s.diag.detail}`);
   };
-  // the hand-written bodies (stage 0) pass
-  for (const r of p.regions.filter((x) => x.kind === "block")) assert.deepStrictEqual(check(r.id, r.bodyLines.join("\n")), [], r.id);
+  // the hand-written bodies (stage 0) pass; in a self-hosted tree, the compiled ones (pending placeholders are skipped)
+  for (const r of p.regions.filter((x) => x.kind === "block" && !x.pending)) assert.deepStrictEqual(check(r.id, r.bodyLines.join("\n")), [], r.id);
   // Real bodies from the self-compile, each cached as "✓ examples:1/2 (1 inconclusive)" by 0.6.2:
   // recover ran parse and a commit (selfhost .openarc/cache/ef75bfa6…json, verbatim)
   assert.deepStrictEqual(check("compile.run.recover", "project = await engine.parse(ports, req, diagnostics);\n  const journal = planJournal(txid, targets.map(t => ({ target: t, staged: '' })) as any);\n  await recover(ports.fs);\n  await commit(ports.fs, journal);"),

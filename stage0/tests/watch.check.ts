@@ -10,7 +10,7 @@ import { createWatcher, HISTORY, regionKey } from "../src/watcher.ts";
 import { clearStaleLock, releaseOwnLock } from "../src/lock.ts";
 
 /** A fake project: a region is stale while the spec it was last compiled with differs from its current spec. */
-function harness(opts: { specs: Record<string, string>; fails?: string[]; e096Once?: string[]; unreached?: string[]; problems?: (string | null)[]; files?: Record<string, string>; during?: (id: string) => void }) {
+function harness(opts: { specs: Record<string, string>; fails?: string[]; e096Once?: string[]; e096Always?: string[]; e096Extra?: CompileResult["diagnostics"]; unreached?: string[]; problems?: (string | null)[]; files?: Record<string, string>; during?: (id: string) => void }) {
   const specs = { ...opts.specs };
   const compiledWith: Record<string, string> = {};
   const compiled: string[] = [];
@@ -40,6 +40,7 @@ function harness(opts: { specs: Record<string, string>; fails?: string[]; e096On
       await new Promise((r) => setTimeout(r, 15)); // longer than the debounce
       if (opts.fails?.includes(id)) return { exit: 1, diagnostics: [{ code: "OARC-E082", id }], modelCalls: 3 };
       if (opts.unreached?.includes(id)) return { exit: 0, diagnostics: [{ code: "OARC-W045", id: `${id}.blk`, detail: `unreached:${id}` }], modelCalls: 1 };
+      if (opts.e096Always?.includes(id)) return { exit: 1, diagnostics: [{ code: "OARC-E096", file: "src/x.ts" }, ...(opts.e096Extra ?? [])], modelCalls: 1 };
       const e096 = opts.e096Once?.indexOf(id) ?? -1;
       if (e096 >= 0) {
         opts.e096Once!.splice(e096, 1); // the region passed, but the file was saved mid-compile: nothing written
@@ -184,6 +185,34 @@ const history = (files: Map<string, string>) => (files.get(HISTORY) ?? "").split
   assert.ok(!h.lines.some((l) => l.includes("backend not ready")), "no pause");
   assert.deepStrictEqual(h.w.state().failed, []);
   assert.deepStrictEqual(history(h.files).map((e) => `${e.id}:${e.state}`), ["a:running", "a:requeued", "a:running", "a:done", "b:running", "b:done"]);
+}
+
+// ── 10b. (0.6.4) E096 with another error or W045 is a failure, not a re-queue
+for (const extra of [{ code: "OARC-E082", id: "a" }, { code: "OARC-W045", id: "a.blk", detail: "unreached:a" }] as CompileResult["diagnostics"]) {
+  const h = harness({ specs: { a: "s1", b: "s1" }, e096Always: ["a"], e096Extra: [extra] });
+  await h.w.start();
+  await h.settle();
+  assert.deepStrictEqual(h.compiled, ["a", "b"], extra.code);
+  assert.deepStrictEqual(h.w.state().failed, ["a"], extra.code);
+  assert.deepStrictEqual(history(h.files).filter((e) => e.id === "a").map((e) => e.state), ["running", "failed"], extra.code);
+}
+// ── 10c. (0.6.4) E096 every time: re-queued twice, then remembered as failed so b gets its turn
+{
+  const h = harness({ specs: { a: "s1", b: "s1" }, e096Always: ["a"] });
+  await h.w.start();
+  await h.settle();
+  assert.deepStrictEqual(h.compiled, ["a", "a", "a", "b"]);
+  assert.match(h.lines.filter((l) => l.includes("OARC-E096")).at(-1)!, / · gave up: a file it commits to changed during 3 compiles in a row \(E096\)$/);
+  assert.deepStrictEqual(h.w.state().failed, ["a"]);
+  assert.deepStrictEqual(history(h.files).filter((e) => e.id === "a").map((e) => e.state), ["running", "requeued", "running", "requeued", "running", "failed"]);
+}
+// ── 10d. (0.6.4) E096 on a region that stopped being a target during its compile: not re-queued
+{
+  const h = harness({ specs: { a: "s1", b: "s1" }, e096Once: ["a"], during: (id) => void (id === "a" && delete h.specs.a) });
+  await h.w.start();
+  await h.settle();
+  assert.deepStrictEqual(h.compiled, ["a", "b"]);
+  assert.deepStrictEqual(h.w.state().queue, { pending: [], running: null, rerun: [] });
 }
 
 // ── 11. W045 (a generated block no passing example reaches): exit 0, but held back, so the region is remembered as failed

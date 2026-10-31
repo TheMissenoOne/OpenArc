@@ -59,6 +59,8 @@ npx openarc extract src/x.ts   # adopt existing functions as regions (bodies kep
 | `resolve <id> --keep\|--regen\|--unlink` | settle a conflict |
 | `inspect <id>` | spec, state and provenance |
 | `check <id> --oracle <module>#<export>` | compare a compiled region with a reference implementation on its examples plus seeded variations, in the sandbox |
+| `init --backend <preset> [--model <id>] [--base-url <url>]` | start with another backend: `openrouter`, `openai`, `anthropic`, `local` (an OpenAI-compatible server on your machine) or `ollama` |
+| `backends` / `backends test [name]` | list the backends (and whether each key's env var is set), or send one small request and report OK or FAIL with the reason and latency |
 
 ## Configuration: `openarc.config.json`
 
@@ -79,13 +81,16 @@ npx openarc extract src/x.ts   # adopt existing functions as regions (bodies kep
 }
 ```
 
-`provider` is `"ollama"` (local), `"openai"` (any OpenAI-compatible endpoint: OpenAI, OpenRouter, Groq, LM Studio, vLLM, llama.cpp server) or `"anthropic"` (Claude). Hosted backends name the environment variable that holds the key; the key itself never goes in the file:
+`provider` is `"ollama"` (local), `"openai"` (any OpenAI-compatible endpoint), `"anthropic"` (Claude), or one of two presets: `"openrouter"` and `"local"` (llama.cpp `llama-server`, LM Studio, vLLM, Ollama `/v1`; `baseUrl` required, no key). Hosted backends read the key from an environment variable (default `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`); the key itself never goes in the file. Explicit fields override a preset's defaults:
 
 ```json
-"router": { "provider": "openai", "baseUrl": "https://openrouter.ai/api/v1", "apiKeyEnv": "OPENROUTER_API_KEY", "model": "qwen/qwen3-coder", "maxContextTokens": 32768 },
-"openai": { "provider": "openai", "apiKeyEnv": "OPENAI_API_KEY", "model": "gpt-5", "maxContextTokens": 32768 },
-"claude": { "provider": "anthropic", "apiKeyEnv": "ANTHROPIC_API_KEY", "model": "claude-opus-5-5", "maxContextTokens": 64000, "outputReserveTokens": 16000 }
+"router":   { "provider": "openrouter", "model": "qwen/qwen3-coder", "maxContextTokens": 32768 },
+"openai":   { "provider": "openai", "model": "gpt-5", "maxContextTokens": 32768 },
+"claude":   { "provider": "anthropic", "model": "claude-opus-5-5", "maxContextTokens": 64000, "outputReserveTokens": 16000 },
+"llamacpp": { "provider": "local", "baseUrl": "http://127.0.0.1:8080/v1", "model": "qwen3.5-9b", "maxContextTokens": 8192 }
 ```
+
+Check a backend with `npx openarc backends test <name>` before compiling with it.
 
 Ollama backends unload the model after `keepAlive` (default `"2m"`) so two local models don't sit in RAM together. A reply cut at the output cap (`outputReserveTokens`, default 3072) is retried with double the cap. All fields: [docs/wiki/Configuration.md](../docs/wiki/Configuration.md).
 
@@ -103,7 +108,7 @@ These are enforced by the compiler, not by the prompt:
 - The model returns a body string. It never writes files.
 - The body must parse as one function body. It can't close its braces to escape, and it can't contain `@openarc:` markers (a comment that merely mentions the prefix is stripped).
 - With `calls: ["engine.parse", "ports.fs.*"]` on a spec, the body may call only those imported or port functions (`OARC-E098`).
-- A block counts as verified only if a passing example of its function actually runs it; otherwise it is unverified (`OARC-W045`) and not committed.
+- A block counts as verified only if a passing example of its function actually runs it; otherwise it is unverified (`OARC-W045`) and not committed. The exception is a function with no examples: its blocks get `OARC-W041` (no behavioral verification) and are committed without a sandbox run.
 - After splicing, everything outside the region must be byte-identical. The only exception is added imports from the spec's `deps`.
 - Spec statements (`defineRegion`/`defineBlock`) must be byte-identical before a run commits. Tests and fakes are never written.
 - Examples reach the sandbox from the compiler's static parse of your spec. A body can't weaken its own tests at runtime.
@@ -120,4 +125,4 @@ Functions that take ports (filesystem, HTTP, …) are tested with developer-writ
 
 ## Status
 
-0.6.3 (alpha). OpenArc compiles parts of itself; see the [wiki](https://github.com/TheMissenoOne/OpenArc/wiki) and [`SPEC-phase0.md`](https://github.com/TheMissenoOne/OpenArc/blob/main/SPEC-phase0.md).
+0.6.4 (alpha). OpenArc compiles parts of itself; see the [wiki](https://github.com/TheMissenoOne/OpenArc/wiki) and [`SPEC-phase0.md`](https://github.com/TheMissenoOne/OpenArc/blob/main/SPEC-phase0.md).

@@ -94,9 +94,12 @@ const strictSchema = { ...schemaWith(["from", "names", "default"], { type: ["str
 {
   const cfg = (b: object) => parseConfig(JSON.stringify({ version: 1, backends: { x: b } })).error;
   assert.match(cfg({ provider: "openai", model: "m", maxContextTokens: 1, apiKey: "sk-..." })!, /literal "apiKey" is not allowed/);
-  assert.match(cfg({ provider: "anthropic", model: "m", maxContextTokens: 1 })!, /apiKeyEnv/);
+  assert.equal(cfg({ provider: "anthropic", model: "m", maxContextTokens: 1 }), undefined, "0.6.4: apiKeyEnv defaults to ANTHROPIC_API_KEY (tests/v064.check.ts)");
   assert.match(cfg({ provider: "gemini", model: "m", maxContextTokens: 1 })!, /unknown provider/);
   assert.equal(cfg({ provider: "openai", model: "m", maxContextTokens: 1, apiKeyEnv: "K" }), undefined);
+  // 0.6.4: ollamaCompat must be a boolean ("false" is truthy and would send keep_alive/reasoning_effort)
+  assert.match(cfg({ provider: "openai", model: "m", maxContextTokens: 1, ollamaCompat: "false" })!, /"ollamaCompat" must be true or false/);
+  assert.equal(cfg({ provider: "openai", model: "m", maxContextTokens: 1, ollamaCompat: false }), undefined);
 }
 // connection error (Ollama died mid-run): retried exactly once, then given up
 {
@@ -153,6 +156,22 @@ const strictSchema = { ...schemaWith(["from", "names", "default"], { type: ["str
   const an = replies([JSON.stringify({ stop_reason: "max_tokens", content: [{ type: "thinking", thinking: "" }] }), JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: OUT }] })]);
   assert.equal(await complete(an.ports, { provider: "anthropic", model: "m", apiKeyEnv: "ANTHROPIC_API_KEY", maxContextTokens: 64000, outputReserveTokens: 16000 }, "S", "U", env), OUT);
   assert.deepStrictEqual(an.caps.map((b) => (b as { max_tokens: number }).max_tokens), [16000, 32000]);
+  // 0.6.4: the FIRST request is bounded by the room too (8192 - ceil(21000/3.5) = 2192 < 3072), and never below 256
+  const tight = replies([openaiReply]);
+  await complete(tight.ports, { provider: "openai", model: "m", maxContextTokens: 8192 }, "", "x".repeat(21000), env);
+  assert.deepStrictEqual(tight.caps.map((b) => (b as { max_tokens: number }).max_tokens), [2192]);
+  const full = replies([openaiReply]);
+  await complete(full.ports, { provider: "openai", model: "m", maxContextTokens: 8192 }, "", "x".repeat(40000), env);
+  assert.deepStrictEqual(full.caps.map((b) => (b as { max_tokens: number }).max_tokens), [256]);
+  // 0.6.4: a failed doubled-cap retry returns the truncated reply instead of losing it
+  const rejectSecond = (() => {
+    const rs = [cut];
+    const logs: string[] = [];
+    const ports = { log: (l: string) => logs.push(l), http: { async postJson() { const r = rs.shift(); if (!r) throw new Error("HTTP 400: max_tokens too large"); return r; } } } as unknown as Ports;
+    return { ports, logs };
+  })();
+  assert.equal(await complete(rejectSecond.ports, { provider: "ollama", model: "m", maxContextTokens: 16384 }, "S", "U", env, 0), '{"body":"retur');
+  assert.match(rejectSecond.logs[1]!, /retry with 6144 tokens failed \(HTTP 400: max_tokens too large\); using the reply truncated at 3072/);
 }
 // openai provider pointed at Ollama's /v1: keep_alive and reasoning_effort "none" (auto-detected or ollamaCompat)
 {
