@@ -18,6 +18,8 @@ import { buildArgv, readHarnessOutput } from "./sandbox.ts";
 import { readFileSync } from "node:fs";
 import { join, posix, sep } from "node:path";
 import { HARNESS_ENTRY, tierArgv } from "./isolation.ts";
+// palette (structured specs, SPEC §4.5): sketches; hooks below are marked `palette:`
+import * as sketch from "./sketch.ts";
 
 const versionAt = (rel: string): string | undefined => {
   try {
@@ -50,6 +52,7 @@ export interface SpecInfo {
   params: string[];
   isAsync: boolean;
   typeNode?: ts.TypeNode;
+  sketch?: sketch.SketchInfo; // palette: the body as typed code with holes (§4.5)
 }
 
 export interface ManifestEntry {
@@ -230,7 +233,9 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
         const callee = init.expression.getText(sf);
         const kind = /defineRegion$/.test(callee) ? "function" : /defineBlock$/.test(callee) ? "block" : null;
         if (!kind) continue;
-        const literal = init.arguments[0] ? staticJson(init.arguments[0]) : undefined;
+        // palette: `sketch` is read as syntax, not as JSON
+        const arg = init.arguments[0], syn = arg && ts.isObjectLiteralExpression(arg) ? arg.properties.find((x) => ts.isPropertyAssignment(x) && x.name.getText(sf) === "sketch") as ts.PropertyAssignment | undefined : undefined;
+        const literal = arg ? staticJson(syn ? ts.factory.updateObjectLiteralExpression(arg as ts.ObjectLiteralExpression, (arg as ts.ObjectLiteralExpression).properties.filter((x) => x !== syn)) : arg) : undefined;
         const line = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
         if (!literal || typeof literal !== "object" || Array.isArray(literal) || typeof literal.id !== "string") {
           diagnostics.push(err("OARC-E010", { file: rel, line }));
@@ -256,6 +261,17 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           isAsync = checker.typeToString(sig.getReturnType()).startsWith("Promise<");
           if (literal.refine === "next") diagnostics.push(err("OARC-E041", { id, file: rel }));
         }
+        let sk: sketch.SketchInfo | undefined; // palette: a sketch fixes the parameter names and joins the spec hash
+        if (syn) {
+          const r = kind === "function" ? sketch.readSketch(syn.initializer, sf, checker, (f) => (f.startsWith(p.root + "/") && !f.includes("/node_modules/") ? f.slice(p.root.length + 1) : null)) : { error: "sketch:function-regions-only" };
+          if ("error" in r) {
+            diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: r.error }));
+            continue;
+          }
+          sk = r;
+          params = r.params;
+          literal.$sketch = sketch.sketchHashText(r);
+        }
         p.specs.set(id, {
           id, kind, file: rel, exportName: decl.name.text, literal,
           symbol: typeof literal.symbol === "string" ? literal.symbol : id.split(".").at(-1)!,
@@ -264,7 +280,7 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           examples: (literal.examples as Json[] | undefined) ?? [],
           intent: intentText(literal.intent),
           ...(Array.isArray(literal.calls) ? { calls: literal.calls as string[] } : {}),
-          typeText, signature, params, isAsync, typeNode,
+          typeText, signature, params, isAsync, typeNode, ...(sk ? { sketch: sk } : {}),
         });
       }
     }
@@ -331,6 +347,7 @@ export async function analyze(ports: Ports, req: CompileRequest, p: Project, dia
     extractSpecs(p, p.program.getTypeChecker(), diagnostics);
   }
   const checker = p.program.getTypeChecker();
+  diagnostics.push(...sketch.sketchTypeErrors(p.program, p.root, p.specs.values())); // palette: a sketch must type-check before any model call (§4.5)
 
   for (const [rel, text] of srcFiles(p)) {
     const lines = linesOf(text);
@@ -625,13 +642,15 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   const sections: [string, string][] = [];
   const rootSpec = p.specs.get(r.root)!;
 
-  if (r.kind === "function") {
+  if (r.kind === "function" && s.sketch) sections.push(...sketch.sketchHead(s.sketch, s.symbol, s.typeText, s.signature)); // palette
+  else if (r.kind === "function") {
     sections.push(["Fixed signature (write ONLY the statements inside the braces)", `export const ${s.symbol}: ${s.typeText} = ${s.isAsync ? "async " : ""}(${s.params.join(", ")}) => {\n  /* your body */\n};\n// ${s.typeText} = ${s.signature}`]);
   } else {
     sections.push(["Task", `Write ONLY the statements that replace arc.pending("${s.id}") inside function ${rootSpec.symbol}. Do not return, break or continue out of the block; report results by assigning the 'let' variables below.${rootSpec.isAsync ? " await is allowed." : ""}`]);
     sections.push(["Variables in scope", r.scope.join("\n")]);
   }
   const typeRoots: ts.Node[] = s.typeNode ? [s.typeNode] : [];
+  if (s.sketch) typeRoots.push(...s.sketch.callees.flatMap((c) => (c.typeNode ? [c.typeNode] : []))); // palette
   const helperLines: string[] = [];
   // Every level: the file's imports and its other implemented top-level values (same-file helpers and regions).
   const importLines = sf.statements.filter(ts.isImportDeclaration).map((d) => d.getText(sf));
@@ -684,7 +703,9 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   if (sameFileLines.length) sections.push([`Already in ${r.file} (call these, don't re-implement them)`, sameFileLines.join("\n")]);
   if (helperLines.length) sections.push(["Helpers you may call", helperLines.join("\n\n")]);
   sections.push(["Intent", s.intent || "(none)"]);
-  if (s.calls) sections.push(["Calls allowed", `You may call exactly: ${s.calls.join(", ") || "nothing"}. Any other call on an import or a port is rejected (OARC-E098); calls on local variables and on functions you define in the body are fine.`]);
+  sections.push(...sketch.extraSections(p.specs, s)); // palette: functions the sketch calls, concepts
+  if (s.sketch) sections.push(sketch.sketchCalls(s.sketch, s.calls));
+  else if (s.calls) sections.push(["Calls allowed", `You may call exactly: ${s.calls.join(", ") || "nothing"}. Any other call on an import or a port is rejected (OARC-E098); calls on local variables and on functions you define in the body are fine.`]);
   if (r.kind === "function") {
     sections.push(["Effects allowed", s.effects.join(", ") || "none"]);
     sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
@@ -751,10 +772,11 @@ function enclosingSource(p: Project, r: RegionInfo): string {
 // ───────────────────────────── PLAN ─────────────────────────────
 
 export function plan(p: Project, req: CompileRequest, diagnostics: Diagnostic[]): string[] {
-  const { targets, skipped } = selectTargets(
+  const { targets: selected, skipped } = selectTargets(
     p.regions.map((r) => ({ id: r.id, parent: r.parent, state: r.state, stale: r.stale })),
     req.ids,
   );
+  const targets = sketch.calleesFirst(selected, p.specs); // palette: a sketch's callees compile before it (§8.1)
   diagnostics.push(...skipped);
   for (const id of targets) {
     const r = p.regions.find((x) => x.id === id)!;
@@ -1151,7 +1173,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       const digest = await modelDigest(ports, p, backend, diagnostics);
       if (digest === null) return backendDown();
       const context = attempt === 1 && level === initialLevel(p, r) ? r.context0 : buildContext(p, r, level, backend);
-      const rendered = renderTemplate(PROMPT_TEMPLATE, {
+      const rendered = renderTemplate(r.spec.sketch ? sketch.SKETCH_PROMPT_TEMPLATE : PROMPT_TEMPLATE, { // palette: fills protocol
         context,
         repair: previous ? `## Your previous attempt failed\nPrevious body:\n${previous.body}\n\nProblems:\n${previous.problems.join("\n")}\n\nFix these problems.` : "",
       });
@@ -1165,8 +1187,8 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       try {
         raw = await complete(
           ports,
-          sampling ? { ...backend, ...sampling } : backend,
-          "You are a compiler backend. You output JSON only: {\"body\": string, \"imports\": [{\"from\": string, \"names\": string[], \"default\"?: string}]}. body is TypeScript statements only, with no markdown.",
+          { ...(sampling ? { ...backend, ...sampling } : backend), ...(r.spec.sketch ? { outputSchema: sketch.fillsSchema(r.spec.sketch) } : {}) },
+          r.spec.sketch ? sketch.SKETCH_SYSTEM : "You are a compiler backend. You output JSON only: {\"body\": string, \"imports\": [{\"from\": string, \"names\": string[], \"default\"?: string}]}. body is TypeScript statements only, with no markdown.",
           rendered.text,
         );
       } catch (e) {
@@ -1176,7 +1198,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       p.e080Streak = 0;
       modelCalls++;
       const split = splitDefaults(raw);
-      const parsed = parseOutput(split.raw);
+      const parsed = r.spec.sketch ? sketch.parseFills(split.raw, r.spec.sketch) : parseOutput(split.raw); // palette
       const varied = sampling ? ` (identical prompt: temperature ${sampling.temperature}, seed ${sampling.seed})` : "";
       ports.log(`  ${id}: attempt ${attempt} via ${backend.name} (${backend.model}), context L${level} ${context.length} chars${varied}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
       if (!parsed.ok) {
@@ -1197,6 +1219,11 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     }
     const result = await verify(ports, req, p, r, body, imports);
     if (result.ok) {
+      if (result.holes?.length) { // palette: a hole no passing example reaches is unverified (W045): not cached, not committed
+        for (const n of result.holes) diagnostics.push(err("OARC-W045", { id, detail: `hole:${id}#${n}` }));
+        ports.log(`  ${id}: unverified: no passing example reaches hole(s) ${result.holes.map((n) => `«${n}»`).join(", ")} (${result.verifiedBy.join(", ")}); add an example that does`);
+        return giveUp();
+      }
       // A block that no passing example reaches is never cached or counted as verified (W045); the joint check at STAGE
       // holds it back. One reached by none YET, while sibling blocks are still pending, is provisional: cached, and
       // committed only once the joint check sees a passing example reach it.
@@ -1212,9 +1239,13 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     ports.log(`  ${id}: ✗ ${result.problems[0]?.slice(0, 160)}`);
     await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, contextLevel: level, promptHash, sampling, body, imports: imports as unknown as Json, problems: result.problems });
     previous = { body, problems: result.problems };
+    if (result.stop) { // palette: OARC-E100, no fill can fix it
+      diagnostics.push(result.stop);
+      return giveUp();
+    }
     // Escalation by failure type: a missing name means a context problem, so expand; otherwise repair at the same level.
     // The last attempt switches to the fallback backend when one is configured.
-    if (c.context.expandOnFailure && result.missingContext && level < 2) level = (level + 1) as ContextLevel;
+    if (c.context.expandOnFailure && result.missingContext && level < (r.spec.sketch ? 1 : 2)) level = (level + 1) as ContextLevel;
     if (attempt === c.maxAttempts - 1 && c.fallbackBackend) stage = 1;
   }
   diagnostics.push(err("OARC-E082", { id, detail: previous?.problems[0]?.slice(0, 200) }));
@@ -1227,6 +1258,8 @@ interface Verified {
   verifiedBy: string[];
   missingContext: boolean;
   unverified?: boolean; // a block that passing examples never reach while every example was conclusive (W045)
+  holes?: number[]; // palette: sketch holes no passing example reaches (W045)
+  stop?: Diagnostic; // palette: OARC-E100, stop the repair loop
 }
 
 /** Specifiers a file imports from. */
@@ -1248,7 +1281,10 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   // Requested imports are file bindings too: `import crypto from "node:crypto"` makes `crypto` a binding, not the global.
   const bound = fileBindings(base);
   for (const i of imports) [...i.names, ...(i.default ? [i.default] : [])].forEach((n) => bound.add(n));
-  const st = staticCheck(body, r.spec.effects, bound, callPolicy(p, r, imports));
+  // palette: a sketch region's body must be its sketch with only the holes filled (E099); fills keep §3.4 and the implied calls
+  const sk = r.spec.sketch ? sketch.checkSketchBody(r.spec.sketch, body, r.spec.calls ?? []) : null;
+  if (sk?.problems.length) return fail(sk.problems);
+  const st = staticCheck(body, r.spec.effects, bound, sk ? undefined : callPolicy(p, r, imports));
   if (st.length) return fail(st.map((s) => `${s.diag.code} ${s.message}`));
   if (r.kind === "block") {
     const rs = checkRestrictions(body, p.specs.get(r.root)?.isAsync ?? false, []);
@@ -1283,15 +1319,21 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   // examples in the sandbox: the region's own (function) or its enclosing function's (block)
   const rootSpec = p.specs.get(r.root)!;
   if (rootSpec.examples.length) {
-    const res = await runSandbox(ports, req, p, r.root, overlay, undefined, r.kind === "block" ? [r.id] : []);
+    // palette: a sketch's sandbox copy carries one coverage probe per hole
+    const sbOverlay = sk ? new Map(overlay).set(r.file, mergeImports(spliceRegion(base, r.id, regionBodyLines(r, sketch.spliceFills(r.spec.sketch!, sk.fills, r.id))), imports, typeOnly)) : overlay;
+    const res = await runSandbox(ports, req, p, r.root, sbOverlay, undefined, r.kind === "block" ? [r.id] : []);
     const pendingSiblings = (o: { actual?: Json }) =>
       typeof o.actual === "object" && o.actual !== null && !Array.isArray(o.actual) && typeof o.actual.pending === "string" && r.kind === "block";
     const real = res.failed.filter((o) => !pendingSiblings(o));
     if (res.error) return fail([res.error]);
+    const conflict = sk && real.length ? sketch.sketchConflict(res.stdout ?? "", r.id) : null; // palette: OARC-E100
+    if (conflict) return { ...fail([`OARC-E100 example "${conflict.detail}" fails without reaching any hole: the sketch decides it, so no fill can fix it`]), stop: conflict };
     if (real.length || (!res.complete && r.kind === "function"))
       return fail(real.map((o) => `OARC-E090 example "${o.name}" failed: got ${showValue(o.actual)}; expected ${showValue(exampleExpected(rootSpec, o.name))}`).concat(res.complete ? [] : ["OARC-E090 harness output incomplete (process exited early?)"]));
     verifiedBy.push(`examples:${res.passed}/${rootSpec.examples.length}${res.failed.length ? ` (${res.failed.length} inconclusive: sibling blocks pending)` : ""}`);
     if (r.kind === "block") verifiedBy.push(`via:${r.root}`);
+    const holes = sk ? sketch.unreachedHoles(r.spec.sketch!, r.id, res.hits) : [];
+    if (holes.length) return { ok: true, problems: [], verifiedBy, missingContext: false, holes }; // palette: W045 per hole
     if (r.kind === "block" && !res.hits.has(r.id)) {
       verifiedBy.push("unreached");
       if (!res.failed.length) {
@@ -1346,7 +1388,7 @@ function harnessHits(stdout: string): Set<string> {
   return hits;
 }
 
-type SandboxResult = { complete: boolean; passed: number; failed: { name: string; actual?: Json }[]; hits: Set<string>; error?: string };
+type SandboxResult = { complete: boolean; passed: number; failed: { name: string; actual?: Json }[]; hits: Set<string>; error?: string; stdout?: string };
 
 async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId: string, overlay: Map<string, string>, oracle?: { module: string; export: string; inputs: Json[][] }, probe: string[] = []): Promise<SandboxResult> {
   const none = new Set<string>();
@@ -1382,7 +1424,7 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
     : tierArgv(tier, { ...limits, root: p.root, stageDir: join(p.root, dir), containerImage: req.sandbox.containerImage });
   const res = await ports.proc.run(argv, ((sb.cpuSeconds ?? req.sandbox.cpuSeconds) + 20) * 1000);
   if (res.timedOut) return { complete: false, passed: 0, failed: [], hits: none, error: "OARC-E091 sandbox timed out" };
-  const summary = { ...readHarnessOutput(res.stdout), hits: harnessHits(res.stdout) };
+  const summary = { ...readHarnessOutput(res.stdout), hits: harnessHits(res.stdout), stdout: res.stdout };
   if (!summary.complete && summary.passed === 0 && summary.failed.length === 0)
     return { ...summary, error: `OARC-E090 harness crashed (exit ${res.code}): ${res.stdout.slice(-600)}` };
   return summary;

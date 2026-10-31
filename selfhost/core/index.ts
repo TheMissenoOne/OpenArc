@@ -47,7 +47,8 @@ export type Example<F extends AnyFn> = {
 export interface RegionSpec<F extends AnyFn> {
   id: string;
   symbol?: string;
-  intent: string | string[]; // array form is joined with single spaces (static, no .join call)
+  /** Required unless `sketch` (or `ui`) is present. Array form is joined with single spaces (static, no .join call). */
+  intent?: string | string[];
   effects?: Effect[];
   deps?: string[];
   examples?: Example<F>[];
@@ -56,6 +57,43 @@ export interface RegionSpec<F extends AnyFn> {
   refine?: "concrete" | "next";
   /** Allowlist of imported or port functions the body may call ("engine.parse", "ports.fs.remove", "engine.*"). Absent: unrestricted. */
   calls?: string[];
+  /** The body as typed TypeScript with `arc.hole<T>("…")` gaps. Read as syntax, never run; the model fills only the holes. */
+  sketch?: F;
+  /** This region is a variant of the concept with that id: the concept's laws become authoritative examples. */
+  concept?: string;
+  /** Values substituted for "$fixture:<name>" in the concept's laws. */
+  fixtures?: { [name: string]: Json };
+  /** law name -> why that law does not apply to this variant (printed and recorded in the manifest). */
+  waive?: { [law: string]: string };
+}
+
+/** A concept law: an example template. Any "$fixture:<name>" string in it is replaced by the variant's fixtures[name]. */
+export interface Law {
+  name: string;
+  args: Json[];
+  expected?: Json;
+  fakesAfter?: { [fake: string]: Json };
+  tolerance?: number;
+  exact?: boolean;
+}
+
+/** A family of regions (variants) that share an intent and laws. Compiled once per variant, used by import. */
+export interface ConceptSpec {
+  id: string;
+  intent: string | string[];
+  laws: Law[];
+  /** Optional: the name of a type (in the concept's file) that every variant's F must instantiate. */
+  interface?: string;
+}
+
+export function defineConcept(spec: ConceptSpec): ConceptSpec {
+  return spec;
+}
+
+/** A typed gap in a sketch. As an expression it stands for one value of type T; as a statement, for 0..n statements.
+ *  Sketches are read as syntax and never run, so this only throws if called by mistake. */
+export function hole<T = void>(description: string): T {
+  throw new Error(`openarc: arc.hole is a sketch placeholder, not runnable code: ${description}`);
 }
 
 export interface BlockSpec {

@@ -11,7 +11,8 @@ export interface Outcome {
   name: string;
   ok: boolean;
   actual?: Json;
-  /** Coverage probe (spec §8.10): ids of the probed blocks this passing example executed. */
+  /** Coverage probe (spec §8.10): ids of the probed blocks (and sketch holes, "<id>#<n>") this example executed.
+   *  Only a passing example's hits count as coverage; a failing one's tell OARC-E100 whether it reached any hole. */
   hits?: string[];
 }
 
@@ -94,7 +95,8 @@ export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyF
     const fakes = new Map<string, FakeInstance<unknown>>();
     const eq: EqualOptions = { tolerance: ex.tolerance ?? spec.tolerance, exact: ex.exact };
     const scope: HitScope = { hits: new Set<string>(), open: true };
-    const passed = (): Outcome => (scope.hits.size ? { name, ok: true, hits: [...scope.hits].sort() } : { name, ok: true });
+    const withHits = (o: Outcome): Outcome => (scope.hits.size ? { ...o, hits: [...scope.hits].sort() } : o);
+    const passed = (): Outcome => withHits({ name, ok: true });
     try {
       const args: unknown[] = [];
       for (const a of decodeTokens(ex.args) as unknown[]) {
@@ -112,7 +114,7 @@ export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyF
       }
       const actual = await attribution.run(scope, () => fn(...args));
       if ("expected" in ex && !valuesEqual(actual, decodeTokens(ex.expected), eq)) {
-        out.push({ name, ok: false, actual: toJson(actual) });
+        out.push(withHits({ name, ok: false, actual: toJson(actual) }));
         continue;
       }
       const after: Record<string, Json> = {};
@@ -122,10 +124,10 @@ export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyF
         after[fake] = got;
         if (!valuesEqual(JSON.parse(JSON.stringify(got)), decodeTokens(want), eq)) fakesOk = false; // snapshots compare as JSON
       }
-      out.push(fakesOk ? passed() : { name, ok: false, actual: { fakesAfter: after } });
+      out.push(fakesOk ? passed() : withHits({ name, ok: false, actual: { fakesAfter: after } }));
     } catch (e) {
-      if (e instanceof OpenArcTodoError) out.push({ name, ok: false, actual: { pending: e.id } });
-      else out.push({ name, ok: false, actual: { throws: e instanceof Error ? e.message : String(e) } });
+      if (e instanceof OpenArcTodoError) out.push(withHits({ name, ok: false, actual: { pending: e.id } }));
+      else out.push(withHits({ name, ok: false, actual: { throws: e instanceof Error ? e.message : String(e) } }));
     } finally {
       scope.open = false;
     }

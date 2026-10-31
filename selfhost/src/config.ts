@@ -37,6 +37,9 @@ export interface BackendConfig {
   headers?: Record<string, string>; // extra headers, e.g. OpenRouter's HTTP-Referer / X-Title
   structuredOutput?: "json_schema" | "json_object"; // openai only, default json_schema
   ollamaCompat?: boolean; // openai only: the endpoint is Ollama's /v1 (default: baseUrl ends in :11434/v1). Sends keep_alive and reasoning_effort "none"
+  /** Set by the engine per request, never read from the file: the structured-output schema to use instead of the
+   *  `{body, imports}` one (sketch regions reply `{fills, imports}`). `strict` is for OpenAI json_schema. */
+  outputSchema?: { loose: Json; strict: Json };
 }
 
 export const DEFAULT_OUTPUT_RESERVE = 3072;

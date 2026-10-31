@@ -18,7 +18,7 @@ for (const file of readdirSync(`${root}/src`).filter((f) => f.endsWith(".ts")).s
   const mod = await import(pathToFileURL(`${root}/src/${file}`).href);
   for (const value of Object.values(mod)) {
     const spec = value as RegionSpec<AnyFn>;
-    if (typeof spec !== "object" || spec === null || typeof spec.id !== "string" || !("intent" in spec)) continue;
+    if (typeof spec !== "object" || spec === null || typeof spec.id !== "string" || !("intent" in spec || "sketch" in spec)) continue;
     if (!spec.id.startsWith(prefix) || !spec.examples?.length) continue;
     const symbol = spec.symbol ?? spec.id.split(".").at(-1)!;
     const outcomes = await runExamples(root, mod[symbol] as AnyFn, spec);
