@@ -223,10 +223,10 @@ try {
     assert.deepStrictEqual(m["lb.ringHash"]!.provenance.verifiedBy, ["tsc", "static", "examples:1/1", "tests:1/1"], "JSON examples and tests on one region");
     assert.deepStrictEqual(m["p2p.peer.receive"]!.provenance.verifiedBy, ["tsc", "static", "tests:2/2"], "fakes by type, in the sandbox");
     assert.ok(Object.values(m).every((e) => e.ownership === "compiler" && e.provenance.outputFormat === fmt));
-    const text = src("src/lb/balancer.ts");
+    const text = src("src/lb/balancer.ts").replace(/\r\n/g, "\n"); // a CRLF checkout (Windows) keeps CRLF on write
     assert.ok(text.includes("  pick(key: string): string | null {\n    // @openarc:begin lb.roundRobin.pick\n    const hs = this.healthy();"), text);
     assert.ok(!text.includes("__openarcHit") && src("tests/balancer.test.ts") === FIXTURE["tests/balancer.test.ts"], "probes and assertion indexes stay in the stage");
-    assert.ok(src("src/p2p/peer.ts").includes("    // @openarc:begin p2p.peer.receive\n    if (this.seen.includes(msg.id)) return false;"));
+    assert.ok(src("src/p2p/peer.ts").replace(/\r\n/g, "\n").includes("    // @openarc:begin p2p.peer.receive\n    if (this.seen.includes(msg.id)) return false;"));
     const tsc = await new Promise<number>((done) => execFile(process.execPath, [join(root, "node_modules", "typescript", "bin", "tsc"), "-p", "."], { cwd: proj }, (e) => done(e ? 1 : 0)));
     assert.equal(tsc, 0, "the committed project type-checks");
   }
