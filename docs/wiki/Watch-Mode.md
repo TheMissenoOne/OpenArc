@@ -88,7 +88,9 @@ A compile that ends with `OARC-E096` is not the region's fault: it may well have
 
 Before 0.6.3 it said `still pending` and was remembered as failed, so a region that had just passed could be stranded until its own spec changed.
 
-A compile that held back a block with `OARC-W045` (no example reaches it) is remembered as failed, `held back: an example must reach every block (W045)`, until the spec or its examples change.
+Since 0.6.4 this applies only when `OARC-E096` is the run's sole problem (no other error, no `OARC-W045`), and only while the region is still a target. After 3 `OARC-E096` runs in a row the region is remembered as failed, `gave up: a file it commits to changed during 3 compiles in a row (E096)`, so a file saved during every compile can't keep other regions waiting.
+
+A compile that held back a block with `OARC-W045` (no example reaches it) is remembered as failed, `held back: an example must reach every block (W045)`, until the spec or its examples change, or a config or fake file changes.
 
 ## History
 

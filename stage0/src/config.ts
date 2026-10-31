@@ -11,12 +11,19 @@ export type ContextLevel = 0 | 1 | 2;
 /** "ollama": local /api/chat. "openai": any OpenAI-compatible Chat Completions endpoint (OpenAI, OpenRouter, Groq,
  *  LM Studio, vLLM, llama.cpp server). "anthropic": the Claude Messages API. */
 export type Provider = "ollama" | "openai" | "anthropic";
+/** What a config file may write as `provider`: a Provider, or a preset that parseConfig normalises to one.
+ *  "openrouter": openai at https://openrouter.ai/api/v1, key env OPENROUTER_API_KEY, header X-Title: OpenArc, json_object.
+ *  "local": an OpenAI-compatible server on your machine (llama.cpp llama-server, LM Studio, vLLM, Ollama /v1): baseUrl
+ *  required, no key, ollamaCompat when the URL has :11434. Explicit fields always win over a preset's defaults. */
+export type Preset = Provider | "openrouter" | "local";
+export const PRESETS: readonly Preset[] = ["ollama", "openai", "anthropic", "openrouter", "local"];
 
 export interface BackendConfig {
   provider: Provider;
+  preset?: Preset; // set by parseConfig: what the file said; part of the fingerprint
   model: string;
   maxContextTokens: number; // the context budget = this minus outputReserveTokens; Ollama also gets it as num_ctx
-  outputReserveTokens?: number; // default 3072 (DEFAULT_OUTPUT_RESERVE); the output cap: Ollama num_predict, hosted max_tokens. A truncated reply is retried with double the cap (backends.complete)
+  outputReserveTokens?: number; // default 3072 (DEFAULT_OUTPUT_RESERVE), bounded by the context left after the prompt; the output cap: Ollama num_predict, hosted max_tokens. A truncated reply is retried with double the cap (backends.complete)
   seed?: number; // default 1 (ollama, openai)
   temperature?: number; // default 0 (ollama, openai); a retry with a byte-identical prompt raises it (engine.retrySampling)
   // ollama
@@ -76,13 +83,15 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
     const bad = (why: string) => ({ config: DEFAULT_CONFIG, error: `openarc.config.json: backend "${name}": ${why}` });
     if (typeof b !== "object" || b === null) return bad("must be an object");
     if ("apiKey" in b) return bad(`literal "apiKey" is not allowed; put the key in an env var and name it in "apiKeyEnv"`);
-    if (!["ollama", "openai", "anthropic"].includes(b.provider)) return bad(`unknown provider "${b.provider}"`);
-    if (b.provider === "anthropic" && !b.apiKeyEnv) return bad(`"apiKeyEnv" is required`);
+    if (!PRESETS.includes(b.provider)) return bad(`unknown provider "${b.provider}" (one of ${PRESETS.join(", ")})`);
+    if ((b.provider as Preset) === "local" && typeof b.baseUrl !== "string") return bad(`"baseUrl" is required for provider "local" (e.g. http://127.0.0.1:8080/v1)`);
     if (b.structuredOutput !== undefined && !["json_schema", "json_object"].includes(b.structuredOutput)) return bad(`"structuredOutput" must be json_schema or json_object`);
+    if (b.ollamaCompat !== undefined && typeof b.ollamaCompat !== "boolean") return bad(`"ollamaCompat" must be true or false`);
   }
   return {
     config: {
       ...c,
+      backends: Object.fromEntries(Object.entries(c.backends).map(([name, b]) => [name, applyPreset(b)])),
       compilation: {
         defaultBackend: c.compilation?.defaultBackend ?? names[0]!,
         fallbackBackend: c.compilation?.fallbackBackend,
@@ -94,3 +103,34 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
 }
 
 export const hostOf = (b: BackendConfig) => (b.host ?? "http://127.0.0.1:11434").replace(/\/$/, "");
+
+/** A backend as written in the file -> a backend of one of the three providers. Deterministic: preset defaults first,
+ *  then every explicit field. */
+export function applyPreset(b: BackendConfig): BackendConfig {
+  const preset = (b.preset ?? b.provider) as Preset;
+  const set = Object.fromEntries(Object.entries(b).filter(([, v]) => v !== undefined)) as Partial<BackendConfig>;
+  switch (preset) {
+    case "openrouter":
+      return { baseUrl: "https://openrouter.ai/api/v1", apiKeyEnv: "OPENROUTER_API_KEY", structuredOutput: "json_object", ...set, headers: { "X-Title": "OpenArc", ...b.headers }, provider: "openai", preset } as BackendConfig;
+    case "local":
+      return { ollamaCompat: (b.baseUrl ?? "").includes(":11434"), ...set, provider: "openai", preset } as BackendConfig;
+    case "openai":
+      return { ...(b.baseUrl === undefined || b.baseUrl.replace(/\/$/, "") === "https://api.openai.com/v1" ? { apiKeyEnv: "OPENAI_API_KEY" } : {}), ...set, preset } as BackendConfig;
+    case "anthropic":
+      return { apiKeyEnv: "ANTHROPIC_API_KEY", ...set, preset } as BackendConfig;
+    default:
+      return { ...set, preset } as BackendConfig;
+  }
+}
+
+/** `openarc init --backend <preset> [--model <id>] [--base-url <url>]`: a config whose default backend is that preset.
+ *  Only what the user chose is written; the preset fills in the rest when the file is read. A string is a usage error. */
+export function presetConfig(preset: string, model?: string, baseUrl?: string): OpenArcConfig | string {
+  if (!PRESETS.includes(preset as Preset)) return `unknown backend preset "${preset}" (one of ${PRESETS.join(", ")})`;
+  if (preset !== "ollama" && !model) return `--backend ${preset} needs --model <id>`;
+  if (preset === "local" && !baseUrl) return `--backend local needs --base-url <url>, e.g. http://127.0.0.1:8080/v1 (llama-server), :1234/v1 (LM Studio), :8000/v1 (vLLM)`;
+  const b: BackendConfig = preset === "ollama"
+    ? { ...DEFAULT_CONFIG.backends.local!, ...(model ? { model } : {}), ...(baseUrl ? { host: baseUrl } : {}) }
+    : { provider: preset as Provider, model: model!, maxContextTokens: preset === "local" ? 8192 : 32768, ...(baseUrl ? { baseUrl } : {}) };
+  return { ...DEFAULT_CONFIG, backends: { [preset]: b }, compilation: { ...DEFAULT_CONFIG.compilation, defaultBackend: preset } };
+}

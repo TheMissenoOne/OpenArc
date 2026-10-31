@@ -10,7 +10,8 @@ import { parseArgv } from "./cli.ts";
 import { run } from "./compile.ts";
 import { commit, planJournal, recover } from "./txn.ts";
 import * as engine from "./engine.ts";
-import { DEFAULT_CONFIG, hostOf } from "./config.ts";
+import { DEFAULT_CONFIG, hostOf, parseConfig, presetConfig, type OpenArcConfig } from "./config.ts";
+import { describeBackend, testBackend } from "./backends.ts";
 import { clearStaleLock, releaseOwnLock } from "./lock.ts";
 import { createWatcher, regionKey, type RegionKey } from "./watcher.ts";
 import { watchDirs } from "./dirwatch.ts";
@@ -184,10 +185,51 @@ async function analyzeOffline(ports: Ports, root: string, diagnostics: Diagnosti
   return project;
 }
 
-const USAGE = `usage: openarc init | scaffold | compile [--keep-going] [ids...] | watch [--debounce <ms>] | graph | inspect <id>
+const USAGE = `usage: openarc init [--backend <preset> [--model <id>] [--base-url <url>]] | backends [test [name]] | scaffold | compile [--keep-going] [ids...] | watch [--debounce <ms>] | graph | inspect <id>
        openarc freeze|release <id> | resolve <id> --keep|--regen|--unlink
        openarc extract <file> [--function <name>] [--id <id>]
        openarc check <id> --oracle <module>#<export>`;
+
+/** `openarc backends [test [name]]`: list the configured backends, or send one tiny request through one of them. */
+async function backends(ports: Ports, args: string[]): Promise<number> {
+  const text = await ports.fs.read("openarc.config.json");
+  const { config, error } = parseConfig(text);
+  if (error) {
+    console.error(error);
+    return 1;
+  }
+  if (args.length === 0) {
+    if (text === null) console.log("no openarc.config.json: the built-in default (run `openarc init`)");
+    for (const [name, b] of Object.entries(config.backends)) console.log(describeBackend(name, b, name === config.compilation.defaultBackend));
+    return 0;
+  }
+  if (args[0] !== "test" || args.length > 2) {
+    console.error(`openarc: bad-flag\n\n${USAGE}`);
+    return 2;
+  }
+  const name = args[1] ?? config.compilation.defaultBackend;
+  const b = config.backends[name];
+  if (!b) {
+    console.error(`no backend "${name}" (configured: ${Object.keys(config.backends).join(", ")})`);
+    return 2;
+  }
+  console.log(describeBackend(name, b, name === config.compilation.defaultBackend));
+  const r = await testBackend(ports, b);
+  console.log(`${name}: ${r.ok ? "OK" : "FAIL"} ${(r.ms / 1000).toFixed(1)}s · ${r.detail}`);
+  return r.ok ? 0 : 1;
+}
+
+/** `openarc init` flags: --backend <preset> [--model <id>] [--base-url <url>] -> the config to write, or a usage error. */
+function initConfig(args: string[]): OpenArcConfig | string {
+  if (args.length === 0) return DEFAULT_CONFIG;
+  const o: Record<string, string> = {};
+  for (let i = 0; i < args.length; i += 2) {
+    const v = args[i + 1];
+    if (!["--backend", "--model", "--base-url"].includes(args[i]!) || v === undefined) return "bad-flag";
+    o[args[i]!] = v;
+  }
+  return o["--backend"] ? presetConfig(o["--backend"], o["--model"], o["--base-url"]) : "init --model/--base-url need --backend <preset>";
+}
 
 /** `openarc check <id> --oracle <module>#<export>`: differential test against a reference implementation (engine.oracleCheck). */
 async function check(root: string, ports: Ports, args: string[]): Promise<number> {
@@ -215,6 +257,13 @@ async function main(argv: string[]): Promise<number> {
   // ponytail: `check` is parsed here, not in the cli.parseArgv region, so the self-hosted tree keeps its generated body.
   // Move it into cli.parseArgv's spec at the next self-compile.
   if (argv[0] === "check") return check(root, ports, argv.slice(1));
+  // Same for `backends` and init's --backend flags (cli.parseArgv returns {cmd: "init"} whatever follows).
+  if (argv[0] === "backends") return backends(ports, argv.slice(1));
+  const initWith = argv[0] === "init" ? initConfig(argv.slice(1)) : DEFAULT_CONFIG;
+  if (typeof initWith === "string") {
+    console.error(`openarc: ${initWith}\n\n${USAGE}`);
+    return 2;
+  }
   const cmd = parseArgv(argv);
   const diagnostics: Diagnostic[] = [];
   const print = () => diagnostics.forEach((d) => console.error(fmt(d)));
@@ -234,7 +283,9 @@ async function main(argv: string[]): Promise<number> {
           wrote.push(rel);
         }
       };
-      await put("openarc.config.json", JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n");
+      const hadConfig = (await ports.fs.read("openarc.config.json")) !== null;
+      await put("openarc.config.json", JSON.stringify(initWith, null, 2) + "\n");
+      if (hadConfig && argv.length > 1) console.log("note: openarc.config.json already exists and was not changed; add the backend to it by hand (see `openarc backends`)");
       await put("tsconfig.json", JSON.stringify(TSCONFIG, null, 2) + "\n");
       await put(manifestPath, '{\n  "schema": 1,\n  "regions": {}\n}\n');
       await put(".openarc/harness.mjs", 'import { main } from "open-arc/harness";\nawait main("/work", process.argv[2]);\n');
@@ -246,6 +297,16 @@ async function main(argv: string[]): Promise<number> {
         wrote.push(".openarc/.gitignore");
       }
       console.log(wrote.length ? `created: ${wrote.join(", ")}` : "already initialised");
+      // `npm init -y` writes "type": "commonjs" now; tsc then fails with TS1295. The user's file: say so, don't edit it.
+      const pkg = await ports.fs.read("package.json");
+      let type: unknown = "module";
+      try {
+        if (pkg !== null) type = (JSON.parse(pkg) as { type?: unknown }).type;
+      } catch {
+        // not JSON: npm reports that itself
+      }
+      if (type !== "module") console.log(`note: package.json ${type === undefined ? 'has no "type"' : `has "type": ${JSON.stringify(type)}`}; OpenArc projects are ES modules (tsc fails with TS1295 otherwise): run \`npm pkg set type=module\``);
+      if (initWith !== DEFAULT_CONFIG) console.log(`backend: ${initWith.compilation.defaultBackend}; check it with \`npx openarc backends test\``);
       console.log("next: write defineRegion specs in src/*.ts, then `npx openarc scaffold` (adds the exported symbols other files import),\nthen `npx tsc -p .`, then `npx openarc compile`");
       return 0;
     }

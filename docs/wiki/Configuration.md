@@ -28,46 +28,60 @@ The project chooses its agents, the same way `package.json` chooses dependencies
 |---|---|---|---|
 | `ollama` | local Ollama `/api/chat` | `format: <schema>` | `host` (default `http://127.0.0.1:11434`), `think`, `keepAlive` (default `"2m"`) |
 | `openai` | any OpenAI-compatible Chat Completions endpoint: OpenAI, OpenRouter, Groq, LM Studio, vLLM, llama.cpp server | `response_format` `json_schema` (strict), or `json_object` | `baseUrl` (default `https://api.openai.com/v1`), `apiKeyEnv` (optional for keyless local servers), `headers`, `structuredOutput` |
-| `anthropic` | Claude Messages API | `output_config.format` `json_schema` | `baseUrl` (default `https://api.anthropic.com/v1`), `apiKeyEnv` (required), `headers` |
+| `anthropic` | Claude Messages API | `output_config.format` `json_schema` | `baseUrl` (default `https://api.anthropic.com/v1`), `apiKeyEnv` (default `ANTHROPIC_API_KEY`), `headers` |
+| `openrouter` | preset: `openai` at `https://openrouter.ai/api/v1` | `json_object` by default | as `openai`; defaults `apiKeyEnv: "OPENROUTER_API_KEY"`, header `X-Title: OpenArc` |
+| `local` | preset: `openai` at a server on your machine (llama.cpp `llama-server`, LM Studio, vLLM, Ollama `/v1`) | `json_schema` | as `openai`; `baseUrl` required, no key; `ollamaCompat` defaults to true when the URL contains `:11434` |
+
+`openrouter` and `local` are presets: when the file is read they become `provider: "openai"` with the defaults above filled in. Any field you write yourself wins over a preset's default. The `openai` provider also defaults `apiKeyEnv` to `OPENAI_API_KEY` when `baseUrl` is OpenAI's own (or unset). The preset and the resulting endpoint settings are part of the fingerprint, so changing them recompiles what that backend compiled.
 
 **API keys never go in the config file.** `apiKeyEnv` is the *name* of an environment variable; OpenArc reads the key from it at call time. A literal `"apiKey"` field is rejected (`OARC-E051`). An unset variable fails the call with `OARC-E080` and detail `missing-key:<ENV_NAME>`; the key itself is never printed, logged, or put in a diagnostic.
 
-OpenRouter (any model it hosts, through its OpenAI-compatible API):
+## Connecting providers
 
-```json
-"router": {
-  "provider": "openai",
-  "baseUrl": "https://openrouter.ai/api/v1",
-  "apiKeyEnv": "OPENROUTER_API_KEY",
-  "model": "qwen/qwen3-coder",
-  "headers": { "HTTP-Referer": "https://github.com/you/your-project", "X-Title": "OpenArc" },
-  "maxContextTokens": 32768
-}
+The quickest way is `init` with a preset, then a one-request check:
+
+```bash
+npx openarc init --backend openrouter --model qwen/qwen3-coder
+export OPENROUTER_API_KEY=...
+npx openarc backends test
 ```
 
-If the routed model rejects `json_schema`, add `"structuredOutput": "json_object"`.
+`openarc init --backend <preset> [--model <id>] [--base-url <url>]` writes `openarc.config.json` with that backend as the default (`--model` is required except for `ollama`; `--base-url` is required for `local`). It never changes an existing `openarc.config.json`; add the backend to that file by hand. `openarc backends` lists the configured backends with provider, model, URL and whether each key's env var is set (never the key). `openarc backends test [name]` (default: the default backend) sends one small structured request through the same code path a compile uses and prints `OK` or `FAIL` with the reason and the latency. The reasons it reports are: missing key, unreachable, auth rejected (401/403), model not found, model not pulled (Ollama), `json_schema` unsupported (switch to `"structuredOutput": "json_object"`), and invalid JSON.
+
+OpenRouter (any model it hosts):
+
+```json
+"router": { "provider": "openrouter", "model": "qwen/qwen3-coder", "maxContextTokens": 32768 }
+```
+
+This uses `OPENROUTER_API_KEY`, `json_object` (many routed models lack strict `json_schema`; set `"structuredOutput": "json_schema"` to override) and `X-Title: OpenArc`. Add `"headers": { "HTTP-Referer": "https://github.com/you/your-project" }` if you want attribution.
 
 OpenAI:
 
 ```json
-"openai": { "provider": "openai", "apiKeyEnv": "OPENAI_API_KEY", "model": "gpt-5", "maxContextTokens": 32768 }
+"openai": { "provider": "openai", "model": "gpt-5", "maxContextTokens": 32768 }
 ```
 
 Anthropic:
 
 ```json
-"claude": {
-  "provider": "anthropic",
-  "apiKeyEnv": "ANTHROPIC_API_KEY",
-  "model": "claude-opus-5-5",
-  "maxContextTokens": 64000,
-  "outputReserveTokens": 16000
-}
+"claude": { "provider": "anthropic", "model": "claude-opus-5-5", "maxContextTokens": 64000, "outputReserveTokens": 16000 }
 ```
 
 Current Claude models always think before answering, and thinking counts against `max_tokens`, so give them a generous `outputReserveTokens`. For a cheaper backend use `"claude-sonnet-5-5"` or `"claude-haiku-5-5"`.
 
-Then export the key in your shell (`export OPENROUTER_API_KEY=...`) and point `compilation.defaultBackend` or `fallbackBackend` at the backend. A common setup is a local Ollama default with a hosted model as `fallbackBackend`.
+Local OpenAI-compatible servers (no key):
+
+```json
+"llamacpp": { "provider": "local", "baseUrl": "http://127.0.0.1:8080/v1", "model": "qwen3.5-9b", "maxContextTokens": 8192 },
+"lmstudio": { "provider": "local", "baseUrl": "http://127.0.0.1:1234/v1", "model": "qwen3.5-9b", "maxContextTokens": 8192 },
+"vllm":     { "provider": "local", "baseUrl": "http://127.0.0.1:8000/v1", "model": "Qwen/Qwen3.5-9B", "maxContextTokens": 8192 },
+"ollamav1": { "provider": "local", "baseUrl": "http://127.0.0.1:11434/v1", "model": "qwen3.5:9b", "maxContextTokens": 8192 }
+```
+
+llama.cpp's `llama-server` serves whatever model it was started with, so `model` is only a label there; LM Studio and vLLM need the id they list at `/v1/models`. vLLM rejects a request whose prompt plus `max_tokens` exceeds the window; OpenArc bounds the output cap by the room left after the prompt. For Ollama itself the native `ollama` provider is still the default (`openarc init` without `--backend`); it checks that the model is pulled and records its digest.
+
+Export the key in your shell (`export OPENROUTER_API_KEY=...`) and point `compilation.defaultBackend` or `fallbackBackend` at the backend. A common setup is a local Ollama default with a hosted model as `fallbackBackend`.
 
 ## Fields
 
@@ -75,7 +89,7 @@ Then export the key in your shell (`export OPENROUTER_API_KEY=...`) and point `c
 |---|---|
 | `backends.*.maxContextTokens` | the size of the context budget (see [[Context Packages]]); Ollama also gets it as `num_ctx` |
 | `backends.*.outputReserveTokens` | tokens kept free for the answer (default 3072), and the output cap: Ollama gets it as `num_predict`, hosted APIs as `max_tokens`. A reply cut at the cap is retried with double the cap, up to `maxContextTokens` minus the prompt, and logged |
-| `backends.*.ollamaCompat` | `openai` provider only: the endpoint is Ollama's `/v1`, so also send `keep_alive` (from `keepAlive`) and `reasoning_effort: "none"`. Default: true when `baseUrl` ends in `:11434/v1` |
+| `backends.*.ollamaCompat` | `openai` provider only: the endpoint is Ollama's `/v1`, so also send `keep_alive` (from `keepAlive`) and `reasoning_effort: "none"`. Default: true when `baseUrl` ends in `:11434/v1` (the `local` preset: when it contains `:11434`); must be `true` or `false` |
 | `backends.*.seed` | default 1; sent to Ollama and OpenAI-compatible APIs (Anthropic has no seed) |
 | `backends.*.temperature` | default 0; sent to Ollama and OpenAI-compatible APIs. A retry whose prompt is byte-identical to the previous attempt's is sent with temperature 0.4, then 0.7, and seed + attempt − 1, because a deterministic resend can only repeat the same body; `provenance.sampling` records it |
 | `backends.*.think` | Ollama: `false` turns off reasoning on thinking models; structured output is enough |
@@ -85,6 +99,6 @@ Then export the key in your shell (`export OPENROUTER_API_KEY=...`) and point `c
 | `regions.<id>` | per-region backend and starting context level |
 | `sandbox.nodeBin` | defaults to the running Node's resolved binary (never a version-manager shim) |
 
-The model's **digest** is part of every fingerprint. If you re-pull a model, everything it compiled becomes stale. Hosted APIs have no digest, so the fingerprint uses `<provider>:<baseUrl>:<model>`. A hosted model can change behind the same id without making anything stale; that's acceptable because a cached body is re-verified (type check and examples) every time it is used.
+The model's **digest** is part of every fingerprint. If you re-pull a model, everything it compiled becomes stale. Hosted APIs have no digest, so the fingerprint uses `<provider>:<baseUrl>:<model>`, plus the preset, `structuredOutput` and `ollamaCompat`. A hosted model can change behind the same id without making anything stale; that's acceptable because a cached body is re-verified (type check and examples) every time it is used.
 
 A backend is a bounded interface: a request goes in and `{body, imports}` comes back. Hosted APIs are plain request/response calls behind that interface. Future adapters for tool-using agents (Codex, Claude Code) must use the same interface, so the compiler stays the only writer (see [[Safety Model]]).

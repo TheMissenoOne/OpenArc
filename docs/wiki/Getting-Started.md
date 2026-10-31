@@ -22,6 +22,10 @@ npx openarc init
 
 `init` creates `openarc.config.json`, `tsconfig.json` (strict, `erasableSyntaxOnly`) and `.openarc/`.
 
+OpenArc projects are ES modules. Recent npm versions make `npm init -y` write `"type": "commonjs"`, and `tsc` then fails with `TS1295`; that is what `npm pkg set type=module` above fixes. If you skip it, `init` prints a one-line note telling you to run it. It never edits your `package.json` itself.
+
+Plain `init` sets up local Ollama (`qwen3.5:9b`). To start with another backend instead, pass a preset, for example `npx openarc init --backend openrouter --model qwen/qwen3-coder` or `npx openarc init --backend local --model qwen3.5-9b --base-url http://127.0.0.1:8080/v1`. Then `npx openarc backends test` sends one small request and tells you whether the backend works, and why not if it doesn't. See "Connecting providers" in [[Configuration]].
+
 ## Your first region
 
 `src/tasks.ts`:

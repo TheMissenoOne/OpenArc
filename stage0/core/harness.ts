@@ -3,6 +3,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { OpenArcTodoError, type FakeFactory, type FakeInstance, type FakeRef, type Json, type RegionSpec, type AnyFn } from "./index.ts";
 
 export interface Outcome {
@@ -15,6 +16,8 @@ export interface Outcome {
 
 /** The compiler stages block bodies with `globalThis.__openarcHit?.("<id>")` as their first statement (never on disk). */
 type HitHost = { __openarcHit?: (id: string) => void };
+/** The example a hit belongs to: async work keeps the scope it started in, and a closed scope records nothing. */
+type HitScope = { hits: Set<string>; open: boolean };
 
 const isFakeRef = (v: unknown): v is FakeRef =>
   typeof v === "object" && v !== null && !Array.isArray(v) && typeof (v as FakeRef).$fake === "string";
@@ -77,13 +80,19 @@ const importFile = (root: string, rel: string) => import(pathToFileURL(`${root}/
 /** Run every example of one function region. `pendingIsFailure` is false only for the dev runner. */
 export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyFn>): Promise<Outcome[]> {
   const out: Outcome[] = [];
+  // A hit is credited to the example whose call started the work, so a previous example's dangling promise can't mark a
+  // block as reached by a later, passing example.
+  const attribution = new AsyncLocalStorage<HitScope>();
+  (globalThis as HitHost).__openarcHit = (id) => {
+    const scope = attribution.getStore();
+    if (scope?.open) scope.hits.add(id);
+  };
   for (const [i, ex] of (spec.examples ?? []).entries()) {
     const name = ex.name ?? `#${i + 1}`;
     const fakes = new Map<string, FakeInstance<unknown>>();
     const eq: EqualOptions = { tolerance: ex.tolerance ?? spec.tolerance, exact: ex.exact };
-    const hits = new Set<string>();
-    (globalThis as HitHost).__openarcHit = (id) => void hits.add(id);
-    const passed = (): Outcome => (hits.size ? { name, ok: true, hits: [...hits].sort() } : { name, ok: true });
+    const scope: HitScope = { hits: new Set<string>(), open: true };
+    const passed = (): Outcome => (scope.hits.size ? { name, ok: true, hits: [...scope.hits].sort() } : { name, ok: true });
     try {
       const args: unknown[] = [];
       for (const a of decodeTokens(ex.args) as unknown[]) {
@@ -99,7 +108,7 @@ export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyF
         }
         args.push(inst.instance);
       }
-      const actual = await fn(...args);
+      const actual = await attribution.run(scope, () => fn(...args));
       if ("expected" in ex && !valuesEqual(actual, decodeTokens(ex.expected), eq)) {
         out.push({ name, ok: false, actual: toJson(actual) });
         continue;
@@ -115,6 +124,8 @@ export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyF
     } catch (e) {
       if (e instanceof OpenArcTodoError) out.push({ name, ok: false, actual: { pending: e.id } });
       else out.push({ name, ok: false, actual: { throws: e instanceof Error ? e.message : String(e) } });
+    } finally {
+      scope.open = false;
     }
   }
   return out;

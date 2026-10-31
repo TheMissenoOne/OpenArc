@@ -6,6 +6,7 @@ import { classifyPath, enqueue, takeNext, type WatchQueue } from "./watch.ts";
 
 export const HISTORY = ".openarc/watch-history.jsonl";
 const HISTORY_CAP = 1000;
+const E096_LIMIT = 3; // consecutive E096 results for one region before it is remembered as failed
 
 /** What a region was last compiled against: specHashes of the function and its blocks, and their fingerprints
  *  ("" when the backend could not be asked, so the fingerprint is unknown). */
@@ -47,6 +48,8 @@ export function createWatcher(d: WatchDeps) {
   let examples: Record<string, number> = {};
   const failed = new Map<string, RegionKey>(); // id -> the key it failed on; not re-queued until the key changes
   const changed = new Set<string>();
+  const e096Streak = new Map<string, number>(); // id -> consecutive E096-only results
+  let targets = new Set<string>(); // the last analysis's targets
   let dirty = true;
   let stopping = false;
   let busy = false;
@@ -73,8 +76,8 @@ export function createWatcher(d: WatchDeps) {
     const before = new Set([...queued(), ...(queue.running ? [queue.running] : [])]);
     const ids = a.targets.filter((id) => !same(a.keys[id]!, failed.get(id)));
     // A queued region that is no longer a target (compiled by hand, spec reverted, removed) is dropped first.
-    const live = new Set(a.targets);
-    queue = enqueue({ ...queue, pending: queue.pending.filter((id) => live.has(id)), rerun: queue.rerun.filter((id) => live.has(id)) }, ids);
+    targets = new Set(a.targets);
+    queue = enqueue({ ...queue, pending: queue.pending.filter((id) => targets.has(id)), rerun: queue.rerun.filter((id) => targets.has(id)) }, ids);
     const added = ids.filter((id) => !before.has(id) || queue.rerun.includes(id));
     const what = added.length ? `${plural(added.length, "region")} queued: ${added.join(", ")}` : `nothing new to compile (${plural(queued().length, "region")} queued)`;
     if (added.length || paths.length) say(`${paths.length ? `${paths.join(", ")} changed: ` : ""}${what}`);
@@ -123,7 +126,14 @@ export function createWatcher(d: WatchDeps) {
       const transient = err !== undefined && (err.code === "OARC-E080" || err.code === "OARC-E095");
       // E096: the region may have passed, but a file it commits to was saved during the compile (often an edit to ANOTHER
       // region in the same file), so nothing was written. Not a failure of this region: retry it first, without a pause.
-      const requeue = !transient && res.diagnostics.some((x) => x.code === "OARC-E096");
+      // Only when E096 is the sole problem, and at most E096_LIMIT times in a row: a file saved during every compile
+      // would otherwise keep this region at the front of the queue forever.
+      const onlyE096 = !transient && res.diagnostics.some((x) => x.code === "OARC-E096")
+        && !res.diagnostics.some((x) => (x.code.startsWith("OARC-E") && x.code !== "OARC-E096") || x.code === "OARC-W045");
+      const streak = onlyE096 ? (e096Streak.get(id) ?? 0) + 1 : 0;
+      const requeue = streak > 0 && streak < E096_LIMIT;
+      if (requeue) e096Streak.set(id, streak);
+      else e096Streak.delete(id);
       // W045: a generated block that no passing example reaches is held back (§8.10). The run exits 0, but the region is
       // still pending: remember it as failed, or it would be re-queued forever. Better examples change its key.
       const unreached = res.diagnostics.find((x) => x.code === "OARC-W045");
@@ -138,6 +148,7 @@ export function createWatcher(d: WatchDeps) {
       } else {
         // W043: a compiler-owned region keeps its last body, which was verified against an older spec.
         const after = requeue ? "re-queued (file changed during compile)"
+          : streak >= E096_LIMIT ? `gave up: a file it commits to changed during ${E096_LIMIT} compiles in a row (E096)`
           : !err && unreached ? "held back: an example must reach every block (W045)"
           : res.diagnostics.some((x) => x.code === "OARC-W043" && x.id === id) ? "stale: keeps a body that fails the current spec" : "still pending";
         say(`${id}  ✗ ${plural(res.modelCalls, "attempt")} · ${detail.length > 72 ? `${detail.slice(0, 71)}…` : detail} · ${secs} · ${after}`);
@@ -152,7 +163,8 @@ export function createWatcher(d: WatchDeps) {
       }
       queue = { ...queue, running: null };
       if (transient || requeue) {
-        queue = { ...queue, rerun: [id, ...queue.rerun.filter((x) => x !== id)] }; // backend/lock trouble or E096: retry it first
+        // backend/lock trouble or E096: retry it first, unless the analysis above dropped it (removed, resolved, compiled by hand)
+        if (targets.has(id)) queue = { ...queue, rerun: [id, ...queue.rerun.filter((x) => x !== id)] };
         if (transient && !stopping) await pause(detail);
       }
     }

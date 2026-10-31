@@ -13,7 +13,7 @@ import { detect } from "./ownership.ts";
 import { checkRestrictions } from "./block.ts";
 import { selectTargets } from "./plan.ts";
 import { PROMPT_TEMPLATE_VERSION, PROMPT_TEMPLATE, renderTemplate, parseOutput } from "./model.ts";
-import { baseUrlOf, complete } from "./backends.ts";
+import { baseUrlOf, complete, isOllamaCompat } from "./backends.ts";
 import { buildArgv, readHarnessOutput } from "./sandbox.ts";
 import { readFileSync } from "node:fs";
 import { posix } from "node:path";
@@ -229,6 +229,10 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           continue;
         }
         const id = literal.id as string;
+        if (literal.calls !== undefined && !(Array.isArray(literal.calls) && literal.calls.every((c) => typeof c === "string"))) {
+          diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: "calls must be an array of strings" }));
+          continue;
+        }
         let signature = "", params: string[] = [], isAsync = false, typeText = "", typeNode: ts.TypeNode | undefined;
         if (kind === "function") {
           typeNode = init.typeArguments?.[0];
@@ -251,7 +255,7 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           effects: (literal.effects as string[] | undefined) ?? [],
           examples: (literal.examples as Json[] | undefined) ?? [],
           intent: intentText(literal.intent),
-          ...(Array.isArray(literal.calls) ? { calls: literal.calls.filter((c): c is string => typeof c === "string") } : {}),
+          ...(Array.isArray(literal.calls) ? { calls: literal.calls as string[] } : {}),
           typeText, signature, params, isAsync, typeNode,
         });
       }
@@ -388,6 +392,8 @@ export async function analyze(ports: Ports, req: CompileRequest, p: Project, dia
     r.fingerprint = sha256Tagged(canonicalJson({
       specHash: r.specHash, parentSpecHash, context: sha256Tagged(stable),
       backend: { provider: backend.provider, model: backend.model, digest, seed: backend.seed ?? 1, maxContextTokens: backend.maxContextTokens },
+      // the normalised endpoint (provider presets, §13): a changed preset default re-fingerprints its regions
+      endpoint: backend.provider === "ollama" ? null : { preset: backend.preset ?? backend.provider, structuredOutput: backend.structuredOutput ?? null, ollamaCompat: isOllamaCompat(backend) },
       promptTemplate: PROMPT_TEMPLATE_VERSION, compiler: COMPILER_VERSION, typescript: ts.version,
     }));
     r.stale = p.manifest.regions[r.id]?.fingerprint !== r.fingerprint;
@@ -478,23 +484,46 @@ interface ClosureType {
 function typeClosure(p: Project, checker: ts.TypeChecker, roots: ts.Node[]): ClosureType[] {
   const seen = new Set<ts.Node>();
   const out: ClosureType[] = [];
+  const reach = (d: ts.Node) => {
+    const file = d.getSourceFile().fileName;
+    if (!file.startsWith(p.root + "/") || file.includes("/node_modules/") || seen.has(d)) return;
+    if (!(ts.isTypeAliasDeclaration(d) || ts.isInterfaceDeclaration(d))) return;
+    seen.add(d);
+    visit(d);
+    const exported = ts.getModifiers(d)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
+    out.push({ name: d.name.text, rel: file.slice(p.root.length + 1), exported, text: d.getText(d.getSourceFile()).trim() });
+  };
   const visit = (n: ts.Node) => {
     if (ts.isTypeReferenceNode(n) || ts.isExpressionWithTypeArguments(n) || ts.isTypeQueryNode(n)) {
       const name = ts.isTypeReferenceNode(n) ? n.typeName : ts.isTypeQueryNode(n) ? n.exprName : n.expression;
       const sym = checker.getSymbolAtLocation(name);
-      for (const d of sym ? declOf(sym, checker) : []) {
-        const file = d.getSourceFile().fileName;
-        if (!file.startsWith(p.root + "/") || file.includes("/node_modules/") || seen.has(d)) continue;
-        if (!(ts.isTypeAliasDeclaration(d) || ts.isInterfaceDeclaration(d))) continue;
-        seen.add(d);
-        visit(d);
-        const exported = ts.getModifiers(d)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
-        out.push({ name: d.name.text, rel: file.slice(p.root.length + 1), exported, text: d.getText(d.getSourceFile()).trim() });
-      }
+      for (const d of sym ? declOf(sym, checker) : []) reach(d);
     }
     n.forEachChild(visit);
   };
-  roots.forEach(visit);
+  // a root that is itself a type declaration (from inferredTypeDecls) is reached directly
+  roots.forEach((n) => (ts.isTypeAliasDeclaration(n) || ts.isInterfaceDeclaration(n) ? reach(n) : visit(n)));
+  return out;
+}
+
+/** Declarations of the named types an inferred type prints with (aliases, interfaces, their type arguments and the
+ *  members of anonymous object types), found through the checker: never by walking a function body (§4.3). */
+function inferredTypeDecls(checker: ts.TypeChecker, t: ts.Type, seen = new Set<ts.Type>()): ts.Node[] {
+  if (seen.has(t)) return [];
+  seen.add(t);
+  const rec = (x: ts.Type) => inferredTypeDecls(checker, x, seen);
+  if (t.aliasSymbol) return [...(t.aliasSymbol.declarations ?? []), ...(t.aliasTypeArguments ?? []).flatMap(rec)];
+  if (t.isUnionOrIntersection()) return t.types.flatMap(rec);
+  const out: ts.Node[] = [];
+  if (t.symbol && t.symbol.flags & ts.SymbolFlags.Interface) out.push(...(t.symbol.declarations ?? []));
+  if (t.flags & ts.TypeFlags.Object) {
+    const o = t as ts.ObjectType;
+    if (o.objectFlags & ts.ObjectFlags.Reference) out.push(...checker.getTypeArguments(o as ts.TypeReference).flatMap(rec));
+    if (o.objectFlags & ts.ObjectFlags.Anonymous) {
+      for (const prop of checker.getPropertiesOfType(o)) out.push(...rec(checker.getTypeOfSymbol(prop)));
+      for (const sig of o.getCallSignatures()) out.push(...sig.getParameters().flatMap((x) => rec(checker.getTypeOfSymbol(x))), ...rec(sig.getReturnType()));
+    }
+  }
   return out;
 }
 
@@ -515,6 +544,7 @@ function moduleSignatures(sf: ts.SourceFile, checker: ts.TypeChecker, sameFile?:
       const sig = checker.getSignatureFromDeclaration(st);
       lines.push(`function ${st.name.text}${sig ? checker.signatureToString(sig, undefined, ts.TypeFormatFlags.NoTruncation) : "(…)"}`);
       nodes.push(...sigNodes(st));
+      if (!st.type && sig) nodes.push(...inferredTypeDecls(checker, sig.getReturnType())); // printed above, inferred
     } else if (ts.isVariableStatement(st)) {
       for (const d of st.declarationList.declarations) {
         if (!ts.isIdentifier(d.name) || sameFile?.skip.has(d.name.text)) continue;
@@ -523,6 +553,10 @@ function moduleSignatures(sf: ts.SourceFile, checker: ts.TypeChecker, sameFile?:
         lines.push(`const ${d.name.text}: ${t}`);
         const fn = d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer)) ? d.initializer : null;
         nodes.push(...(d.type ? [d.type] : fn ? sigNodes(fn) : [d]));
+        if (!d.type && fn && !fn.type) { // an unannotated helper's return type is inferred: reach the types it prints with
+          const sig = checker.getSignatureFromDeclaration(fn);
+          if (sig) nodes.push(...inferredTypeDecls(checker, sig.getReturnType()));
+        }
       }
     }
   }
@@ -822,11 +856,26 @@ const RANDOM_MEMBERS = new Set(["getRandomValues", "randomUUID", "randomBytes"])
 export function staticCheck(body: string, effects: string[], fileBound: Set<string> = new Set(), policy?: CallPolicy): { diag: Diagnostic; message: string }[] {
   const sf = ts.createSourceFile("c.ts", `async function __w() {\n${body}\n}`, ts.ScriptTarget.Latest, true);
   const out: { diag: Diagnostic; message: string }[] = [];
-  const local = new Set<string>(); // names the body itself declares: calls on them are never restricted
+  const local = new Set<string>(); // names the body itself declares
+  const scopes = new Map<string, ts.Node[]>(); // name -> the nodes its declarations are visible in
+  const scopeOf = (d: ts.Node): ts.Node => {
+    while (ts.isBindingElement(d) || ts.isObjectBindingPattern(d) || ts.isArrayBindingPattern(d)) d = d.parent;
+    if (ts.isParameter(d) || ts.isFunctionDeclaration(d)) return d.parent; // the function / the enclosing block
+    const list = d.parent; // a VariableDeclaration: its list, or a catch clause
+    if (ts.isCatchClause(list)) return list;
+    // ponytail: `var` is scoped to its function; let/const to the block, for statement or case clause around them
+    if (!(list.flags & ts.NodeFlags.BlockScoped)) return ts.findAncestor(list.parent, ts.isFunctionLike) ?? sf;
+    return ts.isVariableStatement(list.parent) ? list.parent.parent : list.parent;
+  };
   const collect = (n: ts.Node) => {
-    if ((ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isFunctionDeclaration(n) || ts.isBindingElement(n)) && n.name && ts.isIdentifier(n.name)) local.add(n.name.text);
+    if ((ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isFunctionDeclaration(n) || ts.isBindingElement(n)) && n.name && ts.isIdentifier(n.name)) {
+      local.add(n.name.text);
+      scopes.set(n.name.text, [...(scopes.get(n.name.text) ?? []), scopeOf(n)]);
+    }
     n.forEachChild(collect);
   };
+  /** A body-declared `name` is visible at `at` (a nested function's local does not shadow an import outside it). */
+  const inScope = (name: string, at: ts.Node) => (scopes.get(name) ?? []).some((s) => s.pos <= at.pos && at.end <= s.end);
   collect(sf);
   const declared = new Set<string>([...fileBound, ...local]); // a file import named `crypto` is not the global
   const forbidden = new Set(["process", "globalThis", "global", "window", "self", "eval", "Function", "fetch", "XMLHttpRequest", "WebSocket", "Deno", "Bun", "setTimeout", "setInterval", "queueMicrotask", "require"]);
@@ -839,7 +888,7 @@ export function staticCheck(body: string, effects: string[], fileBound: Set<stri
     // traced; the allowlist stops a model that wanders into the wrong step, not an adversary (the sandbox is the boundary).
     if (policy && ts.isCallExpression(n)) {
       const c = calleePath(n.expression);
-      if (c && policy.restricted.has(c.root) && !local.has(c.root) && !callAllowed(policy.calls, c.path))
+      if (c && policy.restricted.has(c.root) && !inScope(c.root, n) && !callAllowed(policy.calls, c.path))
         out.push({ diag: err("OARC-E098", { detail: c.path }), message: `call not allowed by spec: ${c.path} (allowed: ${policy.calls.join(", ") || "none"})` });
     }
     // Randomness: Math.random and crypto.getRandomValues/randomUUID/randomBytes (global crypto or an import named crypto).
