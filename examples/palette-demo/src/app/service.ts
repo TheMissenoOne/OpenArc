@@ -63,7 +63,7 @@ export const serveSpec = arc.defineRegion<Serve>({
     const live = pool.map((b) => ({ ...b, healthy: next.find((h) => h.id === b.id)?.healthy ?? b.healthy }));
     const [first] = lb.consistentHash(live, [request]);
     const order = arc.hole<string[]>("first (when it isn't null), then the other healthy backends of live in pool order, without repeating first");
-    return { health: next, result: await lb.failover(order, request, upstream, 3) };
+    return { health: next, result: await lb.failover(order, request, upstream, order.length) };
   },
 });
 

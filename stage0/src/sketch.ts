@@ -277,27 +277,45 @@ export function contains(s: SketchInfo, body: string): Containment {
   return { ok: false, why: `OARC-E099 sketch not preserved: ${line === null ? "the body ends" : `body line ${line} has \`${m!.body}\``} where the sketch has \`${m?.sketch ?? "?"}\`` };
 }
 
-/** Calls in `code` on a restricted root that `code` doesn't declare itself. ponytail: any declaration of the name in the
- *  fill shadows it (not scope-exact); the allowlist stops a wandering model, the sandbox is the boundary. */
+/** Calls in `code` on a restricted root that `code` doesn't declare in a scope around the call: a nested function's
+ *  parameter named `ports` shadows `ports` inside that function only. */
 function restrictedCalls(code: string, roots: string[]): string[] {
   const sf = ts.createSourceFile("f.ts", `async function __f() {\n${code}\n}`, ts.ScriptTarget.Latest, true);
-  const declared = new Set<string>();
-  const out: string[] = [];
+  const isFn = (n: ts.Node) => ts.isFunctionLike(n);
+  // the node a declaration is visible in: var, parameters and function names -> the function; let/const/class -> the block
+  const scopeOf = (d: ts.Node): ts.Node | undefined => {
+    while (ts.isBindingElement(d) || ts.isObjectBindingPattern(d) || ts.isArrayBindingPattern(d)) d = d.parent;
+    if (ts.isParameter(d)) return d.parent;
+    if (ts.isFunctionDeclaration(d)) return d.parent;
+    if (ts.isFunctionExpression(d) || ts.isClassExpression(d)) return d; // its own name, inside it
+    if (ts.isCatchClause(d.parent)) return d.parent;
+    if (ts.isVariableDeclaration(d)) {
+      const list = d.parent;
+      if (ts.isVariableDeclarationList(list) && !(list.flags & ts.NodeFlags.BlockScoped)) return ts.findAncestor(list, isFn);
+      return ts.isForStatement(list.parent) || ts.isForOfStatement(list.parent) || ts.isForInStatement(list.parent) ? list.parent : list.parent.parent;
+    }
+    return d.parent; // a class declaration: its block
+  };
+  const declared: { name: string; scope: ts.Node | undefined }[] = [];
+  const calls: { root: string; path: string; at: ts.Node }[] = [];
   const visit = (n: ts.Node): void => {
-    if ((ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isFunctionDeclaration(n) || ts.isBindingElement(n)) && n.name && ts.isIdentifier(n.name)) declared.add(n.name.text);
+    if ((ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isClassDeclaration(n) || ts.isClassExpression(n) || ts.isBindingElement(n)) && n.name && ts.isIdentifier(n.name))
+      declared.push({ name: n.name.text, scope: scopeOf(n) });
     if (ts.isCallExpression(n)) {
       const c = calleePath(n.expression);
-      if (c && roots.includes(c.root)) out.push(`${c.root}\0${c.path}`);
+      if (c && roots.includes(c.root)) calls.push({ ...c, at: n });
     }
     n.forEachChild(visit);
   };
   visit(sf);
-  return out.filter((x) => !declared.has(x.split("\0")[0]!)).map((x) => x.split("\0")[1]!);
+  const within = (n: ts.Node, scope: ts.Node | undefined) => !!scope && !!ts.findAncestor(n, (a) => a === scope);
+  return calls.filter((c) => !declared.some((d) => d.name === c.root && within(c.at, d.scope))).map((c) => c.path);
 }
 
 /** STATIC checks of a candidate body for a sketch region: containment (E099), §3.4 on statement fills (E035), and the
- *  implied call allowlist on every fill (E098). The sketch's own code is never checked against `calls`. */
-export function checkSketchBody(s: SketchInfo, body: string, specCalls: string[]): { problems: string[]; fills: Record<string, string> } {
+ *  implied call allowlist on every fill (E098). The sketch's own code is never checked against `calls`. `requested`: the
+ *  local names of the imports the model asked for, restricted roots like the file's own imports. */
+export function checkSketchBody(s: SketchInfo, body: string, specCalls: string[], requested: string[] = []): { problems: string[]; fills: Record<string, string> } {
   const c = contains(s, body);
   if (!c.ok) return { problems: [c.why], fills: {} };
   const problems: string[] = [];
@@ -305,7 +323,7 @@ export function checkSketchBody(s: SketchInfo, body: string, specCalls: string[]
   for (const h of s.holes) {
     const fill = c.fills[String(h.n)] ?? "";
     if (h.kind === "stmt") for (const d of checkRestrictions(fill, h.isAsync, h.usedAfter)) problems.push(`OARC-E035 hole «${h.n}»: not allowed in a statement hole: ${d.detail}`);
-    for (const path of restrictedCalls(h.kind === "expr" ? `(${fill});` : fill, s.roots))
+    for (const path of restrictedCalls(h.kind === "expr" ? `(${fill});` : fill, [...s.roots, ...requested]))
       if (!callAllowed(allowed, path)) problems.push(`OARC-E098 hole «${h.n}»: call not allowed by spec: ${path} (allowed: ${allowed.join(", ") || "none"})`);
   }
   return { problems, fills: c.fills };

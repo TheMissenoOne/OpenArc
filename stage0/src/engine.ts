@@ -263,7 +263,9 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
         const kind = /defineRegion$/.test(callee) ? "function" : /defineBlock$/.test(callee) ? "block" : null;
         if (/defineConcept$/.test(callee)) { // palette: a concept is static JSON, read like a spec (§2.5)
           const c = concepts.readConcept(init.arguments[0] ? staticJson(init.arguments[0]) : undefined, rel);
-          if ("error" in c) once(err("OARC-E010", { file: rel, line: sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1, detail: c.error }));
+          const cline = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
+          if ("error" in c) once(err("OARC-E010", { file: rel, line: cline, detail: c.error }));
+          else if (p.concepts.has(c.id)) once(err("OARC-E011", { file: rel, line: cline, detail: `duplicate concept id ${c.id} (first declared in ${p.concepts.get(c.id)!.file})` }));
           else p.concepts.set(c.id, c);
         }
         if (!kind) continue;
@@ -277,6 +279,10 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           continue;
         }
         const id = literal.id as string;
+        if (literal.intent === undefined && !syn && !uiProp && literal.concept === undefined) { // the model needs some guidance
+          diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: "intent is required unless sketch, ui or concept is present" }));
+          continue;
+        }
         if (literal.calls !== undefined && !(Array.isArray(literal.calls) && literal.calls.every((c) => typeof c === "string"))) {
           diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: "calls must be an array of strings" }));
           continue;
@@ -312,6 +318,11 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           const r = kind === "function" ? ui.readUi(uiProp.initializer, sf) : { error: "ui:function-regions-only" };
           if ("error" in r) {
             diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: r.error }));
+            continue;
+          }
+          const typeProblem = ui.uiTypeProblem(typeNode, sf, checker);
+          if (typeProblem) {
+            diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: typeProblem }));
             continue;
           }
           u = r;
@@ -1401,7 +1412,7 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   const bound = fileBindings(base);
   for (const i of imports) localNames(i).forEach((n) => bound.add(n));
   // palette: a sketch region's body must be its sketch with only the holes filled (E099); fills keep §3.4 and the implied calls
-  const sk = r.spec.sketch ? sketch.checkSketchBody(r.spec.sketch, body, r.spec.calls ?? []) : null;
+  const sk = r.spec.sketch ? sketch.checkSketchBody(r.spec.sketch, body, r.spec.calls ?? [], imports.flatMap(localNames)) : null;
   if (sk?.problems.length) return fail(sk.problems);
   const tsx = r.file.endsWith(".tsx"); // palette
   const st = staticCheck(body, r.spec.effects, bound, sk ? undefined : callPolicy(p, r, imports), tsx);

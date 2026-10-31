@@ -69,7 +69,7 @@ export interface UiNode {
 export interface RegionSpec<F extends AnyFn> {
   id: string;
   symbol?: string;
-  /** Required unless `sketch` (or `ui`) is present. Array form is joined with single spaces (static, no .join call). */
+  /** Required unless `sketch`, `ui` or `concept` is present (else OARC-E010). Array form is joined with single spaces (static, no .join call). */
   intent?: string | string[];
   effects?: Effect[];
   deps?: string[];

@@ -20,7 +20,7 @@ import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools
 const MESSAGES: Record<string, string> = {
   "OARC-W001": "'@openarc:' text that is not a valid marker",
   "OARC-E010": "spec is not statically evaluable",
-  "OARC-E011": "duplicate region id",
+  "OARC-E011": "duplicate region id (or concept id)",
   "OARC-E012": "marker id has no spec",
   "OARC-E013": "region configured twice: a field set in more than one of JSDoc @arc tags, arc.configure and defineRegion (detail: field:layers)",
   "OARC-W013": "block spec has no markers: place // @openarc:begin/end around the statements by hand",

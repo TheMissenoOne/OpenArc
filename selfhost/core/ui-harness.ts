@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
 import type { FakeFactory, FakeInstance, FakeRef, Json, UiNode, UiStep, UiTarget } from "./index.ts";
-import { decodeTokens, toJson, valuesEqual, type Outcome } from "./harness.ts";
+import { action, decodeTokens, valuesEqual, type Outcome } from "./harness.ts";
 
 type Tree = UiNode;
 export interface UiPlan {
@@ -29,14 +29,23 @@ type Doc = { body: El; getElementById(id: string): El | null; querySelector(s: s
 const isFakeRef = (v: unknown): v is FakeRef => typeof v === "object" && v !== null && !Array.isArray(v) && typeof (v as FakeRef).$fake === "string";
 const nodesOf = (t: Tree, tag: string): Tree[] => [...(t.tag === tag ? [t] : []), ...t.children.flatMap((c) => (typeof c === "string" ? [] : nodesOf(c, tag)))];
 const textOf = (t: Tree) => t.children.filter((c): c is string => typeof c === "string").join(" ").trim();
-const refProp = (v: unknown): string | null => (typeof v === "object" && v !== null && "$ref" in v ? String((v as { $ref: unknown }).$ref).split(".").slice(1).join(".") || null : null);
-
-/** The built-in `action` fake: a function that records its calls and returns init.returns[i] for the i-th call. */
-const action = (init: Json | undefined): FakeInstance<(...a: unknown[]) => Promise<unknown>> => {
-  const returns = ((init as { returns?: Json[] } | undefined)?.returns ?? []) as unknown[];
-  const calls: unknown[][] = [];
-  return { instance: async (...a) => (calls.push(a), structuredClone(returns[calls.length - 1])), snapshot: () => ({ calls: toJson(calls) }) };
+/** The props path a `{ $ref: "props.a.b" }` names (["a", "b"]); null for a reference rooted elsewhere (an import: no spy can replace it). */
+const refPath = (v: unknown, param: string | null): string[] | null => {
+  if (typeof v !== "object" || v === null || !("$ref" in v)) return null;
+  const [rootName, ...path] = String((v as { $ref: unknown }).$ref).split(".");
+  return rootName === param && path.length ? path : null;
 };
+/** `o` with `value` at `path`, every object on the way copied (the caller's props are never mutated). */
+const setPath = (o: unknown, [k, ...rest]: string[], value: unknown): Record<string, unknown> => {
+  const base = typeof o === "object" && o !== null ? (o as Record<string, unknown>) : {};
+  return { ...base, [k!]: rest.length ? setPath(base[k!], rest, value) : value };
+};
+const getPath = (o: unknown, path: string[]): unknown => path.reduce<unknown>((x, k) => (typeof x === "object" && x !== null ? (x as Record<string, unknown>)[k] : undefined), o);
+
+type Act = (f: () => Promise<void> | void) => Promise<void>;
+type ReactModule = { act?: Act; unstable_act?: Act; default?: { act?: Act; unstable_act?: Act } };
+/** React's act: `act` (React 18.3+, 19), else `unstable_act` (React 18.0-18.2); undefined when neither exists. */
+export const actOf = (r: ReactModule): Act | undefined => r.act ?? r.default?.act ?? r.unstable_act ?? r.default?.unstable_act;
 
 export async function runUi(root: string, plan: UiPlan): Promise<Outcome[]> {
   const req = createRequire(join(root, "package.json"));
@@ -59,9 +68,11 @@ export async function runUi(root: string, plan: UiPlan): Promise<Outcome[]> {
   for (const k of ["window", "document", "navigator", "Node", "Element", "HTMLElement", "HTMLInputElement", "HTMLButtonElement", "HTMLFormElement", "Event", "InputEvent", "KeyboardEvent", "MouseEvent", "FocusEvent", "FormData", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"])
     if (k in dom.window || k === "window") Object.defineProperty(globalThis, k, { value: k === "window" ? dom.window : dom.window[k], configurable: true, writable: true });
   g.IS_REACT_ACT_ENVIRONMENT = true;
-  const React = (await load("react")) as { createElement(c: unknown, p: unknown): unknown; act(f: () => Promise<void> | void): Promise<void>; default?: unknown };
-  const act = (React.act ?? (React.default as typeof React).act).bind(React);
-  const createElement = (React.createElement ?? (React.default as typeof React).createElement).bind(React);
+  const React = (await load("react")) as ReactModule & { createElement?(c: unknown, p: unknown): unknown; default?: { createElement?(c: unknown, p: unknown): unknown } };
+  const act = actOf(React) ?? ((await load("react-dom/test-utils")) as { act?: Act }).act; // test-utils: React 18.2 and older
+  if (!act) throw new Error("ui-harness: the project's react has no act (React.act, React.unstable_act or react-dom/test-utils)");
+  const createElement = (React.createElement ?? React.default?.createElement)?.bind(React);
+  if (!createElement) throw new Error("ui-harness: the project's react has no createElement");
   const { createRoot } = (await load("react-dom/client")) as { createRoot(el: unknown): { render(e: unknown): void; unmount(): void } };
   const Component = (await import(pathToFileURL(join(root, plan.module)).href))[plan.symbol];
   const doc = dom.window.document;
@@ -120,6 +131,7 @@ export async function runUi(root: string, plan: UiPlan): Promise<Outcome[]> {
   const fields = nodesOf(tree, "Field");
   const examples = (plan.examples ?? []) as Example[];
   const submitText = nodesOf(tree, "Submit").map(textOf)[0];
+  const busyText = nodesOf(tree, "Submit").map((n) => n.props.busyText)[0];
 
   // 1. derived structure and accessibility checks
   {
@@ -149,14 +161,19 @@ export async function runUi(root: string, plan: UiPlan): Promise<Outcome[]> {
     }
     report("ui: structure and accessibility", problems);
   }
-  // 2. the derived wiring example: every Field filled, Submit clicked, the onSubmit prop called once with { name: value }
-  const target = refProp(tree.props.onSubmit);
-  if (target && submitText !== undefined) {
+  // 2. the derived wiring example: every Field filled, Submit clicked, the onSubmit prop called once with { name: value };
+  //    while that call is pending, the Submit button is disabled (and shows busyText when the spec gives one)
+  const path = refPath(tree.props.onSubmit, plan.ui.param);
+  if (path && submitText !== undefined) {
+    const target = path.join(".");
     const problems: string[] = [];
     const fakes = new Map<string, FakeInstance<unknown>>();
-    const p = (await props(examples[0]?.args, fakes)) as Record<string, unknown>;
-    const spy = action((examples[0]?.args?.[0] as Record<string, { init?: Json }> | undefined)?.[target]?.init);
-    await mount({ ...p, [target]: spy.instance });
+    const p = await props(examples[0]?.args, fakes);
+    const recorded = action((getPath(examples[0]?.args?.[0], path) as { init?: Json } | undefined)?.init);
+    let release = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const spy = { instance: async (...a: unknown[]) => { const r = recorded.instance(...a); await gate; return r; }, snapshot: recorded.snapshot };
+    await mount(setPath(p, path, spy.instance));
     const values = Object.fromEntries(fields.map((f) => [String(f.props.name), f.props.type === "email" ? "a@b.co" : `v-${String(f.props.name)}`]));
     for (const f of fields) {
       const el = doc.querySelector(`[name="${String(f.props.name)}"]`);
@@ -165,6 +182,11 @@ export async function runUi(root: string, plan: UiPlan): Promise<Outcome[]> {
     }
     const b = byRole({ role: "button", name: submitText });
     if (b) await click(b);
+    const pendingName = typeof busyText === "string" ? busyText : submitText;
+    const busy = byRole({ role: "button", name: pendingName });
+    if (b && busy?.disabled !== true) problems.push(`Submit: while ${target} is pending, no disabled button named "${pendingName}"`);
+    release();
+    await settle();
     const got = spy.snapshot() as { calls: Json[] };
     if (!valuesEqual(got.calls, [[values]])) problems.push(`props.${target} called with ${JSON.stringify(got.calls)}, want ${JSON.stringify([[values]])}`);
     report("ui: wiring", problems);

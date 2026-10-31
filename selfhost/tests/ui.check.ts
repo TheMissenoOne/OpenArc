@@ -4,8 +4,9 @@
 // 2. The package carries the structure and what its words mean; react is an allowed import.
 // 3. Without `"ui": {"dom": "jsdom"}`, or without jsdom installed, a UI region is OARC-E092 before any model call.
 // 4. With the DOM installed in tests/fixtures/ui (npm i there; skipped otherwise): a real compile through this OS's
-//    sandbox against a fake Ollama. A miswired component fails the derived wiring example, an unlabelled one the
-//    accessibility check, and the palette's hand-written LoginPage passes and is committed.
+//    sandbox against a fake Ollama. A miswired component fails the derived wiring example, as does one whose Submit
+//    stays enabled while onSubmit is pending; an unlabelled one fails the accessibility check, and the palette's
+//    hand-written LoginPage passes and is committed. The wiring spy goes where onSubmit points (props.actions.login).
 import assert from "node:assert/strict";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -17,6 +18,7 @@ import fakePorts from "./fakes/ports.memory.ts";
 import * as engine from "../src/engine.ts";
 import { run } from "../src/compile.ts";
 import { pendingCopy } from "../tools/palette.ts";
+import { actOf, runUi } from "../core/ui-harness.ts";
 
 const root = process.cwd();
 const req: CompileRequest = { root, ids: [], model: { host: "http://h", model: "m", seed: 1, numCtx: 8192 }, sandbox: { nodeBin: "/n/bin/node", nodePrefix: "/n", heapMb: 256, addressSpaceBytes: 2 ** 32, cpuSeconds: 10 } };
@@ -60,6 +62,16 @@ assert.deepStrictEqual(await bad("<ErrorText />", "{props.busy ? <ErrorText /> :
 assert.deepStrictEqual(await bad("<Submit ", "<Submit {...props} "), ["OARC-E010 ui:spread"]);
 assert.deepStrictEqual(await bad('title="Sign in"', 'title={"Sign " + "in"}'), ['OARC-E010 ui:expression:"Sign " + "in"']);
 assert.deepStrictEqual(await bad("<ErrorText />", "<div />"), ["OARC-E010 ui:tag:div"]);
+// the component file imports F from the spec file, so F must be a type name the spec file exports: E010 before scaffolding
+assert.deepStrictEqual(await bad("export type LoginPageFn =", "type LoginPageFn ="), ["OARC-E010 ui:F-must-be-an-exported-type-name"]);
+assert.deepStrictEqual(await bad("arc.defineRegion<LoginPageFn>", "arc.defineRegion<(props: LoginPageProps) => unknown>"), ["OARC-E010 ui:F-must-be-an-exported-type-name"]);
+// React's act: act (18.3+), else unstable_act (18.0-18.2), from the module or its default export
+{
+  const a = async () => {}, u = async () => {};
+  assert.equal(actOf({ act: a, unstable_act: u }), a);
+  assert.equal(actOf({ default: { unstable_act: u } }), u);
+  assert.equal(actOf({}), undefined);
+}
 {
   const changed = await analyzed(SPEC.replace('label="Password"', 'label="Passphrase"'));
   assert.notEqual(changed.p.regions.find((r) => r.id === "ui.loginPage")!.specHash, p.regions.find((r) => r.id === "ui.loginPage")!.specHash, "the spec hash covers the structure");
@@ -110,7 +122,7 @@ if (!existsSync(join(fixture, "jsdom", "package.json"))) {
     symlinkSync(process.platform === "win32" ? join(dir, "core") : "../core", join(dir, "node_modules", "open-arc"), "junction");
     writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "ui", private: true, type: "module" }));
     writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { target: "es2023", module: "nodenext", moduleResolution: "nodenext", strict: true, noEmit: true, verbatimModuleSyntax: true, allowImportingTsExtensions: true, skipLibCheck: true, jsx: "react-jsx", lib: ["es2023", "dom"], types: [] }, include: ["src", "tests"] }));
-    writeFileSync(join(dir, "openarc.config.json"), JSON.stringify({ version: 1, backends: { stub: { provider: "ollama", model: "stub:1", host: `http://127.0.0.1:${(server.address() as { port: number }).port}`, maxContextTokens: 8192 } }, compilation: { defaultBackend: "stub", maxAttempts: 3 }, ui: { dom: "jsdom" } }));
+    writeFileSync(join(dir, "openarc.config.json"), JSON.stringify({ version: 1, backends: { stub: { provider: "ollama", model: "stub:1", host: `http://127.0.0.1:${(server.address() as { port: number }).port}`, maxContextTokens: 8192 } }, compilation: { defaultBackend: "stub", maxAttempts: 4 }, ui: { dom: "jsdom" } }));
     mkdirSync(join(dir, "src", "palette"), { recursive: true });
     writeFileSync(join(dir, "src", "palette", "loginPage.spec.tsx"), SPEC);
     writeFileSync(join(dir, "src", "palette", "auth.ts"), pendingCopy(AUTH));
@@ -118,20 +130,44 @@ if (!existsSync(join(fixture, "jsdom", "package.json"))) {
     replies = [
       reply(BODY.replace('password: String(data.get("password") ?? "")', 'password: String(data.get("email") ?? "")')), // miswired
       reply(BODY.replace(' htmlFor="login-password"', "")), // the password input loses its label
+      reply(BODY.replace(" disabled={busy}", "")), // a second click while onLogin is pending would submit again
       reply(BODY),
     ];
     const c = await new Promise<{ code: number; out: string }>((done) =>
       execFile(process.execPath, [join(root, "src", "main.ts"), "compile", "ui.loginPage"], { cwd: dir, encoding: "utf8", timeout: 600_000 }, (e, stdout, stderr) =>
         done({ code: e ? (typeof e.code === "number" ? e.code : 1) : 0, out: `${stdout}${stderr}` })));
     assert.equal(c.code, 0, c.out);
-    assert.match(c.out, /3 model call\(s\)/, c.out);
+    assert.match(c.out, /4 model call\(s\)/, c.out);
+    assert.match(c.out, /ui\.loginPage: ✗ OARC-E090 example "ui: wiring" failed: got \{"problems":\["Submit: while onLogin is pending, no disabled button named \\"Signing in…\\""\]\}/, c.out);
     assert.match(c.out, /ui\.loginPage: ✗ OARC-E090 example "ui: wiring" failed: got \{"problems":\["props\.onLogin called with \[\[\{\\"email\\":\\"a@b\.co\\",\\"password\\":\\"a@b\.co\\"\}\]\]/, c.out);
     assert.match(c.out, /ui\.loginPage: ✗ OARC-E090 example "ui: structure and accessibility" failed: got \{"problems":\["Field password: no input labelled \\"Password\\" \(a11y: accessible name\)"\]\}/, c.out);
     const text = readFileSync(join(dir, "src", "palette", "loginPage.tsx"), "utf8");
     assert.ok(text.includes('import { useState } from "react";') && text.includes('<p role="alert">{error}</p>'), text);
     const m = JSON.parse(readFileSync(join(dir, ".openarc", "manifest.json"), "utf8"));
     assert.deepStrictEqual(m.regions["ui.loginPage"].provenance.verifiedBy, ["tsc", "static", "examples:5/5"]);
-    console.log("ui.check: DOM run ok (wiring and a11y failures caught; the palette's LoginPage committed, 5/5 checks)");
+    // the derived wiring check puts its spy at the path onSubmit names (props.actions.login), not at a top-level prop
+    const nested = (busy: boolean) => `import { useState } from "react";
+export const Nested = (props: any) => {
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: any) => {
+    e.preventDefault();
+    const d = new FormData(e.currentTarget);
+    setBusy(true);
+    await props.actions.login({ email: String(d.get("email")) });
+    setBusy(false);
+  };
+  return <form onSubmit={submit}><h2>Go</h2><label htmlFor="e">Email</label><input id="e" name="email" type="email" /><button type="submit"${busy ? " disabled={busy}" : ""}>{busy ? "Wait" : "Go"}</button></form>;
+};
+`;
+    const tree = { tag: "Form", props: { title: "Go", onSubmit: { $ref: "props.actions.login" } }, children: [{ tag: "Field", props: { name: "email", type: "email", label: "Email" }, children: [] }, { tag: "Submit", props: { busyText: "Wait" }, children: ["Go"] }] };
+    const examples = [{ args: [{ actions: { login: { $fake: "action#login", init: { returns: [null] } } } }] }];
+    writeFileSync(join(dir, "src", "nested.tsx"), nested(true));
+    writeFileSync(join(dir, "src", "nestedNoBusy.tsx"), nested(false));
+    assert.deepStrictEqual(await runUi(dir, { module: "src/nested.tsx", symbol: "Nested", examples, ui: { param: "props", root: tree } }),
+      [{ name: "ui: structure and accessibility", ok: true }, { name: "ui: wiring", ok: true }, { name: "#1", ok: true }]);
+    assert.deepStrictEqual((await runUi(dir, { module: "src/nestedNoBusy.tsx", symbol: "Nested", examples, ui: { param: "props", root: tree } }))[1],
+      { name: "ui: wiring", ok: false, actual: { problems: ['Submit: while actions.login is pending, no disabled button named "Wait"'] } });
+    console.log("ui.check: DOM run ok (wiring, pending-state and a11y failures caught; the palette's LoginPage committed, 5/5 checks; nested onSubmit path)");
   } finally {
     server.close();
     rmSync(dir, { recursive: true, force: true });

@@ -27,7 +27,7 @@ import { password, type AuthPorts } from "open-arc/palette/auth";
 const r = await password({ email, password: pw }, ports);
 ```
 
-Or copy a file into your project to compile, change or extend it: `src/palette/<file>.ts` goes to your `src/`, and `tests/fakes/palette.*.ts` to your `tests/fakes/` (fix the one `import type` path at the top of each fake). `node tools/palette.ts <dir>` writes the copy with pending bodies. Add a variant by writing a region with `concept: "<id>"` and the fixtures the laws name; the laws come with it.
+Or copy a file into your project to compile, change or extend it: `src/palette/<file>.ts` goes to your `src/`, and `tests/fakes/palette.*.ts` to your `tests/fakes/` (fix the one `import type` path at the top of each fake). From a checkout of the OpenArc repository (the published package has no `tools/`), `node stage0/tools/palette.ts <dir>` writes the copy with pending bodies; it refuses to overwrite existing palette files unless you pass `--force`. Add a variant by writing a region with `concept: "<id>"` and the fixtures the laws name; the laws come with it.
 
 ## Writing your own concept
 
@@ -42,8 +42,8 @@ export const authConcept = arc.defineConcept({
 export const pinSpec = arc.defineRegion<Strategy<{ pin: string }>>({
   id: "auth.pin", concept: "auth",
   fixtures: { wrong: { pin: "0000" }, ports: { $fake: "palette.auth", init: { … } } },
-  waive: { "some law": "why it can't apply here" },
+  // waive: { "<a law of auth>": "why it can't apply here" },   only when a law really can't apply to this variant
 });
 ```
 
-See the wiki page [Palette](../../../docs/wiki/Palette.md).
+See the wiki page [Palette](https://github.com/TheMissenoOne/OpenArc/blob/main/docs/wiki/Palette.md).

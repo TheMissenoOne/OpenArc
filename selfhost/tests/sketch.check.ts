@@ -107,6 +107,14 @@ assert.deepStrictEqual(sketch.checkSketchBody(sk, sketch.spliceFills(sk, { ...FI
   ["OARC-E035 hole «3»: not allowed in a statement hole: return"]);
 assert.deepStrictEqual(sketch.checkSketchBody(sk, sketch.spliceFills(sk, { ...FILLS, 3: "if (!valid) await ports.users.recordFailure(ports.crypto.sha256(user.id));" }), r!.spec.calls!).problems,
   ["OARC-E098 hole «3»: call not allowed by spec: ports.crypto.sha256 (allowed: ports.users.findByEmail, ports.crypto.verifyPassword, ports.users.recordFailure, ports.clock.now)"]);
+// a nested function's parameter shadows a root only inside that function: the outer off-list call is still E098
+assert.deepStrictEqual(sketch.checkSketchBody(sk, sketch.spliceFills(sk, { ...FILLS, 3: "if (!valid) await ports.users.recordFailure(ports.crypto.sha256(user.id));\n[1].forEach((ports) => ports.toFixed());" }), r!.spec.calls!).problems,
+  ["OARC-E098 hole «3»: call not allowed by spec: ports.crypto.sha256 (allowed: ports.users.findByEmail, ports.crypto.verifyPassword, ports.users.recordFailure, ports.clock.now)"]);
+assert.deepStrictEqual(sketch.checkSketchBody(sk, sketch.spliceFills(sk, { ...FILLS, 3: "if (!valid) [user.id].forEach((ports) => ports.toString());" }), r!.spec.calls!).problems, [], "inside it, the parameter is not the port");
+// an import the model requests is a restricted root too: calling it needs an allowance
+assert.deepStrictEqual(sketch.checkSketchBody(sk, sketch.spliceFills(sk, { ...FILLS, 3: "if (!valid) await fsx.rm(user.id);" }), r!.spec.calls!, ["fsx"]).problems,
+  ["OARC-E098 hole «3»: call not allowed by spec: fsx.rm (allowed: ports.users.findByEmail, ports.crypto.verifyPassword, ports.users.recordFailure, ports.clock.now)"]);
+assert.deepStrictEqual(sketch.checkSketchBody(sk, sketch.spliceFills(sk, { ...FILLS, 3: "if (!valid) await fsx.rm(user.id);" }), [...r!.spec.calls!, "fsx.rm"], ["fsx"]).problems, []);
 assert.deepStrictEqual(sketch.checkSketchBody(sk, sketch.spliceFills(sk, { ...FILLS, 3: "const valid = 1;" }), r!.spec.calls!).problems, ["OARC-E035 hole «3»: not allowed in a statement hole: binding:valid"]);
 assert.deepStrictEqual(sketch.checkSketchBody(sk, sketch.spliceFills(sk, { ...FILLS, 1: "a); (b" }), []).problems.length, 1, "a fill can't change how the sketch parses");
 {

@@ -16,7 +16,7 @@ Since 0.8.0. The building blocks it uses (sketches, concepts, UI specs) are desc
 | `framing` (interface `Decoder`) | `p2p.ts` | `p2p.decodeLengthPrefixed` (4-byte big-endian), `p2p.decodeVarint` (LEB128); `p2p.encodeLengthPrefixed`, `p2p.encodeVarint`, `p2p.handshake`, `p2p.peerTable`, `p2p.onGossip`, `p2p.broadcast` | whole frames decode in order · a frame split across chunks is reassembled · an incomplete frame is kept as `rest` · an empty message survives · no input, no messages · UTF-8 round trip | `Transport` (`palette.net`: N peers joined by links, FIFO delivery, so multi-peer examples are deterministic) |
 | `ui.loginPage` (UI) | `loginPage.spec.tsx`, `loginPage.tsx` | a React login form: email and password fields, an alert for errors, a submit button with a busy state | derived: structure, accessible names, wiring of the form to `props.onLogin`; examples: wrong password, success, a second attempt | `action#onLogin`, `action#onSuccess`; needs `"ui": {"dom": "jsdom"}` |
 
-Variant-specific examples carry the rest: round-robin is fair over N picks, least-connections picks the minimum, consistent-hash moves only the keys a removed node owned, a locked account is reported only after the password matched, an expired magic link says so only when its secret matched, a varint cut in the middle waits for more bytes, the handshake rejects a version mismatch, gossip delivers each message once per peer and stops at its TTL. `stage0/tests/palette.check.ts` also checks the properties on generated inputs (consistent-hash stability over 2,000 keys and five removals, fairness, least-connections over random states, encode/decode round trips under random chunking) and shows that broken bodies fail the laws.
+Variant-specific examples carry the rest: round-robin is fair over N picks, least-connections picks the minimum, consistent-hash moves only the keys a removed node owned, a locked account is reported only after the password matched, an expired magic link says so only when its secret matched, a magic link signs in at most once (the store's `consumeMagicLink` is an atomic compare-and-set, and a request that loses the claim to a concurrent one gets `invalid`), a varint cut in the middle waits for more bytes, the handshake rejects a version mismatch, gossip delivers each message once per peer and stops at its TTL. `stage0/tests/palette.check.ts` also checks the properties on generated inputs (consistent-hash stability over 2,000 keys and five removals, fairness, least-connections over random states, encode/decode round trips under random chunking) and shows that broken bodies fail the laws.
 
 `examples/palette-demo/` uses them: `app.login` (a sketch around `auth.password` that opens a session), `app.serve` (health checks, consistent-hash routing and failover for one request), `app.connect` (two peers negotiate a version) and `app.gossip3` (a 3-peer broadcast over the fake network).
 
@@ -43,7 +43,7 @@ export const pinSpec = arc.defineRegion<Strategy<{ pin: string }>>({
   concept: "auth",
   intent: "A 4-digit PIN.",
   fixtures: { ports: { $fake: "palette.auth", init: { … } }, valid: { pin: "1234" }, wrong: { pin: "0000" } },
-  waive: { "some law": "why it can't apply to a PIN" },
+  // waive: { "<a law of auth>": "why it can't apply to a PIN" },   only when a law really can't apply to this variant
 });
 ```
 
@@ -61,7 +61,7 @@ When you know the shape of a function, write it, and leave holes only where you 
 sketch: async (cred, ports) => {
   const email = arc.hole<string>("cred.email trimmed and lower-cased");
   const user = await ports.users.findByEmail(email);
-  const stored = user?.passwordHash ?? DUMMY_HASH;
+  const stored = user?.passwordHash ?? ports.hasher.dummyHash;
   const match = ports.hasher.equal(await ports.hasher.hash(cred.password, stored), stored);
   if (user === null || !match) {
     arc.hole("if the user exists, record the failure for user.id");

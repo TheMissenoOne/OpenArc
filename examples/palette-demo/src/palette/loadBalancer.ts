@@ -163,7 +163,10 @@ export const consistentHashSpec = arc.defineRegion<Strategy>({
       .filter((b) => b.healthy)
       .flatMap((b) => Array.from({ length: REPLICAS }, (_, i) => ({ at: hash32(`${b.id}#${i}`), id: b.id })))
       .sort((x, y) => x.at - y.at || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
-    return keys.map((key) => arc.hole<string | null>("the id of the first ring entry with at >= hash32(key), else ring[0]; null when the ring is empty"));
+    return keys.map((key) => {
+      const h = hash32(key);
+      return arc.hole<string | null>("the id of the first ring entry with at >= h, else ring[0]; null when the ring is empty");
+    });
   },
 });
 
@@ -195,6 +198,7 @@ export const healthCheckSpec = arc.defineRegion<HealthCheck>({
   intent: [
     "Apply one round of probe results. A backend without a probe is unchanged. A passed probe adds a success and resets failures; a failed one adds a failure and resets successes.",
     "Healthy -> unhealthy when failures >= policy.unhealthyAfter (downSince = clock.now()). Unhealthy -> healthy when successes >= policy.healthyAfter and clock.now() - downSince >= policy.minDownMs (downSince = null).",
+    "An unhealthy state with downSince null starts its cool-down now: downSince = clock.now(), never time 0.",
     "Return new objects in the input order; never mutate the input.",
   ],
   examples: [
@@ -219,6 +223,11 @@ export const healthCheckSpec = arc.defineRegion<HealthCheck>({
       expected: [{ id: "a", healthy: true, failures: 0, successes: 3, downSince: null }, { id: "b", healthy: true, failures: 1, successes: 0, downSince: null }],
     },
     { name: "no backends", args: [[], [], { $fake: "palette.clock", init: { now: 0 } }, { unhealthyAfter: 1, healthyAfter: 1, minDownMs: 0 }], expected: [] },
+    {
+      name: "unhealthy without downSince starts its cool-down now",
+      args: [[{ id: "a", healthy: false, failures: 0, successes: 1, downSince: null }], [{ id: "a", ok: true }], { $fake: "palette.clock", init: { now: 1000 } }, { unhealthyAfter: 3, healthyAfter: 2, minDownMs: 500 }],
+      expected: [{ id: "a", healthy: false, failures: 0, successes: 2, downSince: 1000 }],
+    },
   ],
 });
 
