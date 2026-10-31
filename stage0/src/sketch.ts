@@ -395,12 +395,6 @@ export function sketchHead(s: SketchInfo, symbol: string, typeText: string, sign
   ];
 }
 
-/** Sections after the intent: the signatures of the project functions the sketch calls. */
-export function extraSections(specs: Map<string, { file: string; symbol: string; kind: string }>, s: { sketch?: SketchInfo }): [string, string][] {
-  const callees = s.sketch?.callees ?? [];
-  return callees.length ? [["Functions the sketch calls", callees.map((c) => `${c.path}: ${c.type}`).join("\n")]] : [];
-}
-
 /** "Calls allowed in fills": what the sketch calls itself, plus spec.calls. */
 export const sketchCalls = (s: SketchInfo, specCalls: string[] | undefined): [string, string] =>
   ["Calls allowed in fills", `You may call: ${[...s.implied, ...(specCalls ?? [])].join(", ") || "nothing"} (what the sketch itself calls${specCalls?.length ? ", plus the spec's calls" : ""}). Any other call on an import or a port is rejected (OARC-E098); calls on locals and on functions a fill defines are fine.`];

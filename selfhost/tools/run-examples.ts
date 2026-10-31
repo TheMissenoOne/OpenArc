@@ -1,10 +1,12 @@
 // Dev runner: execute every region's examples in-process, without a sandbox, against YOUR own code.
 // Usage: node tools/run-examples.ts [--strict] [id-prefix]
-// Pending regions are reported but don't fail the run unless --strict is set.
+// Pending regions are reported but don't fail the run unless --strict is set. A concept variant runs its concept's laws
+// (with its fixtures) before its own examples, as the compiler does.
 import { readdirSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { runExamples, showValue } from "open-arc/harness";
-import type { AnyFn, RegionSpec } from "open-arc";
+import type { AnyFn, ConceptSpec, RegionSpec } from "open-arc";
+import { expandLaws } from "../src/concepts.ts";
 
 const root = process.cwd();
 const strict = process.argv.includes("--strict");
@@ -13,12 +15,28 @@ let failed = 0;
 let pending = 0;
 let passed = 0;
 
-for (const file of readdirSync(`${root}/src`).filter((f) => f.endsWith(".ts")).sort()) {
-  if (!readFileSync(`${root}/src/${file}`, "utf8").includes("defineRegion")) continue; // e.g. main.ts would run the CLI
-  const mod = await import(pathToFileURL(`${root}/src/${file}`).href);
+const files = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).flatMap((e) =>
+    e.isDirectory() ? files(`${dir}/${e.name}`) : /\.ts$/.test(e.name) ? [`${dir}/${e.name}`] : []);
+const mods: Record<string, unknown>[] = [];
+for (const file of files(`${root}/src`)) {
+  if (!readFileSync(file, "utf8").includes("defineRegion")) continue; // e.g. main.ts would run the CLI
+  mods.push(await import(pathToFileURL(file).href));
+}
+const concepts = new Map<string, ConceptSpec>();
+for (const mod of mods) for (const v of Object.values(mod)) if (typeof v === "object" && v !== null && Array.isArray((v as ConceptSpec).laws)) concepts.set((v as ConceptSpec).id, v as ConceptSpec);
+
+for (const mod of mods) {
   for (const value of Object.values(mod)) {
-    const spec = value as RegionSpec<AnyFn>;
+    let spec = value as RegionSpec<AnyFn>;
     if (typeof spec !== "object" || spec === null || typeof spec.id !== "string" || !("intent" in spec || "sketch" in spec)) continue;
+    if (spec.concept) {
+      const c = concepts.get(spec.concept);
+      if (!c) throw new Error(`${spec.id}: unknown concept ${spec.concept}`);
+      const ex = expandLaws(c, spec);
+      if (ex.error) throw new Error(`${spec.id}: ${ex.error}`);
+      spec = { ...spec, examples: ex.examples as unknown as RegionSpec<AnyFn>["examples"] };
+    }
     if (!spec.id.startsWith(prefix) || !spec.examples?.length) continue;
     const symbol = spec.symbol ?? spec.id.split(".").at(-1)!;
     const outcomes = await runExamples(root, mod[symbol] as AnyFn, spec);

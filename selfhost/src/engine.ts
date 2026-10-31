@@ -18,8 +18,9 @@ import { buildArgv, readHarnessOutput } from "./sandbox.ts";
 import { readFileSync } from "node:fs";
 import { join, posix, sep } from "node:path";
 import { HARNESS_ENTRY, tierArgv } from "./isolation.ts";
-// palette (structured specs, SPEC §4.5): sketches; hooks below are marked `palette:`
+// palette (structured specs, SPEC §2.5, §4.5): concepts and sketches; hooks below are marked `palette:`
 import * as sketch from "./sketch.ts";
+import * as concepts from "./concepts.ts";
 
 const versionAt = (rel: string): string | undefined => {
   try {
@@ -107,6 +108,7 @@ export interface Project {
   crlf: Set<string>; // files that are CRLF on disk: held as LF in `files` (hashes match on every OS), written back as CRLF
   provenance: Map<string, { [k: string]: Json }>;
   e080Streak: number; // consecutive OARC-E080s in this run; generate stops calling the backend at 3
+  concepts?: Map<string, concepts.ConceptInfo>; // palette: defineConcept statements, by id
 }
 
 const err = (code: Diagnostic["code"], extra: Omit<Diagnostic, "code"> = {}): Diagnostic => ({ code, ...extra });
@@ -223,6 +225,8 @@ function staticJson(n: ts.Expression): Json | undefined {
 const intentText = (v: Json | undefined) => (Array.isArray(v) ? v.join(" ") : typeof v === "string" ? v : "");
 
 function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnostic[]) {
+  p.concepts = new Map(); // palette
+  const once = (d: Diagnostic) => diagnostics.some((x) => x.code === d.code && x.id === d.id && x.file === d.file && x.detail === d.detail) || diagnostics.push(d); // extraction runs again after scaffolding
   for (const [rel] of srcFiles(p)) {
     const sf = p.program!.getSourceFile(abs(p, rel))!;
     for (const stmt of sf.statements) {
@@ -232,6 +236,11 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
         if (!init || !ts.isCallExpression(init) || !ts.isIdentifier(decl.name)) continue;
         const callee = init.expression.getText(sf);
         const kind = /defineRegion$/.test(callee) ? "function" : /defineBlock$/.test(callee) ? "block" : null;
+        if (/defineConcept$/.test(callee)) { // palette: a concept is static JSON, read like a spec (§2.5)
+          const c = concepts.readConcept(init.arguments[0] ? staticJson(init.arguments[0]) : undefined, rel);
+          if ("error" in c) once(err("OARC-E010", { file: rel, line: sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1, detail: c.error }));
+          else p.concepts.set(c.id, c);
+        }
         if (!kind) continue;
         // palette: `sketch` is read as syntax, not as JSON
         const arg = init.arguments[0], syn = arg && ts.isObjectLiteralExpression(arg) ? arg.properties.find((x) => ts.isPropertyAssignment(x) && x.name.getText(sf) === "sketch") as ts.PropertyAssignment | undefined : undefined;
@@ -285,6 +294,7 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
       }
     }
   }
+  concepts.applyConcepts(p.specs, p.concepts, checker, p.program!, p.root).forEach(once); // palette: laws -> examples
 }
 
 // ───────────────────────────── scaffold (§3.6) ─────────────────────────────
@@ -576,7 +586,7 @@ function moduleSignatures(sf: ts.SourceFile, checker: ts.TypeChecker, sameFile?:
     } else if (ts.isVariableStatement(st)) {
       for (const d of st.declarationList.declarations) {
         if (!ts.isIdentifier(d.name) || sameFile?.skip.has(d.name.text)) continue;
-        if (d.initializer && ts.isCallExpression(d.initializer) && /define(Region|Block)$/.test(d.initializer.expression.getText(sf))) continue;
+        if (d.initializer && ts.isCallExpression(d.initializer) && /define(Region|Block|Concept)$/.test(d.initializer.expression.getText(sf))) continue;
         const t = d.type ? d.type.getText(sf) : checker.typeToString(checker.getTypeAtLocation(d.name), undefined, ts.TypeFormatFlags.NoTruncation);
         lines.push(`const ${d.name.text}: ${t}`);
         const fn = d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer)) ? d.initializer : null;
@@ -703,7 +713,7 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   if (sameFileLines.length) sections.push([`Already in ${r.file} (call these, don't re-implement them)`, sameFileLines.join("\n")]);
   if (helperLines.length) sections.push(["Helpers you may call", helperLines.join("\n\n")]);
   sections.push(["Intent", s.intent || "(none)"]);
-  sections.push(...sketch.extraSections(p.specs, s)); // palette: functions the sketch calls, concepts
+  sections.push(...concepts.extraSections(p.specs, p.concepts ?? new Map(), s, p.files.get(r.file)!)); // palette: concept, callees
   if (s.sketch) sections.push(sketch.sketchCalls(s.sketch, s.calls));
   else if (s.calls) sections.push(["Calls allowed", `You may call exactly: ${s.calls.join(", ") || "nothing"}. Any other call on an import or a port is rejected (OARC-E098); calls on local variables and on functions you define in the body are fine.`]);
   if (r.kind === "function") {
@@ -1030,11 +1040,11 @@ export function guardSplice(before: string, after: string, id: string): string |
   return remaining.length === o1.length ? null : `OARC-E097 text outside region ${id} was removed`;
 }
 
-/** Texts of every spec statement (defineRegion/defineBlock) in a file, in order. */
+/** Texts of every spec statement (defineRegion/defineBlock/defineConcept) in a file, in order. */
 export function specStatements(text: string): string[] {
   const sf = ts.createSourceFile("s.ts", text, ts.ScriptTarget.Latest, true);
   return sf.statements
-    .filter((st) => ts.isVariableStatement(st) && st.declarationList.declarations.some((d) => d.initializer && ts.isCallExpression(d.initializer) && /define(Region|Block)$/.test(d.initializer.expression.getText(sf))))
+    .filter((st) => ts.isVariableStatement(st) && st.declarationList.declarations.some((d) => d.initializer && ts.isCallExpression(d.initializer) && /define(Region|Block|Concept)$/.test(d.initializer.expression.getText(sf))))
     .map((st) => st.getText(sf));
 }
 
@@ -1144,6 +1154,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   let previous: { body: string; problems: string[] } | null = null;
   let lastPrompt: string | null = null;
   let repeats = 0;
+  for (const [law, why] of concepts.waivers(r.spec)) ports.log(`  ${id}: law "${law}" waived: ${why}`); // palette
   const cachePath = `.openarc/cache/${r.fingerprint.replace("sha256:", "")}.json`;
   const cached = await ports.fs.read(cachePath);
   // A compiler-owned region that fails keeps its old body, which may not satisfy the current spec: say so (display: stale).
@@ -1228,7 +1239,8 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       // holds it back. One reached by none YET, while sibling blocks are still pending, is provisional: cached, and
       // committed only once the joint check sees a passing example reach it.
       if (!(attempt === 1 && cached) && !result.unverified) await ports.fs.write(cachePath, JSON.stringify({ body, imports, ...(sampling ? { sampling } : {}) }));
-      p.provenance.set(id, { source: "generated", backend: at.backend.name, model: at.backend.model, contextLevel: at.level, attempts: attempt, verifiedBy: result.verifiedBy, ...(sampling ? { sampling } : {}) });
+      const waived = Object.fromEntries(concepts.waivers(r.spec)); // palette: waived laws are recorded with the body
+      p.provenance.set(id, { source: "generated", backend: at.backend.name, model: at.backend.model, contextLevel: at.level, attempts: attempt, verifiedBy: result.verifiedBy, ...(sampling ? { sampling } : {}), ...(Object.keys(waived).length ? { waived } : {}) });
       if (result.unverified) {
         diagnostics.push(err("OARC-W045", { id, detail: `unreached:${r.root}` }));
         ports.log(`  ${id}: unverified: no passing example of ${r.root} reaches this block (${result.verifiedBy.join(", ")})`);
