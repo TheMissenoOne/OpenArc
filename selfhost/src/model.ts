@@ -143,7 +143,13 @@ export const callSpec = arc.defineRegion<Call>({
 // @openarc:begin model.call
 export const call: Call = async (http, cfg, req) => {
   const url = `${cfg.host}/api/chat`;
-  const body = { model: req.model, stream: req.stream, format: req.format, options: req.options, messages: req.messages };
+  const body: Json = {
+    model: req.model,
+    stream: req.stream,
+    format: req.format,
+    options: req.options,
+    messages: req.messages
+  };
   const response = await http.postJson(url, body);
   return JSON.parse(response).message.content;
 };

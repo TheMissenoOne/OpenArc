@@ -1,0 +1,1 @@
+{"body":"await commit(ports.fs, planJournal(txid, staged.map((f, i) => ({ target: f.target, staged: `.openarc/txn/${txid}/stage/${i}` }))));","imports":[]}

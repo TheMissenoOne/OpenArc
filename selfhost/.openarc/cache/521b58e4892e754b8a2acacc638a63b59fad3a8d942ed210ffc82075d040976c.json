@@ -1,0 +1,1 @@
+{"body":"return {\n    txid,\n    entries: files.map((file, index) => ({\n      target: file.target,\n      staged: file.staged,\n      backup: `.openarc/txn/${txid}/backup/${index}`\n    }))\n  };","imports":[]}

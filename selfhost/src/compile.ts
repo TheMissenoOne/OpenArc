@@ -103,7 +103,6 @@ export async function run(ports: Ports, req: CompileRequest): Promise<CompileRes
     // @openarc:begin compile.run.parse
     project = await engine.parse(ports, req, diagnostics);
       const journal = planJournal(txid, targets.map(t => ({ target: t, staged: '' })) as any);
-      await recover(ports.fs);
       await commit(ports.fs, journal);
     // @openarc:end compile.run.parse
     if (hasErrors(diagnostics)) return done(1);
