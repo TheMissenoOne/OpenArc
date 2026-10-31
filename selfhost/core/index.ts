@@ -22,16 +22,19 @@ type EncodedEach<T> = T extends number
   : T extends undefined
     ? T | "$undefined"
     : T extends AnyFn
-      ? T
+      ? T | FakeRef // a function-valued field can be a fake (UI props: { $fake: "action#onLogin" })
       : T extends object
         ? { [K in keyof T]: Encoded<T[K]> }
         : T;
 /** Each positional argument may be a FakeRef instead of its value. */
 export type FakeArgs<P extends readonly unknown[]> = { [K in keyof P]: Encoded<P[K]> | FakeRef };
-/** void-returning functions are checked by side effects (fakesAfter), so they take no `expected`. */
+/** void-returning functions are checked by side effects (fakesAfter), so they take no `expected`; nor do functions that
+ *  return `unknown` (UI components, checked in the DOM). */
 type Expect<F extends AnyFn> = [Awaited<ReturnType<F>>] extends [void]
   ? { expected?: never }
-  : { expected: Encoded<Awaited<ReturnType<F>>> };
+  : unknown extends Awaited<ReturnType<F>>
+    ? { expected?: Json }
+    : { expected: Encoded<Awaited<ReturnType<F>>> };
 
 export type Example<F extends AnyFn> = {
   name?: string;
@@ -42,7 +45,21 @@ export type Example<F extends AnyFn> = {
   tolerance?: number;
   /** compare numbers bit-exactly (Object.is: -0 differs from 0, no tolerance); NaN still equals NaN */
   exact?: boolean;
+  /** UI regions: steps run in a DOM after the component renders, elements found by accessible name */
+  script?: UiStep[];
+  /** UI regions: what the DOM shows after the script */
+  dom?: { text?: string[]; notText?: string[]; enabled?: UiTarget[]; disabled?: UiTarget[] };
 } & Expect<F>;
+
+/** An element by role and accessible name ("button", "Sign in"). */
+export type UiTarget = { role: string; name: string };
+export type UiStep = { fill: { label: string; value: string } } | { click: UiTarget };
+/** A UI structure tree, as the compiler reads it from `ui:` (and as the vocabulary builds it for the type checker). */
+export interface UiNode {
+  tag: string;
+  props: { [k: string]: unknown };
+  children: (UiNode | string)[];
+}
 
 export interface RegionSpec<F extends AnyFn> {
   id: string;
@@ -65,6 +82,8 @@ export interface RegionSpec<F extends AnyFn> {
   fixtures?: { [name: string]: Json };
   /** law name -> why that law does not apply to this variant (printed and recorded in the manifest). */
   waive?: { [law: string]: string };
+  /** UI regions (in a `*.spec.tsx` file): the component's rough structure in the open-arc/ui vocabulary. Read as syntax. */
+  ui?: (...args: Parameters<F>) => UiNode;
 }
 
 /** A concept law: an example template. Any "$fixture:<name>" string in it is replaced by the variant's fixtures[name]. */

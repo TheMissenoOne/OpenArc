@@ -18,9 +18,10 @@ import { buildArgv, readHarnessOutput } from "./sandbox.ts";
 import { readFileSync } from "node:fs";
 import { join, posix, sep } from "node:path";
 import { HARNESS_ENTRY, tierArgv } from "./isolation.ts";
-// palette (structured specs, SPEC §2.5, §4.5): concepts and sketches; hooks below are marked `palette:`
+// palette (structured specs, SPEC §2.5, §2.6, §4.5): concepts, UI specs and sketches; hooks below are marked `palette:`
 import * as sketch from "./sketch.ts";
 import * as concepts from "./concepts.ts";
+import * as ui from "./ui.ts";
 
 const versionAt = (rel: string): string | undefined => {
   try {
@@ -54,6 +55,7 @@ export interface SpecInfo {
   isAsync: boolean;
   typeNode?: ts.TypeNode;
   sketch?: sketch.SketchInfo; // palette: the body as typed code with holes (§4.5)
+  ui?: ui.UiInfo; // palette: the component's structure, read from a *.spec.tsx file (§2.6)
 }
 
 export interface ManifestEntry {
@@ -125,7 +127,7 @@ async function listTs(ports: Ports, dir: string): Promise<string[]> {
   const out: string[] = [];
   for (const name of await ports.fs.list(dir)) {
     const rel = `${dir}/${name}`;
-    if (name.endsWith(".ts")) out.push(rel);
+    if (/\.tsx?$/.test(name)) out.push(rel); // palette: .tsx for UI specs and components
     else if (!name.includes(".")) out.push(...(await listTs(ports, rel)));
   }
   return out;
@@ -242,9 +244,10 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           else p.concepts.set(c.id, c);
         }
         if (!kind) continue;
-        // palette: `sketch` is read as syntax, not as JSON
-        const arg = init.arguments[0], syn = arg && ts.isObjectLiteralExpression(arg) ? arg.properties.find((x) => ts.isPropertyAssignment(x) && x.name.getText(sf) === "sketch") as ts.PropertyAssignment | undefined : undefined;
-        const literal = arg ? staticJson(syn ? ts.factory.updateObjectLiteralExpression(arg as ts.ObjectLiteralExpression, (arg as ts.ObjectLiteralExpression).properties.filter((x) => x !== syn)) : arg) : undefined;
+        // palette: `sketch` and `ui` are read as syntax, not as JSON
+        const arg = init.arguments[0], own = (k: string) => (arg && ts.isObjectLiteralExpression(arg) ? arg.properties.find((x): x is ts.PropertyAssignment => ts.isPropertyAssignment(x) && x.name.getText(sf) === k) : undefined);
+        const syn = own("sketch"), uiProp = own("ui");
+        const literal = arg ? staticJson(syn || uiProp ? ts.factory.updateObjectLiteralExpression(arg as ts.ObjectLiteralExpression, (arg as ts.ObjectLiteralExpression).properties.filter((x) => x !== syn && x !== uiProp)) : arg) : undefined;
         const line = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
         if (!literal || typeof literal !== "object" || Array.isArray(literal) || typeof literal.id !== "string") {
           diagnostics.push(err("OARC-E010", { file: rel, line }));
@@ -281,6 +284,17 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           params = r.params;
           literal.$sketch = sketch.sketchHashText(r);
         }
+        let u: ui.UiInfo | undefined; // palette: the structure tree joins the spec hash; react is an allowed import
+        if (uiProp) {
+          const r = kind === "function" ? ui.readUi(uiProp.initializer, sf) : { error: "ui:function-regions-only" };
+          if ("error" in r) {
+            diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: r.error }));
+            continue;
+          }
+          u = r;
+          literal.$ui = { tree: r.root as unknown as Json, vocabulary: ui.VOCABULARY_VERSION };
+          literal.deps = [...new Set([...((literal.deps as string[] | undefined) ?? []), "react"])];
+        }
         p.specs.set(id, {
           id, kind, file: rel, exportName: decl.name.text, literal,
           symbol: typeof literal.symbol === "string" ? literal.symbol : id.split(".").at(-1)!,
@@ -289,7 +303,7 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           examples: (literal.examples as Json[] | undefined) ?? [],
           intent: intentText(literal.intent),
           ...(Array.isArray(literal.calls) ? { calls: literal.calls as string[] } : {}),
-          typeText, signature, params, isAsync, typeNode, ...(sk ? { sketch: sk } : {}),
+          typeText, signature, params, isAsync, typeNode, ...(sk ? { sketch: sk } : {}), ...(u ? { ui: u } : {}),
         });
       }
     }
@@ -316,6 +330,12 @@ export function scaffoldInMemory(p: Project, diagnostics: Diagnostic[]): string[
     if (markerIds.has(s.id)) continue;
     if (s.kind === "block") {
       diagnostics.push(err("OARC-W013", { id: s.id, file: s.file }));
+      continue;
+    }
+    if (s.ui) { // palette: a UI region lives in its component file, next to the *.spec.tsx
+      const d = ui.scaffoldUi(p.files, s);
+      if (d) diagnostics.push(d);
+      else done.push(s.id);
       continue;
     }
     const text = p.files.get(s.file)!;
@@ -713,7 +733,7 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   if (sameFileLines.length) sections.push([`Already in ${r.file} (call these, don't re-implement them)`, sameFileLines.join("\n")]);
   if (helperLines.length) sections.push(["Helpers you may call", helperLines.join("\n\n")]);
   sections.push(["Intent", s.intent || "(none)"]);
-  sections.push(...concepts.extraSections(p.specs, p.concepts ?? new Map(), s, p.files.get(r.file)!)); // palette: concept, callees
+  sections.push(...concepts.extraSections(p.specs, p.concepts ?? new Map(), s, p.files.get(r.file)!), ...ui.uiSections(s)); // palette: concept, callees, UI structure
   if (s.sketch) sections.push(sketch.sketchCalls(s.sketch, s.calls));
   else if (s.calls) sections.push(["Calls allowed", `You may call exactly: ${s.calls.join(", ") || "nothing"}. Any other call on an import or a port is rejected (OARC-E098); calls on local variables and on functions you define in the body are fine.`]);
   if (r.kind === "function") {
@@ -793,7 +813,7 @@ export function plan(p: Project, req: CompileRequest, diagnostics: Diagnostic[])
     if (r.kind === "block" && (p.specs.get(r.root)?.examples.length ?? 0) === 0) diagnostics.push(err("OARC-W041", { id }));
     else if (r.kind === "block") diagnostics.push(err("OARC-W040", { id }));
     else {
-      const thin = thinExamples(r.spec.examples);
+      const thin = r.spec.ui ? null : thinExamples(r.spec.examples); // palette: UI examples are interaction scripts
       if (thin) diagnostics.push(err("OARC-W044", { id, detail: thin }));
     }
   }
@@ -828,10 +848,10 @@ interface Attempt {
 }
 
 /** Normalise model output (F13): strip fences; unwrap a whole function when only a body was asked for. */
-export function unwrapBody(body: string, kind: "function" | "block"): string {
+export function unwrapBody(body: string, kind: "function" | "block", tsx = false): string {
   let b = body.trim().replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/, "").trim();
   if (kind !== "function") return b;
-  const sf = ts.createSourceFile("b.ts", b, ts.ScriptTarget.Latest, true);
+  const sf = ts.createSourceFile(tsx ? "b.tsx" : "b.ts", b, ts.ScriptTarget.Latest, true);
   if (sf.statements.length !== 1) return b;
   const st = sf.statements[0]!;
   let fn: ts.FunctionLikeDeclaration | undefined;
@@ -896,8 +916,8 @@ const callAllowed = (calls: string[], path: string) => calls.some((c) => c === p
 const RANDOM_MEMBERS = new Set(["getRandomValues", "randomUUID", "randomBytes"]);
 
 /** Static rules (§7) on a candidate body. Best-effort: the sandbox is the real boundary. */
-export function staticCheck(body: string, effects: string[], fileBound: Set<string> = new Set(), policy?: CallPolicy): { diag: Diagnostic; message: string }[] {
-  const sf = ts.createSourceFile("c.ts", `async function __w() {\n${body}\n}`, ts.ScriptTarget.Latest, true);
+export function staticCheck(body: string, effects: string[], fileBound: Set<string> = new Set(), policy?: CallPolicy, tsx = false): { diag: Diagnostic; message: string }[] {
+  const sf = ts.createSourceFile(tsx ? "c.tsx" : "c.ts", `async function __w() {\n${body}\n}`, ts.ScriptTarget.Latest, true);
   const out: { diag: Diagnostic; message: string }[] = [];
   const local = new Set<string>(); // names the body itself declares
   const scopes = new Map<string, ts.Node[]>(); // name -> the nodes its declarations are visible in
@@ -966,11 +986,11 @@ export function staticCheck(body: string, effects: string[], fileBound: Set<stri
 
 /** A comment that merely mentions the marker prefix ("// matches @openarc: markers") is removed before splicing: a safe,
  *  non-semantic normalisation (§8.7). A marker-SHAPED comment (`// @openarc:begin|end …`) is kept, so guardBody rejects it. */
-export function stripMarkerComments(body: string): { body: string; stripped: number } {
+export function stripMarkerComments(body: string, tsx = false): { body: string; stripped: number } {
   if (!body.includes("@openarc:")) return { body, stripped: 0 };
   const pre = "async function __region() {\n";
   const text = `${pre}${body}\n}\n`;
-  const sf = ts.createSourceFile("s.ts", text, ts.ScriptTarget.Latest, true);
+  const sf = ts.createSourceFile(tsx ? "s.tsx" : "s.ts", text, ts.ScriptTarget.Latest, true);
   const drop = new Map<number, number>(); // body offsets: start -> end, so a comment seen twice counts once
   const walk = (n: ts.Node): void => {
     const kids = n.getChildren(sf);
@@ -997,13 +1017,13 @@ export function stripMarkerComments(body: string): { body: string; stripped: num
 }
 
 /** The body must parse as exactly one function body: it cannot close its braces and escape the region. */
-export function guardBody(body: string): string | null {
+export function guardBody(body: string, tsx = false): string | null {
   // Markers are recognised on comment tokens only (F2), so the marker prefix inside a string or regex is inert and
   // allowed (the marker scanner itself needs it). Reject marker-shaped LINES (line-based locators must never be
   // fooled, even by a template-literal line) and any comment that mentions the marker prefix.
   if (linesOf(body).some((l) => /^\s*\/\/\s*@openarc:/.test(l))) return "OARC-E097 body contains a marker-shaped line (markers belong to the compiler)";
   const text = `async function __region() {\n${body}\n}\n`;
-  const sf = ts.createSourceFile("g.ts", text, ts.ScriptTarget.Latest, true);
+  const sf = ts.createSourceFile(tsx ? "g.tsx" : "g.ts", text, ts.ScriptTarget.Latest, true);
   const comments: string[] = [];
   const walk = (n: ts.Node): void => {
     const kids = n.getChildren(sf);
@@ -1012,7 +1032,7 @@ export function guardBody(body: string): string | null {
   };
   walk(sf);
   if (comments.some((c) => c.includes("@openarc:"))) return "OARC-E097 body has a comment mentioning @openarc: (markers belong to the compiler)";
-  const syntax = ts.transpileModule(text, { reportDiagnostics: true, compilerOptions: { target: ts.ScriptTarget.ES2023 } }).diagnostics ?? [];
+  const syntax = ts.transpileModule(text, { reportDiagnostics: true, ...(tsx ? { fileName: "g.tsx" } : {}), compilerOptions: { target: ts.ScriptTarget.ES2023, ...(tsx ? { jsx: ts.JsxEmit.Preserve } : {}) } }).diagnostics ?? [];
   if (syntax.length) return `OARC-E097 body has syntax errors: ${ts.flattenDiagnosticMessageText(syntax[0]!.messageText, " ")}`;
   if (sf.statements.length !== 1) return "OARC-E097 body escapes its region (it does not parse as a single function body)";
   return null;
@@ -1155,6 +1175,11 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   let lastPrompt: string | null = null;
   let repeats = 0;
   for (const [law, why] of concepts.waivers(r.spec)) ports.log(`  ${id}: law "${law}" waived: ${why}`); // palette
+  const dom = r.spec.ui ? await ui.domProblem(ports, p.config.ui?.dom) : null; // palette: UI checks need the project's DOM
+  if (dom) {
+    diagnostics.push(err("OARC-E092", { id, detail: dom })); // no unverified fallback, and no model call wasted
+    return { candidate: null, modelCalls: 0 };
+  }
   const cachePath = `.openarc/cache/${r.fingerprint.replace("sha256:", "")}.json`;
   const cached = await ports.fs.read(cachePath);
   // A compiler-owned region that fails keeps its old body, which may not satisfy the current spec: say so (display: stale).
@@ -1222,8 +1247,9 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       body = parsed.body;
       imports = parsed.imports.map((im, i) => (split.defaults.has(i) ? { ...im, default: split.defaults.get(i)! } : im));
     }
-    body = unwrapBody(body, r.kind);
-    const clean = stripMarkerComments(body);
+    const tsx = r.file.endsWith(".tsx"); // palette: UI components are parsed as TSX
+    body = unwrapBody(body, r.kind, tsx);
+    const clean = stripMarkerComments(body, tsx);
     if (clean.stripped) {
       ports.log(`  ${id}: stripped ${clean.stripped} comment${clean.stripped === 1 ? "" : "s"} mentioning @openarc: (markers belong to the compiler)`);
       body = clean.body;
@@ -1296,13 +1322,14 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   // palette: a sketch region's body must be its sketch with only the holes filled (E099); fills keep §3.4 and the implied calls
   const sk = r.spec.sketch ? sketch.checkSketchBody(r.spec.sketch, body, r.spec.calls ?? []) : null;
   if (sk?.problems.length) return fail(sk.problems);
-  const st = staticCheck(body, r.spec.effects, bound, sk ? undefined : callPolicy(p, r, imports));
+  const tsx = r.file.endsWith(".tsx"); // palette
+  const st = staticCheck(body, r.spec.effects, bound, sk ? undefined : callPolicy(p, r, imports), tsx);
   if (st.length) return fail(st.map((s) => `${s.diag.code} ${s.message}`));
   if (r.kind === "block") {
     const rs = checkRestrictions(body, p.specs.get(r.root)?.isAsync ?? false, []);
     if (rs.length) return fail(rs.map((d) => `OARC-E035 not allowed in a block: ${d.detail}`));
   }
-  const escape = guardBody(body);
+  const escape = guardBody(body, tsx);
   if (escape) return fail([escape]);
   // splice into the in-memory copy (with this run's accepted candidates) and type-check
   const typeOnly = (from: string, name: string) => {
@@ -1330,7 +1357,7 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   const verifiedBy = ["tsc", "static"];
   // examples in the sandbox: the region's own (function) or its enclosing function's (block)
   const rootSpec = p.specs.get(r.root)!;
-  if (rootSpec.examples.length) {
+  if (rootSpec.examples.length || rootSpec.ui) {
     // palette: a sketch's sandbox copy carries one coverage probe per hole
     const sbOverlay = sk ? new Map(overlay).set(r.file, mergeImports(spliceRegion(base, r.id, regionBodyLines(r, sketch.spliceFills(r.spec.sketch!, sk.fills, r.id))), imports, typeOnly)) : overlay;
     const res = await runSandbox(ports, req, p, r.root, sbOverlay, undefined, r.kind === "block" ? [r.id] : []);
@@ -1342,7 +1369,7 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
     if (conflict) return { ...fail([`OARC-E100 example "${conflict.detail}" fails without reaching any hole: the sketch decides it, so no fill can fix it`]), stop: conflict };
     if (real.length || (!res.complete && r.kind === "function"))
       return fail(real.map((o) => `OARC-E090 example "${o.name}" failed: got ${showValue(o.actual)}; expected ${showValue(exampleExpected(rootSpec, o.name))}`).concat(res.complete ? [] : ["OARC-E090 harness output incomplete (process exited early?)"]));
-    verifiedBy.push(`examples:${res.passed}/${rootSpec.examples.length}${res.failed.length ? ` (${res.failed.length} inconclusive: sibling blocks pending)` : ""}`);
+    verifiedBy.push(`examples:${res.passed}/${rootSpec.ui ? res.passed + res.failed.length : rootSpec.examples.length}${res.failed.length ? ` (${res.failed.length} inconclusive: sibling blocks pending)` : ""}`);
     if (r.kind === "block") verifiedBy.push(`via:${r.root}`);
     const holes = sk ? sketch.unreachedHoles(r.spec.sketch!, r.id, res.hits) : [];
     if (holes.length) return { ok: true, problems: [], verifiedBy, missingContext: false, holes }; // palette: W045 per hole
@@ -1425,7 +1452,9 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
   const spec = p.specs.get(rootId)!;
   // Examples are passed from the compiler's STATIC extraction: a body that mutates spec.examples at runtime cannot weaken its own tests.
   const tolerance = typeof spec.literal.tolerance === "number" ? { tolerance: spec.literal.tolerance } : {};
-  await ports.fs.write(`${dir}/.openarc/harness-plan.json`, JSON.stringify({ [rootId]: { module: spec.file, symbol: spec.symbol, specExport: spec.exportName, examples: spec.examples, ...tolerance, ...(oracle ? { oracle } : {}) } }));
+  // palette: a UI region's module is its component file; the harness gets the structure tree for the derived checks
+  const uiPlan = spec.ui ? { module: p.regions.find((x) => x.id === rootId)!.file, ui: spec.ui as unknown as Json } : {};
+  await ports.fs.write(`${dir}/.openarc/harness-plan.json`, JSON.stringify({ [rootId]: { module: spec.file, symbol: spec.symbol, specExport: spec.exportName, examples: spec.examples, ...tolerance, ...(oracle ? { oracle } : {}), ...uiPlan } }));
   const sb = p.config.sandbox ?? {};
   const limits = {
     nodeBin: req.sandbox.nodeBin, nodePrefix: req.sandbox.nodePrefix, heapMb: sb.heapMb ?? req.sandbox.heapMb,

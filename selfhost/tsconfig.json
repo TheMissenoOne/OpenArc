@@ -11,12 +11,17 @@
     "skipLibCheck": true,
     "types": [
       "node"
-    ]
+    ],
+    "jsx": "react-jsx"
   },
   "include": [
     "core",
     "src",
     "tests",
     "tools"
+  ],
+  "exclude": [
+    "src/palette/loginPage.tsx",
+    "tests/fixtures"
   ]
 }

@@ -23,6 +23,8 @@ writeFileSync(`${root}/build/package.json`, JSON.stringify({
   exports: {
     ".": { types: "./dist/core/index.d.ts", default: "./dist/core/index.js" },
     "./harness": { types: "./dist/core/harness.d.ts", default: "./dist/core/harness.js" },
+    "./ui": { types: "./dist/core/ui.d.ts", default: "./dist/core/ui.js" },
+    "./ui/jsx-runtime": { types: "./dist/core/ui-jsx-runtime.d.ts", default: "./dist/core/ui-jsx-runtime.js" },
     "./palette/*": { types: "./dist/src/palette/*.d.ts", default: "./dist/src/palette/*.js" },
   },
   files: ["dist", "README.md", "palette"],

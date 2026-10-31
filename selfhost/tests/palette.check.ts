@@ -4,6 +4,7 @@
 // 2. Every region's examples, concept laws included (as the compiler expands them), pass through the harness.
 // 3. The laws have teeth: broken bodies fail them. Properties on generated inputs: consistent-hash stability,
 //    round-robin fairness, least-connections minimum, framing round trips under random chunking.
+//    The UI part (loginPage.spec.tsx) is checked by tests/ui.check.ts.
 // 4. The pending copy (tools/palette.ts) compiles end to end through this OS's sandbox against a fake Ollama that
 //    answers with the hand-written bodies (fills for sketches): every region verified, every hole reached.
 import assert from "node:assert/strict";
@@ -19,13 +20,14 @@ import type { CompileRequest, Ports } from "../src/types.ts";
 import fakePorts from "./fakes/ports.memory.ts";
 import * as engine from "../src/engine.ts";
 import * as sketch from "../src/sketch.ts";
-import { PALETTE_FAKES, PALETTE_FILES, pendingCopy } from "../tools/palette.ts";
+import { PALETTE_FAKES, PALETTE_FILES as ALL_FILES, pendingCopy } from "../tools/palette.ts";
 import * as lb from "../src/palette/loadBalancer.ts";
 import * as p2p from "../src/palette/p2p.ts";
 import * as auth from "../src/palette/auth.ts";
 
 const root = process.cwd();
 const req: CompileRequest = { root, ids: [], model: { host: "http://h", model: "m", seed: 1, numCtx: 8192 }, sandbox: { nodeBin: "/n/bin/node", nodePrefix: "/n", heapMb: 256, addressSpaceBytes: 2 ** 32, cpuSeconds: 10 } };
+const PALETTE_FILES = ALL_FILES.filter((f) => f.endsWith(".ts")); // the UI palette (loginPage) needs a DOM: tests/ui.check.ts
 const files = Object.fromEntries(PALETTE_FILES.map((f) => [`src/palette/${f}`, readFileSync(join(root, "src/palette", f), "utf8")]));
 
 // ── 1. the compiler's view

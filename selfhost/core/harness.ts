@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { OpenArcTodoError, type FakeFactory, type FakeInstance, type FakeRef, type Json, type RegionSpec, type AnyFn } from "./index.ts";
+import { OpenArcTodoError, type FakeFactory, type FakeInstance, type FakeRef, type Json, type RegionSpec, type AnyFn, type UiNode } from "./index.ts";
 
 export interface Outcome {
   name: string;
@@ -146,6 +146,8 @@ export interface HarnessPlanEntry {
   tolerance?: number;
   /** `openarc check --oracle`: run the region and a reference implementation on these argument lists instead of the examples. */
   oracle?: { module: string; export: string; inputs: Json[][] };
+  /** palette: a UI region (§2.6): the structure tree; `module` is then the component file, run in a DOM by ui-harness.ts. */
+  ui?: { param: string | null; root: UiNode };
 }
 
 const settle = async (fn: AnyFn, args: unknown[]): Promise<{ value?: unknown; throws?: string }> => {
@@ -174,6 +176,11 @@ export async function main(root: string, regionId: string): Promise<void> {
   const plan = JSON.parse(readFileSync(join(root, ".openarc", "harness-plan.json"), "utf8")) as Record<string, HarnessPlanEntry>;
   const entry = plan[regionId];
   if (!entry) throw new Error(`harness: no plan entry for ${regionId}`);
+  const print = (os: Outcome[]) => {
+    for (const o of os) process.stdout.write(JSON.stringify(o) + "\n");
+    process.stdout.write(JSON.stringify({ done: os.length }) + "\n");
+  };
+  if (entry.ui) return print(await (await import("./ui-harness.ts")).runUi(root, { ...entry, ui: entry.ui })); // palette
   const mod = await importFile(root, entry.module);
   const spec = entry.examples ? { ...(mod[entry.specExport] as RegionSpec<AnyFn>), examples: entry.examples as unknown as RegionSpec<AnyFn>["examples"], tolerance: entry.tolerance } : mod[entry.specExport];
   const outcomes = entry.oracle

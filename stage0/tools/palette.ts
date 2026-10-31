@@ -16,7 +16,7 @@ export function pendingCopy(text: string): string {
 }
 
 const here = fileURLToPath(new URL("..", import.meta.url)); // stage0/
-export const PALETTE_FILES = readdirSync(join(here, "src/palette")).filter((f) => f.endsWith(".ts")).sort();
+export const PALETTE_FILES = readdirSync(join(here, "src/palette")).filter((f) => /\.tsx?$/.test(f)).sort();
 export const PALETTE_FAKES = readdirSync(join(here, "tests/fakes")).filter((f) => f.startsWith("palette.")).sort();
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
