@@ -13,14 +13,15 @@ import { detect } from "./ownership.ts";
 import { checkRestrictions } from "./block.ts";
 import { selectTargets } from "./plan.ts";
 import { PROMPT_TEMPLATE_VERSION, PROMPT_TEMPLATE, renderTemplate, parseOutput } from "./model.ts";
-import { baseUrlOf, complete, isOllamaCompat } from "./backends.ts";
+import { addTokens, baseUrlOf, completeWithUsage, isOllamaCompat, type Tokens } from "./backends.ts";
+import { CODE_PROMPT_TEMPLATE, CODE_PROMPT_TEMPLATE_VERSION, CODE_SYSTEM, codeRules, parseCodeOutput } from "./output-format.ts";
 import { buildArgv, readHarnessOutput } from "./sandbox.ts";
 import { readFileSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, posix, sep } from "node:path";
-import { HARNESS_ENTRY, tierArgv } from "./isolation.ts";
+import { HARNESS_ENTRY, bwrapReadPaths, tierArgv } from "./isolation.ts";
 
 const versionAt = (rel: string): string | undefined => {
   try {
@@ -408,7 +409,8 @@ export async function analyze(ports: Ports, req: CompileRequest, p: Project, dia
       backend: { provider: backend.provider, model: backend.model, digest, seed: backend.seed ?? 1, maxContextTokens: backend.maxContextTokens },
       // the normalised endpoint (provider presets, §13): a changed preset default re-fingerprints its regions
       endpoint: backend.provider === "ollama" ? null : { preset: backend.preset ?? backend.provider, structuredOutput: backend.structuredOutput ?? null, ollamaCompat: isOllamaCompat(backend) },
-      promptTemplate: PROMPT_TEMPLATE_VERSION, compiler: COMPILER_VERSION, typescript: ts.version,
+      promptTemplate: backend.outputFormat === "code" ? CODE_PROMPT_TEMPLATE_VERSION : PROMPT_TEMPLATE_VERSION, outputFormat: backend.outputFormat!,
+      compiler: COMPILER_VERSION, typescript: ts.version,
     }));
     r.stale = p.manifest.regions[r.id]?.fingerprint !== r.fingerprint;
   }
@@ -448,7 +450,8 @@ const initialLevel = (p: Project, r: RegionInfo): ContextLevel =>
 function backendFor(p: Project, id: string, stage: 0 | 1): BackendConfig & { name: string } {
   const c = p.config.compilation;
   const name = stage === 1 && c.fallbackBackend ? c.fallbackBackend : (p.config.regions?.[id]?.backend ?? c.defaultBackend);
-  return { ...p.config.backends[name]!, name };
+  const b = p.config.backends[name]!;
+  return { ...b, name, outputFormat: p.config.regions?.[id]?.outputFormat ?? b.outputFormat ?? "json" };
 }
 
 async function modelDigest(ports: Ports, p: Pick<Project, "digests">, b: BackendConfig, diagnostics: Diagnostic[]): Promise<string | null> {
@@ -692,13 +695,13 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
     sections.push(["Effects allowed", s.effects.join(", ") || "none"]);
     sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
     if (s.examples.length)
-      sections.push(["Examples (deep equality; numbers match within 1e-9 relative and -0 equals 0 unless \"exact\"; the strings \"$NaN\", \"$Infinity\", \"$-Infinity\", \"$undefined\" stand for those values; {\"$fake\": name} is a test double for that parameter)", s.examples.map((e) => canonicalJson(e)).join("\n")]);
+      sections.push(["Examples (deep equality; numbers match within 1e-9 relative and -0 equals 0 unless \"exact\"; the strings \"$NaN\", \"$Infinity\", \"$-Infinity\", \"$undefined\" stand for those values; {\"$fake\": name} is a test double for that parameter; {\"throws\": true} means the call must throw, and a \"throws\" string must appear in the error message)", s.examples.map((e) => canonicalJson(e)).join("\n")]);
   } else {
     sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
     sections.push(["Enclosing function (your block is at <<<HERE>>>)", enclosingSource(p, r)]);
   }
   if (level >= 2 && !opts.stable) sections.push([`Full file ${r.file}`, p.files.get(r.file)!]); // ponytail: holds sibling bodies, so not in the fingerprint
-  sections.push(["Rules", RULES]);
+  sections.push(["Rules", backend.outputFormat === "code" ? codeRules(RULES) : RULES]);
 
   // Budget: drop optional sections (from the end of the optional list) until the package fits.
   const budget = (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5; // ~3.5 chars/token
@@ -834,6 +837,9 @@ function fileBindings(text: string, importsOnly = false): Set<string> {
   return out;
 }
 
+/** The local names an import binds (named, default and namespace). */
+const localNames = (i: ImportDecl): string[] => [...i.names, ...(i.default ? [i.default] : []), ...(i.namespace ? [i.namespace] : [])];
+
 /** A spec's `calls` allowlist (§7 rule 6) and the root names it governs: the file's import bindings (with the requested
  *  imports) and the enclosing function's parameters typed `Ports`. */
 export interface CallPolicy {
@@ -845,7 +851,7 @@ export interface CallPolicy {
 export function callPolicy(p: Project, r: RegionInfo, requested: ImportDecl[] = []): CallPolicy | undefined {
   if (!r.spec.calls) return undefined;
   const restricted = fileBindings(p.accepted.get(r.file) ?? p.files.get(r.file)!, true);
-  for (const i of requested) [...i.names, ...(i.default ? [i.default] : [])].forEach((n) => restricted.add(n));
+  for (const i of requested) localNames(i).forEach((n) => restricted.add(n));
   const root = p.specs.get(r.root);
   const checker = p.program?.getTypeChecker();
   const sig = root?.typeNode && checker ? checker.getTypeFromTypeNode(root.typeNode).getCallSignatures()[0] : undefined;
@@ -999,7 +1005,7 @@ export function guardSplice(before: string, after: string, id: string): string |
   };
   const o1 = outside(before), o2 = outside(after);
   if (!o1 || !o2) return `OARC-E097 markers of ${id} changed`;
-  const isImport = (l: string) => /^import (type )?(\{[^}]*\}|[A-Za-z_$][\w$]*(, \{[^}]*\})?) from "[^"]+";$/.test(l);
+  const isImport = (l: string) => /^import (type )?(\{[^}]*\}|\* as [A-Za-z_$][\w$]*|[A-Za-z_$][\w$]*(, \{[^}]*\})?) from "[^"]+";$/.test(l);
   const remaining = [...o2];
   for (let i = 0, j = 0; j < remaining.length; ) {
     if (i < o1.length && remaining[j] === o1[i]) {
@@ -1061,6 +1067,10 @@ function mergeImports(text: string, imports: ImportDecl[], typeOnly: (from: stri
   for (const imp of imports) {
     const names = imp.names.filter((n) => !have.has(n));
     const def = imp.default && !have.has(imp.default) ? imp.default : undefined;
+    if (imp.namespace && !have.has(imp.namespace)) {
+      add.push(`import * as ${imp.namespace} from "${imp.from}";`);
+      have.add(imp.namespace);
+    }
     if (!names.length && !def) continue;
     const values = names.filter((n) => !typeOnly(imp.from, n));
     const types = names.filter((n) => typeOnly(imp.from, n));
@@ -1125,6 +1135,8 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   let previous: { body: string; problems: string[] } | null = null;
   let lastPrompt: string | null = null;
   let repeats = 0;
+  let spent: Tokens | null = null; // every model call for this region in this run (provenance.tokens)
+  let cachedTokens: Tokens | null = null; // a cache hit carries the tokens that produced its body
   const cachePath = `.openarc/cache/${r.fingerprint.replace("sha256:", "")}.json`;
   const cached = await ports.fs.read(cachePath);
   // A compiler-owned region that fails keeps its old body, which may not satisfy the current spec: say so (display: stale).
@@ -1146,15 +1158,17 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     let imports: ImportDecl[];
     let sampling: { temperature: number; seed: number } | null = null;
     let promptHash: string | null = null;
+    let tokens: Tokens | null = null;
+    const code = backend.outputFormat === "code";
     if (attempt === 1 && cached) {
-      ({ body, imports, sampling = null } = JSON.parse(cached) as { body: string; imports: ImportDecl[]; sampling?: { temperature: number; seed: number } });
+      ({ body, imports, sampling = null, tokens: cachedTokens = null } = JSON.parse(cached) as { body: string; imports: ImportDecl[]; sampling?: { temperature: number; seed: number }; tokens?: Tokens });
       ports.log(`  ${id}: cache hit`);
     } else {
       if (p.e080Streak >= 3) return giveUp();
       const digest = await modelDigest(ports, p, backend, diagnostics);
       if (digest === null) return backendDown();
       const context = attempt === 1 && level === initialLevel(p, r) ? r.context0 : buildContext(p, r, level, backend);
-      const rendered = renderTemplate(PROMPT_TEMPLATE, {
+      const rendered = renderTemplate(code ? CODE_PROMPT_TEMPLATE : PROMPT_TEMPLATE, {
         context,
         repair: previous ? `## Your previous attempt failed\nPrevious body:\n${previous.body}\n\nProblems:\n${previous.problems.join("\n")}\n\nFix these problems.` : "",
       });
@@ -1166,27 +1180,28 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       const t0 = Date.now();
       let raw: string;
       try {
-        raw = await complete(
+        ({ text: raw, tokens } = await completeWithUsage(
           ports,
           sampling ? { ...backend, ...sampling } : backend,
-          "You are a compiler backend. You output JSON only: {\"body\": string, \"imports\": [{\"from\": string, \"names\": string[], \"default\"?: string}]}. body is TypeScript statements only, with no markdown.",
+          code ? CODE_SYSTEM : "You are a compiler backend. You output JSON only: {\"body\": string, \"imports\": [{\"from\": string, \"names\": string[], \"default\"?: string}]}. body is TypeScript statements only, with no markdown.",
           rendered.text,
-        );
+        ));
+        spent = addTokens(spent, tokens);
       } catch (e) {
         diagnostics.push(err("OARC-E080", { id, detail: (e as Error).message.slice(0, 120) }));
         return backendDown();
       }
       p.e080Streak = 0;
       modelCalls++;
-      const split = splitDefaults(raw);
-      const parsed = parseOutput(split.raw);
+      const split = code ? { raw, defaults: new Map<number, string>() } : splitDefaults(raw);
+      const parsed = code ? parseCodeOutput(raw) : parseOutput(split.raw);
       const varied = sampling ? ` (identical prompt: temperature ${sampling.temperature}, seed ${sampling.seed})` : "";
       ports.log(`  ${id}: attempt ${attempt} via ${backend.name} (${backend.model}), context L${level} ${context.length} chars${varied}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
       if (!parsed.ok) {
         const problem = `output was not valid: ${parsed.diagnostic.detail}`;
         ports.log(`  ${id}: ✗ ${problem} (${raw.length} chars${raw.length ? `, ends ${JSON.stringify(raw.slice(-40))}` : ""})`);
         previous = { body: raw.slice(0, 2000), problems: [problem] };
-        await saveAttempt(ports, id, { attempt, backend: backend.name, model: backend.model, contextLevel: level, promptHash, sampling, raw, problems: [problem] });
+        await saveAttempt(ports, id, { attempt, backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, raw, problems: [problem] });
         continue;
       }
       body = parsed.body;
@@ -1200,11 +1215,12 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     }
     const result = await verify(ports, req, p, r, body, imports);
     if (result.ok) {
+      if (attempt === 1 && cached) spent = cachedTokens;
       // A block that no passing example reaches is never cached or counted as verified (W045); the joint check at STAGE
       // holds it back. One reached by none YET, while sibling blocks are still pending, is provisional: cached, and
       // committed only once the joint check sees a passing example reach it.
-      if (!(attempt === 1 && cached) && !result.unverified) await ports.fs.write(cachePath, JSON.stringify({ body, imports, ...(sampling ? { sampling } : {}) }));
-      p.provenance.set(id, { source: "generated", backend: at.backend.name, model: at.backend.model, contextLevel: at.level, attempts: attempt, verifiedBy: result.verifiedBy, ...(sampling ? { sampling } : {}) });
+      if (!(attempt === 1 && cached) && !result.unverified) await ports.fs.write(cachePath, JSON.stringify({ body, imports, ...(sampling ? { sampling } : {}), ...(spent ? { tokens: spent } : {}) }));
+      p.provenance.set(id, { source: "generated", backend: at.backend.name, model: at.backend.model, outputFormat: at.backend.outputFormat!, contextLevel: at.level, attempts: attempt, verifiedBy: result.verifiedBy, ...(sampling ? { sampling } : {}), ...(spent ? { tokens: spent } : {}) });
       if (result.unverified) {
         diagnostics.push(err("OARC-W045", { id, detail: `unreached:${r.root}` }));
         ports.log(`  ${id}: unverified: no passing example of ${r.root} reaches this block (${result.verifiedBy.join(", ")})`);
@@ -1213,7 +1229,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       return { candidate: { id, body, imports, verifiedBy: result.verifiedBy }, modelCalls };
     }
     ports.log(`  ${id}: ✗ ${result.problems[0]?.slice(0, 160)}`);
-    await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, contextLevel: level, promptHash, sampling, body, imports: imports as unknown as Json, problems: result.problems });
+    await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, body, imports: imports as unknown as Json, problems: result.problems });
     previous = { body, problems: result.problems };
     // Escalation by failure type: a missing name means a context problem, so expand; otherwise repair at the same level.
     // The last attempt switches to the fallback backend when one is configured.
@@ -1242,7 +1258,7 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   // static. Allowed (§7.2, matching RULES): deps, openarc, modules the file already imports, and type-only imports of
   // closure types the context showed as "not in scope" (from their own file).
   const allowed = new Set([...r.spec.deps, "open-arc", ...importedSpecifiers(base)]);
-  const shownType = (i: ImportDecl) => !i.default && i.names.length > 0 && i.names.every((n) => r.typeImports.get(n) === i.from);
+  const shownType = (i: ImportDecl) => !i.default && !i.namespace && i.names.length > 0 && i.names.every((n) => r.typeImports.get(n) === i.from);
   const bad = imports.filter((i) => !allowed.has(i.from) && !shownType(i));
   if (bad.length) return fail(bad.map((i) => `OARC-E071 import "${i.from}" is not allowed (allowed: ${[...allowed].join(", ")}, or a type shown as not in scope from its own file)`));
   // Closure types the body names but the file doesn't import: the compiler adds the type-only import (§8.8).
@@ -1250,7 +1266,7 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   imports = [...imports, ...autoTypes.map(([name, from]) => ({ from, names: [name] }))];
   // Requested imports are file bindings too: `import crypto from "node:crypto"` makes `crypto` a binding, not the global.
   const bound = fileBindings(base);
-  for (const i of imports) [...i.names, ...(i.default ? [i.default] : [])].forEach((n) => bound.add(n));
+  for (const i of imports) localNames(i).forEach((n) => bound.add(n));
   const st = staticCheck(body, r.spec.effects, bound, callPolicy(p, r, imports));
   if (st.length) return fail(st.map((s) => `${s.diag.code} ${s.message}`));
   if (r.kind === "block") {
@@ -1312,10 +1328,10 @@ const showValue = (v: Json | undefined): string =>
   v === undefined ? "undefined" : JSON.stringify(v).replace(/"\$(-0|NaN|-?Infinity|undefined)"/g, "$1");
 
 function exampleExpected(spec: SpecInfo, name: string): Json {
-  const exs = spec.examples as { name?: string; expected?: Json; fakesAfter?: Json }[];
+  const exs = spec.examples as { name?: string; expected?: Json; throws?: Json; fakesAfter?: Json }[];
   const i = exs.findIndex((e, k) => (e.name ?? `#${k + 1}`) === name);
   const e = exs[i];
-  return e ? (e.expected ?? { fakesAfter: e.fakesAfter ?? null }) : null;
+  return e ? (e.expected ?? (e.throws !== undefined ? { throws: e.throws } : { fakesAfter: e.fakesAfter ?? null })) : null;
 }
 
 // ───────────────────────────── sandbox ─────────────────────────────
@@ -1362,7 +1378,8 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
       if (t !== null) await ports.fs.write(`${dir}/${f}`, t);
     }
     await ports.fs.write(`${dir}/.openarc/harness.mjs`, HARNESS_ENTRY); // the project's copy may predate argv[3]
-    // bwrap sees only the stage, so node_modules is hard-linked into it (Linux: cp -al always exists). The other tiers
+    // bwrap sees only the stage, so node_modules is hard-linked into it (Linux: cp -al always exists); links in it that
+    // leave the project are bound at their real paths (isolation.bwrapReadPaths). The other tiers
     // read the project's node_modules in place: module resolution walks up from the stage, which lives inside the
     // project, and isolation.readPaths grants exactly that directory. The container tier mounts it at /work/node_modules.
     if (tier === "bwrap") {
@@ -1381,14 +1398,22 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
     cpuSeconds: sb.cpuSeconds ?? req.sandbox.cpuSeconds, regionId: rootId,
   };
   const argv = tier === "bwrap"
-    ? buildArgv({ ...limits, stageDir: `${p.root}/${dir}`, addressSpaceBytes: sb.addressSpaceBytes ?? req.sandbox.addressSpaceBytes })
+    ? buildArgv({ ...limits, stageDir: `${p.root}/${dir}`, addressSpaceBytes: sb.addressSpaceBytes ?? req.sandbox.addressSpaceBytes, extraReadPaths: bwrapReadPaths(p.root, `${p.root}/${dir}`) })
     : tierArgv(tier, { ...limits, root: p.root, stageDir: join(p.root, dir), containerImage: req.sandbox.containerImage });
   const res = await ports.proc.run(argv, ((sb.cpuSeconds ?? req.sandbox.cpuSeconds) + 20) * 1000);
   if (res.timedOut) return { complete: false, passed: 0, failed: [], hits: none, error: "OARC-E091 sandbox timed out" };
   const summary = { ...readHarnessOutput(res.stdout), hits: harnessHits(res.stdout) };
-  if (!summary.complete && summary.passed === 0 && summary.failed.length === 0)
-    return { ...summary, error: `OARC-E090 harness crashed (exit ${res.code}): ${res.stdout.slice(-600)}` };
+  // no outcome line at all (only stderr: a crash before the first example): one diagnostic, not one failure per line
+  if (!summary.complete && summary.passed === 0 && summary.failed.every((f) => f.name === "<unparseable>"))
+    return { ...summary, error: `OARC-E090 harness crashed (exit ${res.code}): ${crashLine(res.stdout)}` };
   return summary;
+}
+
+/** The line of a crash's output that says what went wrong: the first `...Error: ...` line, else the first line that is
+ *  not Node's experimental-feature warning, else "no output". */
+export function crashLine(out: string): string {
+  const lines = out.split("\n").map((l) => l.trim()).filter((l) => l && !/ExperimentalWarning|--trace-warnings/.test(l));
+  return lines.find((l) => /^[\w.]*Error\b/.test(l)) ?? lines[0] ?? "no output";
 }
 
 /** `openarc doctor`: one example through the real sandbox path, in this project. It returns 2 and then the error code

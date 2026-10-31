@@ -95,12 +95,33 @@ Export the key in your shell (`export OPENROUTER_API_KEY=...`) and point `compil
 | `backends.*.think` | Ollama: `false` turns off reasoning on thinking models; structured output is enough |
 | `backends.*.keepAlive` | Ollama: how long the model stays in RAM after a call (default `"2m"`). Keep it short if two models don't fit in memory together |
 | `backends.*.host` | Ollama: default `http://127.0.0.1:11434` |
+| `backends.*.outputFormat` | how the model returns a body: `"json"` (default) or `"code"`. See [Output format](#output-format) |
 | `compilation.fallbackBackend` | used on the last attempt |
-| `regions.<id>` | per-region backend and starting context level |
+| `regions.<id>` | per-region `backend`, starting `contextLevel` and `outputFormat` (wins over the backend's) |
 | `sandbox.nodeBin` | defaults to the running Node's resolved binary (never a version-manager shim) |
 | `sandbox.isolation` | `"auto"` (default): `bwrap` on Linux when it works, `sandbox-exec` on macOS, else `node` (`OARC-W046`). Or one of `"bwrap"`, `"sandbox-exec"`, `"node"`, `"container"`, `"unsafe-none"`; a tier that isn't available here is `OARC-E092`. `"none"` is invalid: only `"unsafe-none"` turns the sandbox off, with an error-level `OARC-W047` on every run. See [[Safety Model]] |
 | `sandbox.containerImage` | the `container` tier's image, default `docker.io/library/node:<this Node's version>-slim` (it needs `timeout` from coreutils) |
 | `sandbox.heapMb`, `sandbox.cpuSeconds`, `sandbox.addressSpaceBytes` | heap cap (default 512), CPU limit (default 20 s; the wall-clock timeout is this plus 20 s), virtual address space for `prlimit` on Linux (default 32 GiB) |
+
+## Output format
+
+`outputFormat` decides what the model is asked to reply with. Set it on a backend, or on a region under `regions.<id>` (the region's setting wins):
+
+```json
+{
+  "backends": { "local": { "provider": "ollama", "model": "qwen3.5:9b", "maxContextTokens": 8192, "outputFormat": "code" } },
+  "regions": { "tasks.normalizeTitle": { "outputFormat": "json" } }
+}
+```
+
+| Value | The model replies with | Sent to the provider |
+|---|---|---|
+| `"json"` (default) | `{"body": "<statements>", "imports": [...]}` | the JSON schema: Ollama `format`, OpenAI `response_format`, Anthropic `output_config` |
+| `"code"` | one fenced code block: optional `import` lines at the top, then the function's body statements (or the block's statements) | nothing: plain text output, no schema |
+
+In `"code"` mode the compiler drops `<think>…</think>` blocks, takes the first fence tagged `ts`, `typescript` or nothing (a reply with no fence at all is taken whole), and turns its leading `import` lines into imports. Named, default (`import x from "m"`), namespace (`import * as x from "m"`) and `import type` forms are accepted; renames inside braces and side-effect imports are an `OARC-E081` (`bad-import:…`), and so is a fence cut off at the output cap (`unclosed-fence`). After that the body goes through exactly the same checks as a `"json"` reply: whole-function unwrapping, the import rules (`OARC-E071`), the write-scope guards (`OARC-E097`), the static rules, `calls`, the type check, the sandboxed examples and the coverage probe.
+
+`"code"` exists to measure whether writing code as an escaped JSON string under constrained decoding costs small models accuracy (the 2026-10-31 benchmark's finding 6). The default stays `"json"` until that is measured. The output format is part of the fingerprint and of `provenance.outputFormat`, so switching it recompiles the regions it applies to.
 
 The model's **digest** is part of every fingerprint. If you re-pull a model, everything it compiled becomes stale. Hosted APIs have no digest, so the fingerprint uses `<provider>:<baseUrl>:<model>`, plus the preset, `structuredOutput` and `ollamaCompat`. A hosted model can change behind the same id without making anything stale; that's acceptable because a cached body is re-verified (type check and examples) every time it is used.
 

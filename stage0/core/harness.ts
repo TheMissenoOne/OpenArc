@@ -110,10 +110,30 @@ export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyF
         }
         args.push(inst.instance);
       }
-      const actual = await attribution.run(scope, () => fn(...args));
-      if ("expected" in ex && !valuesEqual(actual, decodeTokens(ex.expected), eq)) {
-        out.push({ name, ok: false, actual: toJson(actual) });
-        continue;
+      if (ex.throws !== undefined) {
+        // `throws` example: the call must throw (or reject); a string must appear in the message. Pending still reports pending.
+        let message: string | null = null;
+        let actual: unknown;
+        try {
+          actual = await attribution.run(scope, () => fn(...args));
+        } catch (e) {
+          if (e instanceof OpenArcTodoError) throw e;
+          message = e instanceof Error ? e.message : String(e);
+        }
+        if (message === null) {
+          out.push({ name, ok: false, actual: { returned: toJson(actual) } });
+          continue;
+        }
+        if (typeof ex.throws === "string" && !message.includes(ex.throws)) {
+          out.push({ name, ok: false, actual: { throws: message } });
+          continue;
+        }
+      } else {
+        const actual = await attribution.run(scope, () => fn(...args));
+        if ("expected" in ex && !valuesEqual(actual, decodeTokens(ex.expected), eq)) {
+          out.push({ name, ok: false, actual: toJson(actual) });
+          continue;
+        }
       }
       const after: Record<string, Json> = {};
       let fakesOk = true;

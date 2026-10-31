@@ -10,7 +10,7 @@ export const fooSpec = arc.defineRegion<F>({
   intent: "…" | ["…", "…"],                  // guidance for the model; never treated as verified
   effects: [],                               // "clock" | "random" | "log"
   deps: ["./helpers.ts", "node:crypto"],     // the only imports a body may add
-  examples: [{ name?: "…", args: [...], expected: …, tolerance?: 1e-6, exact?: false }],
+  examples: [{ name?: "…", args: [...], expected: …, tolerance?: 1e-6, exact?: false }, { args: [...], throws: true | "…" }],
   tolerance: 1e-9,                           // optional: the default numeric tolerance of every example
   calls: ["helpers.slug", "ports.fs.read"],  // optional: the only imported/port functions the body may call
 });
@@ -40,6 +40,23 @@ examples: [{ args: [[1, 1], [2, 2], [2, 2]], expected: 1.4142135623730951 }, { a
 ```
 
 Failure messages print values faithfully: `got [-0,1,NaN]; expected [0,1,0]`, not `got [0,1,null]`.
+
+Recursive types work in `F`: `type Nested = Array<number | null | undefined | Nested>` type-checks in `args` and `expected` (before 0.7.1 it was `TS2589` on the spec itself). The tokens are accepted down to 8 levels of nesting; deeper values are checked against the plain type.
+
+## Examples that throw
+
+Write `throws` instead of `expected` when the call must fail. `throws: true` passes when the call throws (or its promise rejects) with anything; a string passes when it appears in the error's message:
+
+```ts
+type Find = (xs: number[], x: number) => number;
+examples: [
+  { args: [[1, 3, 5], 5], expected: 2 },
+  { args: [[1, 3, 5], 4], throws: "not found" },
+  { args: [[], 1], throws: true },
+]
+```
+
+An example has `expected` or `throws`, never both (the type rejects it). `fakesAfter` still applies after the throw, and a body that is still pending counts as pending, not as a throw. When a body returns instead, the failure says what it returned: `got {"returned":0}; expected {"throws":"not found"}`; a different message prints as `got {"throws":"<message>"}`. The context package shows these examples to the model like any other.
 
 ## Thin examples
 
