@@ -1,0 +1,1 @@
+{"body":"return { model: cfg.model, stream: false, format, options: { temperature: 0, seed: cfg.seed, num_ctx: cfg.numCtx }, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] };","imports":[]}

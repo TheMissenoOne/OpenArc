@@ -1,0 +1,1 @@
+{"body":"locked = await ports.fs.createExclusive('.openarc/lock');\nif (!locked) {\n  diagnostics.push({ code: 'OARC-E095' });\n}","imports":[]}

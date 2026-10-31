@@ -1,0 +1,9 @@
+node_modules/
+build/
+*.tgz
+*.log
+.impeccable/
+**/.openarc/sandbox/
+**/.openarc/txn/
+**/.openarc/lock
+**/.openarc/backup/
