@@ -32,23 +32,23 @@ plan.selectTargets            F  pending   3
 model.renderTemplate          F  pending   4
 model.buildRequest            F  pending   1
 model.parseOutput             F  pending   7
-model.call                    F  pending   0   ⚠ effectful (F6)
+model.call                    F  pending   0   (effectful, F6)
 sandbox.buildArgv             F  pending   1   ← argv run for real on this machine
 sandbox.readHarnessOutput     F  pending   4
 txn.planJournal               F  pending   2
-txn.commit                    F  pending   0   ⚠ effectful (F6)
-txn.recover                   F  pending   0   ⚠ effectful (F6)
+txn.commit                    F  pending   0   (effectful, F6)
+txn.recover                   F  pending   0   (effectful, F6)
 cli.parseArgv                 F  pending  10
 compile.run                   F  developer 0   ← hand-written skeleton, mixed resolution
-├── compile.run.lock          B  pending       ⚠ W041
-├── compile.run.recover       B  pending       ⚠ W041
-├── compile.run.parse         B  pending       ⚠ W041
-├── compile.run.analyze       B  pending       ⚠ W041
-├── compile.run.plan          B  pending       ⚠ W041
-├── compile.run.generate      B  pending       ⚠ W041   (inside the for-loop)
-├── compile.run.stage         B  pending       ⚠ W041
-├── compile.run.commit        B  pending       ⚠ W041
-└── compile.run.unlock        B  pending       ⚠ W041   (inside finally)
+├── compile.run.lock          B  pending       W041
+├── compile.run.recover       B  pending       W041
+├── compile.run.parse         B  pending       W041
+├── compile.run.analyze       B  pending       W041
+├── compile.run.plan          B  pending       W041
+├── compile.run.generate      B  pending       W041   (inside the for-loop)
+├── compile.run.stage         B  pending       W041
+├── compile.run.commit        B  pending       W041
+└── compile.run.unlock        B  pending       W041   (inside finally)
 ```
 
 ## 3. The session
