@@ -1,4 +1,4 @@
-import * as arc from "openarc";
+import * as arc from "@openarc/core";
 import type { Diagnostic, Marker, RegionNode } from "./types.ts";
 
 // ── markers.scanMarkers ───────────────────────────────────────── spec §3.1

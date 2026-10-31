@@ -1,6 +1,6 @@
 // Request shapes of every backend, against a fake HttpPort. No network. Run: node tests/backends.check.ts
 import assert from "node:assert";
-import type { Json } from "openarc";
+import type { Json } from "@openarc/core";
 import type { Ports } from "../src/types.ts";
 import type { BackendConfig } from "../src/config.ts";
 import { parseConfig } from "../src/config.ts";
@@ -119,7 +119,10 @@ const strictSchema = { ...schemaWith(["from", "names", "default"], { type: ["str
   const other = flaky([new Error("HTTP 500: boom")]);
   await assert.rejects(complete(other.ports, ollama, "S", "U", env, 0), /HTTP 500/);
   assert.equal(other.calls(), 1, "only connection errors are retried");
-  const hosted = flaky([new Error("connect ECONNREFUSED 127.0.0.1:1234")]);
+  const body = flaky([new Error("HTTP 502: upstream said fetch failed, ECONNREFUSED")]);
+  await assert.rejects(complete(body.ports, ollama, "S", "U", env, 0), /HTTP 502/);
+  assert.equal(body.calls(), 1, "a response body that mentions a connection error is not retried");
+  const hosted = flaky([Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:1234"), { code: "ECONNREFUSED" })]);
   assert.equal(await complete(hosted.ports, { provider: "openai", model: "local", baseUrl: "http://127.0.0.1:1234/v1", maxContextTokens: 8192 }, "S", "U", env, 0).catch((e) => e.message), "openai: no message content");
   assert.equal(hosted.calls(), 2);
 }

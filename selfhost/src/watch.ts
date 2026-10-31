@@ -1,4 +1,4 @@
-import * as arc from "openarc";
+import * as arc from "@openarc/core";
 
 // Watch mode (`openarc watch`): file changes become a queue of regions for the backend, one compile at a time.
 // The pure queue logic lives here as regions; the file watcher and the worker loop are hand-written in main.ts.

@@ -1,4 +1,4 @@
-import * as arc from "openarc";
+import * as arc from "@openarc/core";
 import type { PlanInput, PlanResult } from "./types.ts";
 
 // ── plan.selectTargets ────────────────────────────────────────── spec §8.1 PLAN

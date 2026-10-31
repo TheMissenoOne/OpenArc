@@ -101,7 +101,7 @@ export function findSpecs(sf: ts.SourceFile): Spec[] {
           const idStart = id.getStart(sf) + 1;
           specs.push({
             id: id.text, kind: name === "defineRegion" ? "function" : "block",
-            line: sf.getLineAndCharacterOfPosition(idStart).line, idStart, idEnd: idStart + id.text.length,
+            line: sf.getLineAndCharacterOfPosition(idStart).line, idStart, idEnd: id.getEnd() - 1, // source range, escapes included
             examples: ex && ts.isArrayLiteralExpression(ex) ? ex.elements.length : 0,
           });
         }

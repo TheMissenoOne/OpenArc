@@ -1,4 +1,4 @@
-import * as arc from "openarc";
+import * as arc from "@openarc/core";
 import type { FsPort, Journal } from "./types.ts";
 
 // ── txn.planJournal ───────────────────────────────────────────── spec §8.1 STAGE

@@ -1,6 +1,6 @@
-import * as arc from "openarc";
+import * as arc from "@openarc/core";
 import type { HarnessSummary, SandboxConfig } from "./types.ts";
-import type { Json } from "openarc";
+import type { Json } from "@openarc/core";
 import type { ExampleOutcome } from "./types.ts";
 
 // ── sandbox.buildArgv ─────────────────────────────────────────── spec §9.2

@@ -1,12 +1,12 @@
 // The `openarc watch` loop (src/watcher.ts) on fakes: no model, no network, no real file watcher.
 // Run: node tests/watch.check.ts
 import assert from "node:assert";
-import { mkdirSync, mkdtempSync, readFileSync, existsSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import type { CompileResult } from "../src/types.ts";
 import { memoryFs } from "./fakes/fs.memory.ts";
-import { createWatcher, HISTORY } from "../src/watcher.ts";
+import { createWatcher, HISTORY, regionKey } from "../src/watcher.ts";
 import { clearStaleLock, releaseOwnLock } from "../src/lock.ts";
 
 /** A fake project: a region is stale while the spec it was last compiled with differs from its current spec. */
@@ -17,6 +17,7 @@ function harness(opts: { specs: Record<string, string>; fails?: string[]; proble
   const lines: string[] = [];
   const problems = [...(opts.problems ?? [])];
   let analyses = 0;
+  const asked: string[] = [];
   const { fs, files } = memoryFs({ files: opts.files ?? {} });
   const w = createWatcher({
     fs,
@@ -41,7 +42,8 @@ function harness(opts: { specs: Record<string, string>; fails?: string[]; proble
       compiledWith[id] = spec;
       return { exit: 0, diagnostics: [], modelCalls: 1 };
     },
-    async backendProblem() {
+    async backendProblem(id) {
+      asked.push(id);
       return problems.shift() ?? null;
     },
   });
@@ -49,7 +51,7 @@ function harness(opts: { specs: Record<string, string>; fails?: string[]; proble
     await new Promise((r) => setTimeout(r, 10));
     await w.idle();
   };
-  return { w, specs, compiled, lines, files, settle, analyses: () => analyses };
+  return { w, specs, compiled, lines, files, settle, asked, analyses: () => analyses };
 }
 const history = (files: Map<string, string>) => (files.get(HISTORY) ?? "").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id: string; state: string });
 
@@ -153,6 +155,26 @@ const history = (files: Map<string, string>) => (files.get(HISTORY) ?? "").split
   assert.deepStrictEqual(after.at(-1), { ...after.at(-1), id: "a", state: "interrupted" });
 }
 
+// ── 8. every run is followed by an analysis, even with no edit (the commit rewrote files); a queued region that is
+//       no longer a target is dropped; the backend check is asked about the region that is about to compile
+{
+  const h = harness({ specs: { a: "s1", b: "s1", c: "s1" }, during: (id) => void (id === "a" && delete h.specs.c) });
+  await h.w.start();
+  await h.settle();
+  assert.deepStrictEqual(h.compiled, ["a", "b"], "c stopped being a target while a compiled: not compiled");
+  assert.equal(h.analyses(), 3, "start, after a, after b");
+  assert.deepStrictEqual(h.w.state().queue, { pending: [], running: null, rerun: [] });
+  assert.deepStrictEqual(h.asked, ["a", "b"]);
+}
+
+// ── 9. a region's key: developer-owned blocks (no fingerprint, never regenerated) don't blank the fingerprint
+assert.deepStrictEqual(regionKey([
+  { specHash: "s1", fingerprint: "f1", state: "compiler" },
+  { specHash: "s2", fingerprint: "", state: "developer" },
+  { specHash: "s3", fingerprint: "f3", state: "pending" },
+]), { spec: "s1,s2,s3", fp: "f1,f3" });
+assert.deepStrictEqual(regionKey([{ specHash: "s1", fingerprint: "", state: "compiler" }]), { spec: "s1", fp: "" }, "unknown fingerprint (backend down)");
+
 // ── 7. stale-lock recovery
 {
   const root = mkdtempSync(`${tmpdir()}/openarc-lock-`);
@@ -171,6 +193,16 @@ const history = (files: Map<string, string>) => (files.get(HISTORY) ?? "").split
   writeFileSync(lock, "");
   clearStaleLock(root, (l) => warned.push(l));
   assert.equal(existsSync(lock), true, "a fresh lock without a pid is kept (it may be mid-create)");
+  assert.equal(warned.length, 1);
+
+  // Another process removed the same stale lock and took its own between our check and our removal: theirs is kept.
+  writeFileSync(lock, String(dead));
+  clearStaleLock(root, (l) => warned.push(l), () => {
+    rmSync(lock);
+    writeFileSync(lock, String(process.pid));
+  });
+  assert.equal(readFileSync(lock, "utf8"), String(process.pid), "a replacement lock taken during the cleanup survives");
+  assert.deepStrictEqual(readdirSync(`${root}/.openarc`), ["lock"], "no leftover .stale file");
   assert.equal(warned.length, 1);
 
   writeFileSync(lock, "1");

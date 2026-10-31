@@ -21,7 +21,7 @@ export interface Analysis {
 export interface WatchDeps {
   analyze(): Promise<Analysis>;
   compile(id: string): Promise<CompileResult>;
-  backendProblem(): Promise<string | null>;
+  backendProblem(id: string): Promise<string | null>; // for the backend region `id` compiles with
   fs: FsPort;
   print(line: string): void;
   debounceMs: number;
@@ -29,6 +29,13 @@ export interface WatchDeps {
 }
 
 type HistoryState = "running" | "done" | "failed" | "interrupted";
+
+/** The key of a function region and its blocks. Developer/conflicted blocks never get a fingerprint and are never
+ *  regenerated, so only the other regions' fingerprints count (else one hand-written block blanks the whole fp). */
+export function regionKey(tree: { specHash: string; fingerprint: string; state: string }[]): RegionKey {
+  const gen = tree.filter((r) => r.state !== "developer" && r.state !== "conflicted");
+  return { spec: tree.map((r) => r.specHash).join(","), fp: gen.every((r) => r.fingerprint) ? gen.map((r) => r.fingerprint).join(",") : "" };
+}
 
 const same = (a: RegionKey, b: RegionKey | undefined) => b !== undefined && a.spec === b.spec && (a.fp === b.fp || !a.fp || !b.fp);
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
@@ -65,7 +72,9 @@ export function createWatcher(d: WatchDeps) {
     examples = a.examples;
     const before = new Set([...queued(), ...(queue.running ? [queue.running] : [])]);
     const ids = a.targets.filter((id) => !same(a.keys[id]!, failed.get(id)));
-    queue = enqueue(queue, ids);
+    // A queued region that is no longer a target (compiled by hand, spec reverted, removed) is dropped first.
+    const live = new Set(a.targets);
+    queue = enqueue({ ...queue, pending: queue.pending.filter((id) => live.has(id)), rerun: queue.rerun.filter((id) => live.has(id)) }, ids);
     const added = ids.filter((id) => !before.has(id) || queue.rerun.includes(id));
     const what = added.length ? `${plural(added.length, "region")} queued: ${added.join(", ")}` : `nothing new to compile (${plural(queued().length, "region")} queued)`;
     if (added.length || paths.length) say(`${paths.length ? `${paths.join(", ")} changed: ` : ""}${what}`);
@@ -96,12 +105,12 @@ export function createWatcher(d: WatchDeps) {
         return;
       }
       idleSaid = false;
-      const problem = await d.backendProblem();
+      const t = takeNext(queue);
+      const problem = await d.backendProblem(t.next!);
       if (problem !== null) {
         await pause(problem);
         continue;
       }
-      const t = takeNext(queue);
       queue = t.queue;
       const id = t.next!;
       const key = keys[id] ?? { spec: "", fp: "" };
@@ -126,8 +135,9 @@ export function createWatcher(d: WatchDeps) {
         await record(id, "failed", ms, detail);
         if (!transient) failed.set(id, key);
       }
-      // Edits saved during the run are analysed now, while `running` is still set, so they land in rerun (front).
-      if (dirty && !stopping) {
+      // Re-analyse after every run, while `running` is still set so edits saved during it land in rerun (front). Also
+      // without an edit: the commit itself rewrote files, and other regions' targets can change with them.
+      if (!stopping) {
         dirty = false;
         await refresh();
       }

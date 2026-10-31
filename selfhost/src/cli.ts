@@ -1,4 +1,4 @@
-import * as arc from "openarc";
+import * as arc from "@openarc/core";
 import type { Command } from "./types.ts";
 
 // ── cli.parseArgv ─────────────────────────────────────────────── spec §6.3
@@ -9,7 +9,7 @@ export const parseArgvSpec = arc.defineRegion<ParseArgv>({
   intent: [
     "argv excludes 'node' and the script. Commands: init | compile [ids...] | scaffold | freeze <id> | release <id> | inspect <id> | graph",
     "| resolve <id> --keep|--regen|--unlink | extract <file> [--function <name>] [--id <id>] (flags in any order after the file; omit absent flags)",
-    "| watch [--debounce <ms>] (debounceMs defaults to 300; the value must be a non-negative integer).",
+    "| watch [--debounce <ms>] (debounceMs defaults to 300; the value must be a non-negative safe integer).",
     "Missing id -> usage missing-id; resolve without a mode -> usage resolve-needs-mode; extract without a file -> usage missing-file;",
     "extract or watch with an unknown flag or a flag without a valid value -> usage bad-flag; anything else -> usage unknown-command.",
   ],
@@ -34,6 +34,7 @@ export const parseArgvSpec = arc.defineRegion<ParseArgv>({
     { args: [["watch", "--debounce", "50"]], expected: { cmd: "watch", debounceMs: 50 } },
     { args: [["watch", "--debounce"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["watch", "--debounce", "soon"]], expected: { cmd: "usage", reason: "bad-flag" } },
+    { args: [["watch", "--debounce", "99999999999999999999"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["watch", "--bogus", "1"]], expected: { cmd: "usage", reason: "bad-flag" } },
   ],
 });

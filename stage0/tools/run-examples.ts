@@ -3,8 +3,8 @@
 // Pending regions are reported but don't fail the run unless --strict is set.
 import { readdirSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { runExamples, showValue } from "openarc/harness";
-import type { AnyFn, RegionSpec } from "openarc";
+import { runExamples, showValue } from "@openarc/core/harness";
+import type { AnyFn, RegionSpec } from "@openarc/core";
 
 const root = process.cwd();
 const strict = process.argv.includes("--strict");

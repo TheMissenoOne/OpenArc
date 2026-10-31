@@ -5,13 +5,13 @@
 // 3. Context packages show the project's canonical import form for package deps.
 // 4. --keep-going never commits a block whose sibling failed: it can't pass the joint check (F14), so it's held back.
 import assert from "node:assert";
-import type { Json } from "openarc";
+import type { Json } from "@openarc/core";
 import type { CompileRequest, Ports } from "../src/types.ts";
 import fakePorts from "./fakes/ports.memory.ts";
 import { run } from "../src/compile.ts";
 import * as engine from "../src/engine.ts";
 
-const root = process.cwd(); // the stage0 checkout, so "openarc" and "typescript" resolve for the type checker
+const root = process.cwd(); // the stage0 checkout, so "@openarc/core" and "typescript" resolve for the type checker
 const req: CompileRequest = { root, ids: [], model: { host: "http://h", model: "m", seed: 1, numCtx: 8192 }, sandbox: { nodeBin: "/n/bin/node", nodePrefix: "/n", heapMb: 256, addressSpaceBytes: 2 ** 32, cpuSeconds: 10 } };
 const M = ".openarc/manifest.json";
 type Snap = { files: Record<string, string>; requests: { url: string; body: Json }[] };
@@ -19,7 +19,7 @@ type Snap = { files: Record<string, string>; requests: { url: string; body: Json
 // ── 1. W060 persisted when there are no targets
 {
   const src = (intent: string) => [
-    'import * as arc from "openarc";',
+    'import * as arc from "@openarc/core";',
     "type Inc = (n: number) => number;",
     `export const incSpec = arc.defineRegion<Inc>({ id: "fixture.inc", intent: "${intent}", examples: [{ args: [1], expected: 2 }] });`,
     "// @openarc:begin fixture.inc",
@@ -59,7 +59,7 @@ type Snap = { files: Record<string, string>; requests: { url: string; body: Json
     `export const f${n}Spec = arc.defineRegion<F${n}>({ id: "fixture.f${n}", intent: "length", deps: ["typescript"], examples: [{ args: ["ab"], expected: 2 }] });`,
   ].join("\n");
   const files = {
-    "src/fixture.ts": ['import * as arc from "openarc";', ...[1, 2, 3, 4, 5].map(spec), ""].join("\n"),
+    "src/fixture.ts": ['import * as arc from "@openarc/core";', ...[1, 2, 3, 4, 5].map(spec), ""].join("\n"),
     "src/other.ts": 'import ts from "typescript";\nexport const k = ts.SyntaxKind.Identifier;\n',
     "src/third.ts": 'import ts from "typescript";\nimport type { Node } from "typescript";\nexport const n = (x: Node) => ts.isIdentifier(x);\n',
     [M]: '{"schema":1,"regions":{}}',
@@ -78,7 +78,7 @@ type Snap = { files: Record<string, string>; requests: { url: string; body: Json
 // ── 4. a generated block whose sibling failed is held back, not committed
 {
   const src = [
-    'import * as arc from "openarc";',
+    'import * as arc from "@openarc/core";',
     "type Run = (n: number) => number;",
     'export const runSpec = arc.defineRegion<Run>({ id: "fixture.run", intent: "double, then add one", examples: [{ args: [1], expected: 3 }] });',
     'export const aSpec = arc.defineBlock({ id: "fixture.run.a", intent: "x = n * 2" });',
@@ -113,4 +113,90 @@ type Snap = { files: Record<string, string>; requests: { url: string; body: Json
   assert.equal(Object.keys(files).filter((f) => f.startsWith(".openarc/cache/")).length, 1, "a's verified body stays in the cache for the next run");
   assert.equal(res.exit, 1);
 }
-console.log("compile-run: manifest-only transition, E080 stop, canonical imports, held-back blocks ok");
+
+const TAGS = JSON.stringify({ models: [{ name: "qwen3.5:9b", digest: "d1" }] });
+const chat = (content: string) => JSON.stringify({ message: { role: "assistant", content }, done: true });
+
+// ── 5. a file saved during the compile is not overwritten: the commit aborts with E096 and writes nothing
+{
+  const src = (tail: string) => [
+    'import * as arc from "@openarc/core";',
+    "type Inc = (n: number) => number;",
+    'export const incSpec = arc.defineRegion<Inc>({ id: "fixture.inc", intent: "add one" });',
+    "// @openarc:begin fixture.inc",
+    'export const inc: Inc = (n) => arc.todo("fixture.inc");',
+    "// @openarc:end fixture.inc",
+    tail,
+  ].join("\n");
+  const manifest = '{"schema":1,"regions":{}}';
+  const fake = fakePorts({ files: { "src/fixture.ts": src(""), [M]: manifest }, http: [TAGS, chat('{"body":"return n + 1;"}')] });
+  const saved = src("export const savedDuringTheCompile = 1;\n");
+  const real = fake.instance as Ports;
+  const ports: Ports = {
+    ...real,
+    http: {
+      ...real.http,
+      async postJson(url, body, headers) {
+        const reply = await real.http.postJson(url, body, headers);
+        if (url.endsWith("/api/chat")) await real.fs.write("src/fixture.ts", saved); // the user saves while the model works
+        return reply;
+      },
+    },
+  };
+  const res = await run(ports, req);
+  const files = (fake.snapshot() as Snap).files;
+  assert.deepStrictEqual(res.diagnostics.filter((d) => d.code.startsWith("OARC-E")), [{ code: "OARC-E096", file: "src/fixture.ts" }]);
+  assert.equal(res.exit, 1);
+  assert.equal(files["src/fixture.ts"], saved, "the save survives");
+  assert.equal(files[M], manifest, "manifest untouched");
+  assert.deepStrictEqual(Object.keys(files).filter((f) => f.startsWith(".openarc/txn/") || f === ".openarc/lock"), [], "nothing staged, lock released");
+}
+
+// ── 6. after the 3-E080 stop, a region whose body is in the cache still compiles (no model call needed)
+{
+  const spec = (n: number) => `export const f${n}Spec = arc.defineRegion<(s: string) => number>({ id: "fixture.f${n}", intent: "a number" });`;
+  const files: Record<string, string> = { "src/fixture.ts": ['import * as arc from "@openarc/core";', ...[1, 2, 3, 4].map(spec), ""].join("\n"), [M]: '{"schema":1,"regions":{}}' };
+  const probe = fakePorts({ files, http: [TAGS] }).instance as Ports;
+  const pp = await engine.parse(probe, req, []);
+  await engine.analyze(probe, req, pp, []);
+  const fp = pp.regions.find((r) => r.id === "fixture.f4")!.fingerprint;
+  files[`.openarc/cache/${fp.replace("sha256:", "")}.json`] = JSON.stringify({ body: "return 4;", imports: [] });
+  const fake = fakePorts({ files, http: [TAGS] }); // every /api/chat call fails
+  const res = await run(fake.instance as Ports, { ...req, keepGoing: true });
+  assert.deepStrictEqual(res.diagnostics.filter((d) => d.code === "OARC-E080").map((d) => d.id ?? d.detail), ["fixture.f1", "fixture.f2", "fixture.f3", "stopped:3-consecutive"]);
+  assert.match((fake.snapshot() as Snap).files["src/fixture.ts"]!, /return 4;/, "f4 comes from the cache");
+  assert.equal(JSON.parse((fake.snapshot() as Snap).files[M]!).regions["fixture.f4"]?.ownership, "compiler");
+}
+
+// ── 7. a held-back block leaves no import behind: its file goes back to the pre-run text
+{
+  const src = [
+    'import * as arc from "@openarc/core";',
+    "type Run = (n: number) => number;",
+    'export const runSpec = arc.defineRegion<Run>({ id: "fixture.run", intent: "double, then add one", examples: [{ args: [1], expected: 3 }] });',
+    'export const aSpec = arc.defineBlock({ id: "fixture.run.a", intent: "x = n * TWO", deps: ["./two.ts"] });',
+    'export const bSpec = arc.defineBlock({ id: "fixture.run.b", intent: "x = x + 1" });',
+    "// @openarc:begin fixture.run",
+    "export function run(n: number): number {",
+    "  let x = 0;",
+    "  // @openarc:begin fixture.run.a",
+    '  arc.pending("fixture.run.a");',
+    "  // @openarc:end fixture.run.a",
+    "  // @openarc:begin fixture.run.b",
+    '  arc.pending("fixture.run.b");',
+    "  // @openarc:end fixture.run.b",
+    "  return x;",
+    "}",
+    "// @openarc:end fixture.run",
+    "",
+  ].join("\n");
+  const fake = fakePorts({
+    files: { "src/fixture.ts": src, "src/two.ts": "export const TWO = 2;\n", [M]: '{"schema":1,"regions":{}}' },
+    http: [TAGS, chat(JSON.stringify({ body: "x = n * TWO;", imports: [{ from: "./two.ts", names: ["TWO"] }] })), chat("nope"), chat("nope"), chat("nope")],
+    proc: [{ code: 0, stdout: "", timedOut: false }, { code: 0, stdout: '{"name":"#1","ok":false,"actual":{"pending":"fixture.run.b"}}\n{"done":1}\n', timedOut: false }],
+  });
+  const res = await run(fake.instance as Ports, { ...req, keepGoing: true });
+  assert.ok(res.diagnostics.some((d) => d.code === "OARC-W042" && d.id === "fixture.run.a"), JSON.stringify(res.diagnostics));
+  assert.equal((fake.snapshot() as Snap).files["src/fixture.ts"], src, "neither a's body nor its import is committed");
+}
+console.log("compile-run: manifest-only transition, E080 stop, canonical imports, held-back blocks, save during compile, cache after E080 stop, held imports ok");

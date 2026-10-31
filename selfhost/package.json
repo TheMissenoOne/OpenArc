@@ -10,11 +10,11 @@
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
-    "openarc-stage0": "file:../stage0/build/openarc-0.3.0.tgz",
+    "openarc-stage0": "file:../stage0/build/openarc-core-0.6.1.tgz",
     "typescript": "5.9"
   },
   "dependencies": {
-    "openarc": "file:./core"
+    "@openarc/core": "file:./core"
   },
   "license": "MIT"
 }

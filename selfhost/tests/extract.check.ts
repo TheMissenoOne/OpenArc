@@ -4,7 +4,7 @@ import type { CompileRequest, Ports } from "../src/types.ts";
 import fakePorts from "./fakes/ports.memory.ts";
 import * as engine from "../src/engine.ts";
 
-const root = process.cwd(); // stage0, so "openarc" resolves for the type checker
+const root = process.cwd(); // stage0, so "@openarc/core" resolves for the type checker
 const req: CompileRequest = { root, ids: [], model: { host: "http://h", model: "m", seed: 1, numCtx: 8192 }, sandbox: { nodeBin: "/n/bin/node", nodePrefix: "/n", heapMb: 256, addressSpaceBytes: 2 ** 32, cpuSeconds: 10 } };
 const M = ".openarc/manifest.json";
 
@@ -27,7 +27,7 @@ async function tsErrors(ports: Ports): Promise<string[]> {
 const addBody = "export function add(a: number, b: number): number {\n  return a + b; // keep me\n}";
 const slugBody = 'export const slug = async (title: string, opts?: { sep?: string }) => {\n  return title.trim().toLowerCase().split(/\\s+/).join(opts?.sep ?? "-");\n};';
 const fixture = [
-  'import type { Json } from "openarc";',
+  'import type { Json } from "@openarc/core";',
   "",
   "/**",
   " * Adds two numbers.",
@@ -49,7 +49,7 @@ const fixture = [
   const res = await extract(ports, "src/text-utils.ts");
   assert.deepStrictEqual({ extracted: res.extracted, skipped: res.skipped, refused: res.refused }, { extracted: ["textUtils.add", "textUtils.slug"], skipped: [], refused: [] });
   const out = (await ports.fs.read("src/text-utils.ts"))!;
-  assert.ok(out.startsWith('import * as arc from "openarc";\n'), "arc import added");
+  assert.ok(out.startsWith('import * as arc from "@openarc/core";\n'), "arc import added");
   assert.ok(out.includes(`// @openarc:begin textUtils.add\n${addBody}\n// @openarc:end textUtils.add`), "add body byte-identical inside its markers");
   assert.ok(out.includes(`// @openarc:begin textUtils.slug\n${slugBody}\n// @openarc:end textUtils.slug`), "slug body byte-identical inside its markers");
   assert.ok(out.includes("type AddFn = (a: number, b: number) => number;"), out);
@@ -121,6 +121,24 @@ const fixture = [
   assert.match((await extract(ports, "src/bad.ts", { fn: "missing" })).refused[0]!.reason, /^no top-level function/);
   assert.match((await extract(ports, "tests/x.ts")).refused[0]!.reason, /under src\//);
   assert.equal(JSON.stringify(fake.snapshot()), before, "refusals write nothing");
+}
+
+// ── a named default export is refused (regeneration would emit a named export and drop the default)
+{
+  const fake = fakePorts({ files: { "src/d.ts": "export default function named(a: number): number {\n  return a;\n}\n" } });
+  const before = JSON.stringify(fake.snapshot());
+  const res = await extract(fake.instance, "src/d.ts");
+  assert.deepStrictEqual(res.refused.map((r) => [r.name, r.reason.split(":")[0]]), [["named", "default export"]]);
+  assert.equal(JSON.stringify(fake.snapshot()), before, "nothing written");
+}
+
+// ── a rewrite that swaps an existing type error for a new one is refused, even though the count is unchanged
+{
+  // before: TS2304 (no `arc`); after the added `import * as arc`: TS2339 (no `zzz` on the openarc module)
+  const fake = fakePorts({ files: { "src/e.ts": "export function f(a: number): number {\n  return a;\n}\nexport const y = arc.zzz;\n" } });
+  const res = await extract(fake.instance, "src/e.ts");
+  assert.deepStrictEqual(res.extracted, []);
+  assert.match(res.refused[0]?.reason ?? "", /would not check: TS2339/);
 }
 
 // ── ids (the CLI side is cli.parseArgv's examples)

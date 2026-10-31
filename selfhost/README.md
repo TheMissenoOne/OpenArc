@@ -10,7 +10,7 @@ You write the contract: a function type, an intent and examples. OpenArc builds 
 Only then does it splice the body in. Your hand edits are never overwritten.
 
 ```ts
-import * as arc from "openarc";
+import * as arc from "@openarc/core";
 
 type NormalizeTitle = (title: string) => string;
 
@@ -39,7 +39,7 @@ export const normalizeTitle: NormalizeTitle = (title) => {
 ## Use
 
 ```bash
-npm i -D openarc
+npm i -D @openarc/core
 npx openarc init          # openarc.config.json, tsconfig.json, .openarc/
 # write defineRegion specs in src/*.ts
 npx openarc scaffold      # adds markers + typed placeholders (deterministic, no model)

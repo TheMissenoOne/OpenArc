@@ -2,7 +2,7 @@
 // Each block in compile.ts is one or two calls into this module, which keeps the blocks small enough
 // for a small model to regenerate. Regionizing the engine itself is the next self-hosting step.
 import ts from "typescript";
-import type { Json } from "openarc";
+import type { Json } from "@openarc/core";
 import type { Candidate, ChildSpan, CompileRequest, Diagnostic, ImportDecl, ManifestView, Ports, RegionState, StagedFile } from "./types.ts";
 import type { BackendConfig, ContextLevel, OpenArcConfig } from "./config.ts";
 import { hostOf, parseConfig } from "./config.ts";
@@ -285,7 +285,7 @@ export function scaffoldInMemory(p: Project, diagnostics: Diagnostic[]): string[
     const lines = linesOf(text);
     lines.splice(endLine + 1, 0, "", ...scaffoldLines(s));
     let out = lines.join("\n");
-    if (!/import \* as arc from "openarc"/.test(out)) out = `import * as arc from "openarc";\n${out}`;
+    if (!/import \* as arc from "@openarc\/core"/.test(out)) out = `import * as arc from "@openarc/core";\n${out}`;
     p.files.set(s.file, out);
     done.push(s.id);
   }
@@ -445,10 +445,11 @@ async function modelDigest(ports: Ports, p: Pick<Project, "digests">, b: Backend
   }
 }
 
-/** Watch mode's pre-dispatch check (spec §15): null when the default backend can take a call, else why not.
+/** Watch mode's pre-dispatch check (spec §15): null when the backend region `id` compiles with (its `backend`
+ *  override, else the default) can take a call, else why not.
  *  Ollama: /api/tags answers and lists the model (modelDigest, no model is loaded). Hosted: its key env var is set. */
-export async function backendProblem(ports: Ports, config: OpenArcConfig, env: Record<string, string | undefined> = process.env): Promise<string | null> {
-  const b = config.backends[config.compilation.defaultBackend]!;
+export async function backendProblem(ports: Ports, config: OpenArcConfig, id?: string, env: Record<string, string | undefined> = process.env): Promise<string | null> {
+  const b = config.backends[(id && config.regions?.[id]?.backend) || config.compilation.defaultBackend]!;
   if (b.provider !== "ollama") return b.apiKeyEnv && !env[b.apiKeyEnv] ? `env ${b.apiKeyEnv} is not set` : null;
   const ds: Diagnostic[] = [];
   return (await modelDigest(ports, { digests: new Map() }, b, ds)) === null ? (ds[0]?.detail ?? "unreachable") : null;
@@ -974,8 +975,8 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     if (r.state === "compiler") diagnostics.push(err("OARC-W043", { id }));
     return { candidate: null, modelCalls };
   };
-  // The backend died mid-run (e.g. Ollama OOM-killed): after 3 consecutive E080s, stop calling it for the rest of the run.
-  if (p.e080Streak >= 3) return giveUp();
+  // The backend died mid-run (e.g. Ollama OOM-killed): after 3 consecutive E080s, stop calling it for the rest of the
+  // run. Checked before each model call, not up front, so a cache hit still compiles.
   const backendDown = () => {
     if (++p.e080Streak === 3) diagnostics.push(err("OARC-E080", { detail: "stopped:3-consecutive" }));
     return giveUp();
@@ -992,6 +993,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       ({ body, imports, sampling = null } = JSON.parse(cached) as { body: string; imports: ImportDecl[]; sampling?: { temperature: number; seed: number } });
       ports.log(`  ${id}: cache hit`);
     } else {
+      if (p.e080Streak >= 3) return giveUp();
       const digest = await modelDigest(ports, p, backend, diagnostics);
       if (digest === null) return backendDown();
       const context = attempt === 1 && level === initialLevel(p, r) ? r.context0 : buildContext(p, r, level, backend);
@@ -1069,7 +1071,7 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   const base = p.accepted.get(r.file) ?? p.files.get(r.file)!;
   // static. Allowed (§7.2, matching RULES): deps, openarc, modules the file already imports, and type-only imports of
   // closure types the context showed as "not in scope" (from their own file).
-  const allowed = new Set([...r.spec.deps, "openarc", ...importedSpecifiers(base)]);
+  const allowed = new Set([...r.spec.deps, "@openarc/core", ...importedSpecifiers(base)]);
   const shownType = (i: ImportDecl) => !i.default && i.names.length > 0 && i.names.every((n) => r.typeImports.get(n) === i.from);
   const bad = imports.filter((i) => !allowed.has(i.from) && !shownType(i));
   if (bad.length) return fail(bad.map((i) => `OARC-E071 import "${i.from}" is not allowed (allowed: ${[...allowed].join(", ")}, or a type shown as not in scope from its own file)`));
@@ -1188,6 +1190,10 @@ export async function stage(ports: Ports, req: CompileRequest, p: Project, candi
       held.add(r.id);
       overlay.set(r.file, spliceRegion(overlay.get(r.file)!, r.id, r.bodyLines)); // back to its pre-run (pending) body
     }
+    // verify() also merged the held blocks' imports. A file whose every candidate is now held goes back to its pre-run
+    // text, imports included. ponytail: a file that also has an accepted candidate keeps them (one unused import line).
+    for (const file of new Set(genBlocks.filter((b) => b.root === rootId).map((b) => b.file)))
+      if (candidates.every((c) => held.has(c.id) || regionOf(c.id).file !== file)) overlay.set(file, p.files.get(file)!);
   };
   const waiting = roots.filter((id) => p.regions.some((r) => r.root === id && r.kind === "block" && r.pending && !generatedIds.has(r.id)));
   for (const rootId of waiting) {
@@ -1217,6 +1223,14 @@ export async function stage(ports: Ports, req: CompileRequest, p: Project, candi
       return [];
     }
     out.push({ target: rel, text });
+  }
+  // A file saved while the model was working would be overwritten by text built from the parse-time snapshot: abort
+  // instead, write nothing, and let the next run start from the saved file. (The lock keeps other openarc commands out.)
+  const moved: string[] = [];
+  for (const f of out) if ((await ports.fs.read(f.target)) !== (p.disk.get(f.target) ?? null)) moved.push(f.target);
+  if (moved.length) {
+    for (const file of moved) diagnostics.push(err("OARC-E096", { file }));
+    return [];
   }
   out.push({ target: ".openarc/manifest.json", text: JSON.stringify(manifest, null, 2) + "\n" });
   for (const [i, f] of out.entries()) await ports.fs.write(`.openarc/txn/${txid}/stage/${i}`, f.text);
@@ -1284,6 +1298,18 @@ export const extractId = (rel: string, fn: string) => [...rel.split("/").at(-1)!
 const SPEC_ID_RE = /\bdefine(?:Region|Block)\s*(?:<[^>]*>)?\s*\(\s*\{\s*id:\s*"([^"]+)"/g;
 const tsErrors = (prog: ts.Program, sf: ts.SourceFile) =>
   [...prog.getSyntacticDiagnostics(sf), ...prog.getSemanticDiagnostics(sf)].filter((d) => d.category === ts.DiagnosticCategory.Error);
+/** A type error's identity across a rewrite that moves lines: code and message, not position. */
+const errorKey = (d: ts.Diagnostic) => `TS${d.code} ${ts.flattenDiagnosticMessageText(d.messageText, " ")}`;
+/** The errors in `after` that `before` doesn't account for (multiset difference). */
+function newErrors(before: string[], after: string[]): string[] {
+  const left = [...before];
+  return after.filter((k) => {
+    const i = left.indexOf(k);
+    if (i < 0) return true;
+    left.splice(i, 1);
+    return false;
+  });
+}
 
 export async function extract(ports: Ports, req: CompileRequest, p: Project, rel: string, opts: { fn?: string; id?: string }): Promise<ExtractResult> {
   const res: ExtractResult = { files: [], extracted: [], skipped: [], refused: [] };
@@ -1294,7 +1320,7 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
   p.program = makeProgram(p, p.files);
   const checker = p.program.getTypeChecker();
   const sf = p.program.getSourceFile(abs(p, rel))!;
-  const errorsBefore = tsErrors(p.program, sf).length;
+  const errorsBefore = tsErrors(p.program, sf).map(errorKey);
   const scan = scanMarkers(text);
   const tree = buildRegionTree(scan.markers);
   if (scan.diagnostics.length || tree.diagnostics.length) return refuse(rel, `fix its markers first (${[...scan.diagnostics, ...tree.diagnostics].map((d) => d.code).join(", ")})`), res;
@@ -1341,6 +1367,10 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
       continue;
     }
     const st = decls[0]!;
+    if (hasMod(st, ts.SyntaxKind.DefaultKeyword)) {
+      refuse(name, "default export: a regenerated region is a named `export const`, which would drop the default export");
+      continue;
+    }
     const fnNode = ts.isFunctionDeclaration(st) ? st : (st.declarationList.declarations[0]!.initializer as ts.ArrowFunction | ts.FunctionExpression);
     const nameNode = ts.isFunctionDeclaration(st) ? st.name! : (st.declarationList.declarations[0]!.name as ts.Identifier);
     const start = st.getStart(sf), from = lineOf(start), to = lineOf(st.getEnd());
@@ -1398,7 +1428,7 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
     usedIds.add(id);
   }
   if (!inserts.length) return res;
-  if (bound.has("arc") && !/import \* as arc from "openarc"/.test(text)) return refuse(rel, "the name `arc` is already bound; specs need `import * as arc from \"openarc\"`"), res;
+  if (bound.has("arc") && !/import \* as arc from "@openarc\/core"/.test(text)) return refuse(rel, "the name `arc` is already bound; specs need `import * as arc from \"@openarc/core\"`"), res;
 
   for (const ins of inserts.sort((a, b) => b.from - a.from)) {
     const ind = /^\s*/.exec(lines[ins.from]!)![0];
@@ -1406,23 +1436,23 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
     lines.splice(ins.from, 0, `${ind}// @openarc:begin ${ins.id}`);
     lines.splice(ins.specAt, 0, ...ins.spec);
   }
-  if (!/import \* as arc from "openarc"/.test(text)) lines.splice(lines[0]?.startsWith("#!") ? 1 : 0, 0, 'import * as arc from "openarc";');
+  if (!/import \* as arc from "@openarc\/core"/.test(text)) lines.splice(lines[0]?.startsWith("#!") ? 1 : 0, 0, 'import * as arc from "@openarc/core";');
   const out = lines.join("\n");
 
   // The result must type-check no worse than before, and analyze as developer-owned function regions.
   p.files.set(rel, out);
   p.program = makeProgram(p, p.files, p.program);
-  const after = tsErrors(p.program, p.program.getSourceFile(abs(p, rel))!);
+  const added = newErrors(errorsBefore, tsErrors(p.program, p.program.getSourceFile(abs(p, rel))!).map(errorKey));
   const ds: Diagnostic[] = [];
-  if (after.length <= errorsBefore) {
+  if (!added.length) {
     p.specs.clear();
     p.regions = [];
     await analyze(ports, req, p, ds, { offline: true });
   }
   const bad = ds.filter((d) => d.code.startsWith("OARC-E") && d.file === rel);
-  if (after.length > errorsBefore || bad.length) {
+  if (added.length || bad.length) {
     p.files.set(rel, text);
-    const why = after.length > errorsBefore ? `TS${after[0]!.code} ${ts.flattenDiagnosticMessageText(after[0]!.messageText, " ")}` : bad.map((d) => `${d.code}${d.id ? ` ${d.id}` : ""}`).join(", ");
+    const why = added.length ? added[0]! : bad.map((d) => `${d.code}${d.id ? ` ${d.id}` : ""}`).join(", ");
     return refuse(rel, `the extracted file would not check: ${why}`), res;
   }
   const manifest: Manifest = JSON.parse(JSON.stringify(p.manifest));

@@ -21,7 +21,7 @@ Each status line shows the outcome, the model calls it took, the function's exam
 
 ## What is watched
 
-`src/` and `tests/fakes/` recursively, plus the project root for `openarc.config.json`. Every changed path goes through `watch.classifyPath`:
+`src/` and `tests/fakes/` with all their subdirectories, plus the project root for `openarc.config.json`. Each directory has its own non-recursive watcher, and a subdirectory created later is picked up: on Linux a recursive `fs.watch` stops reporting a file once it has been replaced by rename, which is how a commit writes, so watch went blind to every file it had just compiled. The watchers are also re-created after each compile, and every run is followed by an analysis. Every changed path goes through `watch.classifyPath`:
 
 | Path | Kind |
 |---|---|
@@ -30,7 +30,7 @@ Each status line shows the outcome, the model calls it took, the function's exam
 | `openarc.config.json` | config |
 | anything under `.openarc/`, `node_modules/`, `build/` or `dist/`, and everything else | ignored |
 
-An ignored path does nothing at all: no analysis. `node_modules/` isn't even watched, because a recursive watch costs one inotify watch per directory. A `src/` or `tests/fakes/` created after `openarc watch` started needs a restart.
+An ignored path does nothing at all: no analysis. `node_modules/` isn't even watched, because each directory costs one inotify watch. A `src/` or `tests/fakes/` created after `openarc watch` started needs a restart.
 
 ## What triggers a compile
 
@@ -58,6 +58,10 @@ Analysis asks Ollama for `/api/tags` (the model digest is part of the fingerprin
 - **Saves are debounced** (300 ms by default; `--debounce <ms>`). Saving five times quickly is a single analysis.
 - Each region is one `compile.run` with that id and `--keep-going` semantics: its own transaction and lock.
 
+## Model reloads
+
+Ollama unloads an idle model after the backend's `keepAlive` (`"2m"` in the default config). In watch mode that means the first compile after a quiet spell reloads the model, which takes about 55 s for `qwen3.5:9b` on a small machine. If you have the RAM to keep it resident, set a longer `keepAlive` (for example `"30m"`) on the backend in `openarc.config.json`; the trade-off is that the model's memory stays taken while you aren't editing.
+
 ## Failed regions
 
 A region that fails (attempts exhausted, examples failing) stays pending and is **not** queued again on its own, so a hopeless region can't burn the model in a loop. Watch remembers the spec hashes and fingerprints it failed on. It's queued again when:
@@ -68,7 +72,7 @@ A region that fails (attempts exhausted, examples failing) stays pending and is 
 
 ## Backend down: pause, never drop
 
-Before each region, watch checks that the backend can take a call: Ollama must answer `/api/tags` and list the model; a hosted backend needs its `apiKeyEnv` variable set. If not, it prints one line, pauses and retries with backoff: 5 s, 10 s, 30 s, then every 60 s. The queue is kept. A relevant change during a pause retries at once (you may have just fixed the config).
+Before each region, watch checks that the backend that region compiles with (its `regions.<id>.backend` override, else the default) can take a call: Ollama must answer `/api/tags` and list the model; a hosted backend needs its `apiKeyEnv` variable set. If not, it prints one line, pauses and retries with backoff: 5 s, 10 s, 30 s, then every 60 s. The queue is kept. A relevant change during a pause retries at once (you may have just fixed the config).
 
 ```
 [watch] backend not ready (unreachable:http://127.0.0.1:11434): paused, 2 regions kept in the queue, retrying in 5s

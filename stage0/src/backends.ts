@@ -1,7 +1,7 @@
 // Model backends: one bounded interface, request in, raw `{body, imports}` JSON text out (spec §13).
 // Hand-written. The ollama path goes through the model.buildRequest and model.call regions (dogfooding).
 // Hosted APIs use plain fetch through HttpPort; no SDK dependencies.
-import type { Json } from "openarc";
+import type { Json } from "@openarc/core";
 import type { Ports } from "./types.ts";
 import type { BackendConfig } from "./config.ts";
 import { hostOf } from "./config.ts";
@@ -36,9 +36,13 @@ export const OUTPUT_SCHEMA: Json = withImportItem(["from", "names"], { type: "st
 // OpenAI strict json_schema needs every property listed in `required` (imports: [] and default: null mean absent).
 const STRICT_OUTPUT_SCHEMA: Json = withImportItem(["from", "names", "default"], { type: ["string", "null"] }, { required: ["body", "imports"] });
 
-/** fetch() connection failures: the server is down or restarting (e.g. Ollama OOM-killed mid-run). */
-const isConnectionError = (e: unknown) =>
-  /ECONNREFUSED|fetch failed/.test(`${(e as Error)?.message} ${((e as Error)?.cause as { code?: string } | undefined)?.code ?? ""}`);
+/** fetch() connection failures: the server is down or restarting (e.g. Ollama OOM-killed mid-run). Judged by the
+ *  error code only (fetch puts it on `cause`), never the message: an HTTP error message carries the response body. */
+const CONNECTION_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "EPIPE", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT"]);
+const isConnectionError = (e: unknown) => {
+  const x = e as { code?: unknown; cause?: { code?: unknown } } | null;
+  return CONNECTION_CODES.has(String(x?.code)) || CONNECTION_CODES.has(String(x?.cause?.code));
+};
 
 /** One request; on a connection error, wait `retryDelayMs` and retry ONCE (Ollama restarts after an OOM kill). */
 export async function complete(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined> = process.env, retryDelayMs = 10_000): Promise<string> {
@@ -108,6 +112,7 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
   } catch (e) {
     // ponytail: providers sometimes echo the key in error bodies; scrub it before it reaches diagnostics or logs.
     const msg = (e as Error).message;
-    throw new Error(key ? msg.split(key).join("***") : msg);
+    const x = e as { code?: unknown; cause?: { code?: unknown } };
+    throw Object.assign(new Error(key ? msg.split(key).join("***") : msg), { code: x.code ?? x.cause?.code }); // the code drives the retry
   }
 }

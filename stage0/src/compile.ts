@@ -1,4 +1,4 @@
-import * as arc from "openarc";
+import * as arc from "@openarc/core";
 import type { Candidate, CompileRequest, CompileResult, Diagnostic, Ports, StagedFile } from "./types.ts";
 import * as engine from "./engine.ts";
 import { planJournal, commit, recover } from "./txn.ts";

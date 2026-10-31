@@ -1,4 +1,4 @@
-import * as arc from "openarc";
+import * as arc from "@openarc/core";
 import type { Diagnostic } from "./types.ts";
 import ts from "typescript";
 

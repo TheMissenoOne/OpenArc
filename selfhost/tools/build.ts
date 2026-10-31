@@ -1,4 +1,4 @@
-// Build the publishable `openarc` npm package into build/ (compiled JS, d.ts, bin).
+// Build the publishable `@openarc/core` npm package into build/ (compiled JS, d.ts, bin `openarc`).
 // Node refuses to strip types under node_modules, so the published package must be JS.
 // Usage: node tools/build.ts   then   cd build && npm pack
 import { execFileSync } from "node:child_process";
@@ -6,11 +6,11 @@ import { chmodSync, cpSync, existsSync, readFileSync, rmSync, writeFileSync } fr
 
 const root = process.cwd();
 const version = JSON.parse(readFileSync(`${root}/core/package.json`, "utf8")).version as string;
-rmSync(`${root}/build/dist`, { recursive: true, force: true }); // keep earlier openarc-*.tgz: other checkouts install them by path
+rmSync(`${root}/build/dist`, { recursive: true, force: true }); // keep earlier *.tgz: other checkouts install them by path
 execFileSync(`${root}/node_modules/.bin/tsc`, ["-p", "tsconfig.build.json"], { stdio: "inherit" });
 const tsVersion = JSON.parse(readFileSync(`${root}/node_modules/typescript/package.json`, "utf8")).version as string;
 writeFileSync(`${root}/build/package.json`, JSON.stringify({
-  name: "openarc",
+  name: "@openarc/core",
   version,
   description: "Compile typed specs into verified TypeScript with small local models: per-function context, sandboxed examples, never overwrites your edits.",
   type: "module",
@@ -28,7 +28,8 @@ writeFileSync(`${root}/build/package.json`, JSON.stringify({
   engines: { node: ">=23.6" },
   os: ["linux"],
   dependencies: { typescript: `^${tsVersion}` },
+  publishConfig: { access: "public" },
 }, null, 2) + "\n");
 chmodSync(`${root}/build/dist/src/main.js`, 0o755);
 for (const f of ["README.md"]) if (existsSync(`${root}/${f}`)) cpSync(`${root}/${f}`, `${root}/build/${f}`);
-console.log(`built openarc@${version} -> build/`);
+console.log(`built @openarc/core@${version} -> build/`);

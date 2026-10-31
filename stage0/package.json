@@ -13,7 +13,7 @@
     "typescript": "5.9"
   },
   "dependencies": {
-    "openarc": "file:./core"
+    "@openarc/core": "file:./core"
   },
   "license": "MIT"
 }

@@ -1,5 +1,5 @@
-import * as arc from "openarc";
-import type { Json } from "openarc";
+import * as arc from "@openarc/core";
+import type { Json } from "@openarc/core";
 import type { HttpPort, ModelConfig, ModelOutput, OllamaChatRequest, Rendered } from "./types.ts";
 import type { ImportDecl } from "./types.ts";
 

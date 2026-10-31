@@ -14,7 +14,7 @@ Examples always run in a sandbox. If `bwrap` is missing, OpenArc refuses to run 
 
 ```bash
 mkdir my-app && cd my-app && npm init -y && npm pkg set type=module
-npm i -D openarc
+npm i -D @openarc/core
 npx openarc init
 ```
 
@@ -25,7 +25,7 @@ npx openarc init
 `src/tasks.ts`:
 
 ```ts
-import * as arc from "openarc";
+import * as arc from "@openarc/core";
 
 type NormalizeTitle = (title: string) => string;
 

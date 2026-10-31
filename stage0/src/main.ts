@@ -8,11 +8,12 @@ import { randomBytes } from "node:crypto";
 import type { CompileRequest, Diagnostic, Ports } from "./types.ts";
 import { parseArgv } from "./cli.ts";
 import { run } from "./compile.ts";
-import { commit, planJournal } from "./txn.ts";
+import { commit, planJournal, recover } from "./txn.ts";
 import * as engine from "./engine.ts";
 import { DEFAULT_CONFIG, hostOf } from "./config.ts";
 import { clearStaleLock, releaseOwnLock } from "./lock.ts";
-import { createWatcher, type RegionKey } from "./watcher.ts";
+import { createWatcher, regionKey, type RegionKey } from "./watcher.ts";
+import { watchDirs } from "./dirwatch.ts";
 
 const MESSAGES: Record<string, string> = {
   "OARC-W001": "'@openarc:' text that is not a valid marker",
@@ -46,6 +47,7 @@ const MESSAGES: Record<string, string> = {
   "OARC-E092": "sandbox unavailable",
   "OARC-W094": "recovered an interrupted transaction",
   "OARC-E095": "another openarc process holds .openarc/lock",
+  "OARC-E096": "the file changed on disk during the compile; nothing was written (run again)",
   "OARC-E097": "write-scope violation: generated code may only change its own region (specs, tests and other code are compiler-protected)",
 };
 
@@ -92,7 +94,13 @@ export function realPorts(root: string): Ports {
         await mkdir(dirname(p(rel)), { recursive: true });
         try {
           const h = await open(p(rel), "wx");
-          await h.writeFile(String(process.pid)); // lock.ts tells a held lock from one left by a crash
+          try {
+            await h.writeFile(String(process.pid)); // lock.ts tells a held lock from one left by a crash
+          } catch {
+            await h.close().catch(() => {});
+            await rm(p(rel), { force: true }); // ours, created a moment ago: don't leave an empty lock behind
+            return false;
+          }
           await h.close();
           return true;
         } catch {
@@ -227,7 +235,7 @@ async function main(argv: string[]): Promise<number> {
       await put("openarc.config.json", JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n");
       await put("tsconfig.json", JSON.stringify(TSCONFIG, null, 2) + "\n");
       await put(manifestPath, '{\n  "schema": 1,\n  "regions": {}\n}\n');
-      await put(".openarc/harness.mjs", 'import { main } from "openarc/harness";\nawait main("/work", process.argv[2]);\n');
+      await put(".openarc/harness.mjs", 'import { main } from "@openarc/core/harness";\nawait main("/work", process.argv[2]);\n');
       const ignore = ["lock", "sandbox/", "txn/", "watch-history.jsonl", "attempts/"];
       const had = await ports.fs.read(".openarc/.gitignore");
       const missing = ignore.filter((l) => !(had ?? "").split("\n").includes(l));
@@ -264,24 +272,30 @@ async function main(argv: string[]): Promise<number> {
     }
     case "extract": {
       const rel = relative(root, resolve(process.cwd(), cmd.file)).split(sep).join("/");
-      const project = await engine.parse(ports, request(root, null, []), diagnostics);
-      const res = await engine.extract(ports, request(root, project, []), project, rel, { fn: cmd.fn, id: cmd.id });
+      // Locked from before the read to after the commit, like compile: an interrupted transaction is recovered first
+      // (else a later compile would restore its backups over this extraction), and no other openarc writes meanwhile.
+      clearStaleLock(root, (l) => console.error(l));
+      if (!(await ports.fs.createExclusive(".openarc/lock"))) {
+        console.error(fmt({ code: "OARC-E095" }));
+        return 1;
+      }
+      let res: Awaited<ReturnType<typeof engine.extract>>;
+      try {
+        for (const txid of await recover(ports.fs)) diagnostics.push({ code: "OARC-W094", detail: txid });
+        const project = await engine.parse(ports, request(root, null, []), diagnostics);
+        res = await engine.extract(ports, request(root, project, []), project, rel, { fn: cmd.fn, id: cmd.id });
+        if (res.files.length) {
+          const txid = ports.newTxId();
+          for (const [i, f] of res.files.entries()) await ports.fs.write(`.openarc/txn/${txid}/stage/${i}`, f.text);
+          await commit(ports.fs, planJournal(txid, res.files.map((f, i) => ({ target: f.target, staged: `.openarc/txn/${txid}/stage/${i}` }))));
+        }
+      } finally {
+        await ports.fs.remove(".openarc/lock");
+      }
       print();
       for (const n of res.skipped) console.log(`already a region: ${n}`);
       for (const r of res.refused) console.error(`refused ${r.name}: ${r.reason}`);
       if (res.files.length) {
-        clearStaleLock(root, (l) => console.error(l));
-        if (!(await ports.fs.createExclusive(".openarc/lock"))) {
-          console.error(fmt({ code: "OARC-E095" }));
-          return 1;
-        }
-        try {
-          const txid = ports.newTxId();
-          for (const [i, f] of res.files.entries()) await ports.fs.write(`.openarc/txn/${txid}/stage/${i}`, f.text);
-          await commit(ports.fs, planJournal(txid, res.files.map((f, i) => ({ target: f.target, staged: `.openarc/txn/${txid}/stage/${i}` }))));
-        } finally {
-          await ports.fs.remove(".openarc/lock");
-        }
         console.log(`extracted (developer-owned): ${res.extracted.join(", ")}\nreview the [inferred] intents, add examples, then \`openarc release <id>\` to hand a region to the compiler`);
       } else if (!res.refused.length) console.log("nothing to extract");
       return res.refused.length ? 1 : 0;
@@ -293,7 +307,7 @@ async function main(argv: string[]): Promise<number> {
         fs: ports.fs,
         print: (l) => console.log(l),
         debounceMs: cmd.debounceMs,
-        backendProblem: () => engine.backendProblem(ports, config),
+        backendProblem: (id) => engine.backendProblem(ports, config, id),
         async analyze() {
           const ds: Diagnostic[] = [];
           const project = await engine.parse(ports, request(root, null, []), ds);
@@ -309,7 +323,7 @@ async function main(argv: string[]): Promise<number> {
           const examples: Record<string, number> = {};
           for (const id of targets) {
             const tree = project.regions.filter((r) => r.root === id);
-            keys[id] = { spec: tree.map((r) => r.specHash).join(","), fp: tree.every((r) => r.fingerprint) ? tree.map((r) => r.fingerprint).join(",") : "" };
+            keys[id] = regionKey(tree);
             examples[id] = project.specs.get(id)?.examples.length ?? 0;
           }
           return { targets, keys, examples };
@@ -317,17 +331,20 @@ async function main(argv: string[]): Promise<number> {
         async compile(id) {
           clearStaleLock(root, (l) => console.error(`[watch] ${l}`));
           const project = await engine.parse(ports, request(root, null, []), []);
-          return run(ports, { ...request(root, project, [id]), keepGoing: true });
+          const res = await run(ports, { ...request(root, project, [id]), keepGoing: true });
+          // The commit replaced files by rename. ponytail: every watched directory is re-created, not just the
+          // committed files' ones (CompileResult doesn't list them); a handful of directories.
+          dirWatch.rewatch();
+          return res;
         },
       });
       clearStaleLock(root, (l) => console.error(`[watch] ${l}`));
-      // ponytail: src/ and tests/fakes/ recursively plus the root for the config, not the whole tree: a recursive
-      // watch of node_modules costs one inotify watch per directory. A src/ created after start needs a restart.
+      // src/ and tests/fakes/ one directory at a time (dirwatch.ts: a recursive fs.watch goes blind to a file replaced by
+      // rename, which is how commits write), plus the root, non-recursively, for the config. Not the whole tree: that
+      // would watch node_modules. ponytail: a src/ created after start needs a restart.
       const dirs = ["src", "tests/fakes"].filter((d) => existsSync(`${root}/${d}`));
-      const watchers = [
-        watch(root, (_e, f) => f && w.onChange(f)),
-        ...dirs.map((d) => watch(`${root}/${d}`, { recursive: true }, (_e, f) => f && w.onChange(`${d}/${f.split(sep).join("/")}`))),
-      ];
+      const dirWatch = watchDirs(root, dirs, (p) => w.onChange(p));
+      const rootWatch = watch(root, (_e, f) => f && w.onChange(f));
       console.log(`[watch] watching ${[...dirs.map((d) => `${d}/`), "openarc.config.json"].join(", ")} (debounce ${cmd.debounceMs} ms, Ctrl+C to stop)`);
       return await new Promise<number>((done) => {
         let sigints = 0;
@@ -338,7 +355,8 @@ async function main(argv: string[]): Promise<number> {
             process.exit(130);
           }
           void w.stop().then(() => {
-            watchers.forEach((x) => x.close());
+            dirWatch.close();
+            rootWatch.close();
             console.log("[watch] stopped");
             done(0);
           });

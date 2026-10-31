@@ -1,4 +1,4 @@
-import * as arc from "openarc";
+import * as arc from "@openarc/core";
 
 type NormalizeTitle = (title: string) => string;
 

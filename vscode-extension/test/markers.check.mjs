@@ -10,16 +10,16 @@ const specs = (p) => p.specs.map((s) => [s.id, s.kind, s.line + 1, s.examples]);
 
 const compile = load("compile.ts");
 assert.deepEqual(pairs(compile), [
-  ["compile.run", 78, 150, null, false],
-  ["compile.run.lock", 90, 95, "compile.run", false],
-  ["compile.run.recover", 99, 101, "compile.run", true],
-  ["compile.run.parse", 103, 108, "compile.run", false],
-  ["compile.run.analyze", 111, 113, "compile.run", false],
-  ["compile.run.plan", 116, 118, "compile.run", false],
-  ["compile.run.generate", 123, 127, "compile.run", false],
-  ["compile.run.stage", 135, 137, "compile.run", false],
-  ["compile.run.commit", 140, 142, "compile.run", false],
-  ["compile.run.unlock", 145, 147, "compile.run", false],
+  ["compile.run", 78, 142, null, false],
+  ["compile.run.lock", 90, 92, "compile.run", true],
+  ["compile.run.recover", 96, 98, "compile.run", true],
+  ["compile.run.parse", 100, 102, "compile.run", true],
+  ["compile.run.analyze", 105, 107, "compile.run", true],
+  ["compile.run.plan", 110, 112, "compile.run", true],
+  ["compile.run.generate", 117, 119, "compile.run", true],
+  ["compile.run.stage", 127, 129, "compile.run", true],
+  ["compile.run.commit", 132, 134, "compile.run", true],
+  ["compile.run.unlock", 137, 139, "compile.run", true],
 ]);
 assert.deepEqual(specs(compile), [
   ["compile.run", "function", 17, 2],
@@ -41,6 +41,12 @@ assert.deepEqual(markers.problems, []);
 // id offsets point at the id text, for go-to-definition.
 const text = readFileSync(new URL("ids.ts", SRC), "utf8");
 for (const x of [...ids.specs, ...ids.markers]) assert.equal(text.slice(x.idStart, x.idEnd), x.id);
+
+// An escaped id: the range covers the source text of the literal, not the decoded length.
+const esc = 'arc.defineRegion({ id: "a\\u0062.c" });\n';
+const [es] = parse(esc).specs;
+assert.equal(es.id, "ab.c");
+assert.equal(esc.slice(es.idStart, es.idEnd), "a\\u0062.c");
 
 // Pairing rules (mirrors markers.buildRegionTree examples) and W001.
 const codes = (src) => parse(src).problems.map((p) => [p.code, p.line + 1]);

@@ -1,8 +1,8 @@
 // Example equality (spec §9.3): numeric tolerance, -0, NaN, value tokens, faithful printing. Run: node tests/equality.check.ts
 import assert from "node:assert";
-import { decodeTokens, runExamples, showValue, toJson, valuesEqual } from "openarc/harness";
-import type { AnyFn, RegionSpec } from "openarc";
-import * as arc from "openarc";
+import { decodeTokens, runExamples, showValue, toJson, valuesEqual } from "@openarc/core/harness";
+import type { AnyFn, RegionSpec } from "@openarc/core";
+import * as arc from "@openarc/core";
 
 // numbers: -0 equals 0, NaN equals NaN, 1e-9 relative (absolute near zero) by default
 assert.ok(valuesEqual(-0, 0));

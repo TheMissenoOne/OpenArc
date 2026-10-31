@@ -25,6 +25,8 @@ let output: vscode.OutputChannel;
 
 const key = (root: vscode.Uri, id: string) => `${root.path}\0${id}`;
 const rootOf = (uri: vscode.Uri) => roots.find((r) => uri.path.startsWith(r.path + "/"));
+// The CLI reads specs and markers only under <root>/src/ (engine srcFiles); other files never enter the index.
+const inSrc = (uri: vscode.Uri, root: vscode.Uri) => uri.path.startsWith(root.path + "/src/");
 const pos = (f: FileInfo, offset: number) => { const p = positionAt(f.parsed.lineStarts, offset); return new vscode.Position(p.line, p.character); };
 const range = (f: FileInfo, start: number, end: number) => new vscode.Range(pos(f, start), pos(f, end));
 
@@ -37,24 +39,34 @@ function stateOf(root: vscode.Uri, id: string): State {
 
 // ── indexing ────────────────────────────────────────────────────────────────
 
-async function loadManifest(root: vscode.Uri) {
+async function loadManifest(root: vscode.Uri, retries = 3): Promise<void> {
+  let raw: string;
   try {
-    const raw = new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(root, ".openarc", "manifest.json")));
-    manifests.set(root.path, JSON.parse(raw).regions ?? {});
+    raw = new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(root, ".openarc", "manifest.json")));
   } catch {
-    manifests.set(root.path, {}); // missing or mid-write; the watcher fires again on the next write
+    manifests.set(root.path, {}); // no manifest: every region falls back to §6.2
+    return;
+  }
+  try {
+    manifests.set(root.path, JSON.parse(raw).regions ?? {});
+  } catch { // caught mid-write: keep the previous state and read again shortly
+    if (retries > 0) setTimeout(() => loadManifest(root, retries - 1).then(scheduleRefresh), 300);
   }
 }
 
 function setFile(uri: vscode.Uri, text: string) {
   const root = rootOf(uri);
-  if (root) files.set(uri.toString(), { uri, root, parsed: parse(text, uri.path) });
+  if (root && inSrc(uri, root)) files.set(uri.toString(), { uri, root, parsed: parse(text, uri.path) });
 }
 
 async function readFromDisk(uri: vscode.Uri) {
-  const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
-  if (open) return setFile(uri, open.getText());
-  try { setFile(uri, new TextDecoder().decode(await vscode.workspace.fs.readFile(uri))); } catch { files.delete(uri.toString()); }
+  const openText = () => vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString())?.getText();
+  let text = openText();
+  if (text === undefined) {
+    try { text = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)); } catch { files.delete(uri.toString()); return; }
+    text = openText() ?? text; // opened and edited while we were reading: the editor text is newer
+  }
+  setFile(uri, text);
 }
 
 let timer: unknown;
@@ -71,6 +83,8 @@ function refresh() {
     for (const region of file.parsed.regions) regionIndex.set(key(file.root, region.id), { file, region });
   }
   diagnostics.clear();
+  // Pairing stops at the first E030/E031, so a root with one hides later regions: "no markers yet" would be a false alarm.
+  const broken = new Set([...files.values()].filter((f) => f.parsed.problems.some((p) => p.code === "OARC-E030" || p.code === "OARC-E031")).map((f) => f.root.path));
   for (const file of files.values()) {
     const ds = file.parsed.problems.map((p) => {
       const d = new vscode.Diagnostic(range(file, p.start, p.end), p.message,
@@ -85,7 +99,7 @@ function refresh() {
       }
     }
     for (const s of file.parsed.specs) {
-      if (!regionIndex.has(key(file.root, s.id))) {
+      if (!broken.has(file.root.path) && !regionIndex.has(key(file.root, s.id))) {
         ds.push(Object.assign(new vscode.Diagnostic(range(file, s.idStart, s.idEnd),
           `'${s.id}' has no markers yet: run openarc scaffold`, vscode.DiagnosticSeverity.Information), { source: "openarc" }));
       }
@@ -170,7 +184,7 @@ async function pickRoot(): Promise<vscode.Uri | undefined> {
 async function pickId(root: vscode.Uri, verb: string): Promise<string | undefined> {
   const ed = vscode.window.activeTextEditor;
   const file = ed && files.get(ed.document.uri.toString());
-  if (ed && file) { // innermost region under the cursor
+  if (ed && file && file.root.path === root.path) { // innermost region under the cursor, if it is in this project
     const line = ed.selection.active.line;
     const inner = file.parsed.regions.filter((r) => r.begin.line <= line && line <= r.end.line)
       .sort((a, b) => (a.end.line - a.begin.line) - (b.end.line - b.begin.line))[0];
@@ -186,6 +200,8 @@ function inTerminal(root: vscode.Uri, args: string[]) {
   const term = vscode.window.terminals.find((t) => t.name === name && t.exitStatus === undefined)
     ?? vscode.window.createTerminal({ name, cwd: root });
   term.show();
+  // A reused terminal may have been cd'ed elsewhere. ponytail: plain `cd` (no `/d`), so cmd.exe cannot switch drives.
+  if (!root.fsPath.includes('"')) term.sendText(`cd "${root.fsPath}"`);
   term.sendText(["npx", "openarc", ...args].join(" "));
 }
 
@@ -207,6 +223,7 @@ function ownership(verb: "release" | "freeze") {
     if (!root) return;
     id ??= await pickId(root, verb);
     if (valid(id)) toOutput(root, [verb, id]);
+    else if (id !== undefined) vscode.window.showErrorMessage(`OpenArc: invalid region id '${id}'`);
   };
 }
 
@@ -218,6 +235,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
   const selector: vscode.DocumentSelector = [{ language: "typescript", scheme: "file" }, { language: "typescriptreact", scheme: "file" }];
   const tsWatcher = vscode.workspace.createFileSystemWatcher("**/*.{ts,tsx}");
   const manifestWatcher = vscode.workspace.createFileSystemWatcher("**/.openarc/manifest.json");
+  const configWatcher = vscode.workspace.createFileSystemWatcher("**/openarc.config.json", false, true, false);
   const onManifest = async (uri: vscode.Uri) => {
     const root = vscode.Uri.joinPath(uri, "..", "..");
     if (roots.some((r) => r.path === root.path)) { await loadManifest(root); scheduleRefresh(); }
@@ -229,7 +247,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
   };
 
   ctx.subscriptions.push(
-    diagnostics, output, lensChanged, tsWatcher, manifestWatcher, ...tints.values(),
+    diagnostics, output, lensChanged, tsWatcher, manifestWatcher, configWatcher, ...tints.values(),
     vscode.languages.registerDefinitionProvider(selector, definitions),
     vscode.languages.registerCodeLensProvider(selector, lenses),
     vscode.workspace.onDidChangeTextDocument((e) => {
@@ -243,11 +261,13 @@ export async function activate(ctx: vscode.ExtensionContext) {
     tsWatcher.onDidChange(onTs), tsWatcher.onDidCreate(onTs),
     tsWatcher.onDidDelete((uri) => { files.delete(uri.toString()); scheduleRefresh(); }),
     manifestWatcher.onDidChange(onManifest), manifestWatcher.onDidCreate(onManifest), manifestWatcher.onDidDelete(onManifest),
+    configWatcher.onDidCreate(discover), configWatcher.onDidDelete(discover), // a project appeared or went away
     vscode.commands.registerCommand("openarc.goto", (loc: vscode.Location) =>
       vscode.window.showTextDocument(loc.uri, { selection: new vscode.Range(loc.range.start, loc.range.start) })),
     vscode.commands.registerCommand("openarc.compile", async (root?: vscode.Uri, id?: string) => {
+      if (id !== undefined && !valid(id)) return void vscode.window.showErrorMessage(`OpenArc: invalid region id '${id}'`);
       root ??= await pickRoot();
-      if (root) inTerminal(root, ["compile", ...(valid(id) ? [id] : [])]);
+      if (root) inTerminal(root, ["compile", ...(id ? [id] : [])]);
     }),
     vscode.commands.registerCommand("openarc.graph", async () => {
       const root = await pickRoot();
@@ -257,11 +277,17 @@ export async function activate(ctx: vscode.ExtensionContext) {
     vscode.commands.registerCommand("openarc.freeze", ownership("freeze")),
   );
 
-  // ponytail: projects are discovered once; a new openarc.config.json needs a window reload.
+  await discover();
+}
+
+/** Find every project root (deepest first, so a nested project wins) and re-index from scratch. */
+async function discover() {
   roots = (await vscode.workspace.findFiles("**/openarc.config.json", "**/node_modules/**"))
     .map((u) => vscode.Uri.joinPath(u, "..")).sort((a, b) => b.path.length - a.path.length);
-  await Promise.all(roots.map(loadManifest));
-  const tsFiles = (await vscode.workspace.findFiles("**/*.{ts,tsx}", TS_EXCLUDE)).filter((u) => rootOf(u));
+  manifests.clear();
+  files.clear();
+  await Promise.all(roots.map((r) => loadManifest(r)));
+  const tsFiles = (await vscode.workspace.findFiles("**/*.{ts,tsx}", TS_EXCLUDE)).filter((u) => { const r = rootOf(u); return r && inSrc(u, r); });
   await Promise.all(tsFiles.map(readFromDisk));
   refresh();
 }

@@ -38,6 +38,7 @@ Errors are `OARC-Exxx` and warnings `OARC-Wxxx`. The full table is in `SPEC-phas
 | E070 | type error in the generated body (shown with the line) |
 | E082 | attempts exhausted for a region |
 | E090 | an example failed |
+| E096 | a file changed on disk while the compile ran; nothing was written, run it again |
 | E097 | the generated code tried to write outside its region |
 | W060 | manual edit detected; region is now yours |
 | E061 | you changed the spec of a region you had edited; resolve it |
