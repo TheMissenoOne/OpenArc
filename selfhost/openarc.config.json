@@ -4,9 +4,9 @@
     "local": {
       "provider": "ollama",
       "model": "qwen3.5:9b",
-      "maxContextTokens": 16384,
+      "maxContextTokens": 8192,
       "think": false,
-      "keepAlive": "2m"
+      "keepAlive": "10m"
     }
   },
   "compilation": {

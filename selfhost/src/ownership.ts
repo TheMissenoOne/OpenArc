@@ -1,4 +1,4 @@
-import * as arc from "@openarc/core";
+import * as arc from "open-arc";
 import type { ManifestView, ObservedRegion, OwnershipResult } from "./types.ts";
 
 // ── ownership.detect ──────────────────────────────────────────── spec §6.2
@@ -91,20 +91,20 @@ export const detect: Detect = (entry, observed) => {
   if (!observed.present) {
       return { state: "conflicted", diagnostic: { code: "OARC-E062" } };
     }
-  if (entry !== null && entry.parent !== observed.parent) {
+  if (entry && entry.parent !== observed.parent) {
       return { state: "conflicted", diagnostic: { code: "OARC-E063" } };
     }
-  if (entry === null) {
+  if (!entry) {
       return { state: observed.pending ? "pending" : "developer", diagnostic: null };
     }
   if (entry.ownership === "conflicted") {
       return { state: "conflicted", diagnostic: null };
     }
   if (entry.ownership === "compiler") {
-      if (entry.hash === observed.hash) {
-        return { state: "compiler", diagnostic: null };
+      if (entry.hash !== observed.hash) {
+        return { state: "developer", diagnostic: { code: "OARC-W060" } };
       }
-      return { state: "developer", diagnostic: { code: "OARC-W060" } };
+      return { state: "compiler", diagnostic: null };
     }
   if (entry.ownership === "developer") {
       if (entry.specHash !== observed.specHash) {
@@ -112,6 +112,6 @@ export const detect: Detect = (entry, observed) => {
       }
       return { state: "developer", diagnostic: null };
     }
-  return { state: "compiler", diagnostic: null };
+  return { state: "developer", diagnostic: null };
 };
 // @openarc:end ownership.detect

@@ -1,6 +1,6 @@
 // Contracts shared by every region. These types are authoritative and hand-written.
 // OpenArc never generates or edits this file.
-import type { Json } from "@openarc/core";
+import type { Json } from "open-arc";
 
 // ---------- diagnostics (spec §11) ----------
 // No message field: messages come from a table keyed by code. Examples compare

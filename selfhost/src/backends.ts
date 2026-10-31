@@ -1,7 +1,7 @@
 // Model backends: one bounded interface, request in, raw `{body, imports}` JSON text out (spec §13).
 // Hand-written. The ollama path goes through the model.buildRequest and model.call regions (dogfooding).
 // Hosted APIs use plain fetch through HttpPort; no SDK dependencies.
-import type { Json } from "@openarc/core";
+import type { Json } from "open-arc";
 import type { Ports } from "./types.ts";
 import type { BackendConfig } from "./config.ts";
 import { hostOf } from "./config.ts";

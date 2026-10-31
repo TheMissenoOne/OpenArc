@@ -4,7 +4,7 @@ import type { CompileRequest, Ports } from "../src/types.ts";
 import fakePorts from "./fakes/ports.memory.ts";
 import * as engine from "../src/engine.ts";
 
-const root = process.cwd(); // stage0, so "@openarc/core" resolves for the type checker
+const root = process.cwd(); // stage0, so "open-arc" resolves for the type checker
 const req: CompileRequest = { root, ids: [], model: { host: "http://h", model: "m", seed: 1, numCtx: 8192 }, sandbox: { nodeBin: "/n/bin/node", nodePrefix: "/n", heapMb: 256, addressSpaceBytes: 2 ** 32, cpuSeconds: 10 } };
 const M = ".openarc/manifest.json";
 
@@ -27,7 +27,7 @@ async function tsErrors(ports: Ports): Promise<string[]> {
 const addBody = "export function add(a: number, b: number): number {\n  return a + b; // keep me\n}";
 const slugBody = 'export const slug = async (title: string, opts?: { sep?: string }) => {\n  return title.trim().toLowerCase().split(/\\s+/).join(opts?.sep ?? "-");\n};';
 const fixture = [
-  'import type { Json } from "@openarc/core";',
+  'import type { Json } from "open-arc";',
   "",
   "/**",
   " * Adds two numbers.",
@@ -49,7 +49,7 @@ const fixture = [
   const res = await extract(ports, "src/text-utils.ts");
   assert.deepStrictEqual({ extracted: res.extracted, skipped: res.skipped, refused: res.refused }, { extracted: ["textUtils.add", "textUtils.slug"], skipped: [], refused: [] });
   const out = (await ports.fs.read("src/text-utils.ts"))!;
-  assert.ok(out.startsWith('import * as arc from "@openarc/core";\n'), "arc import added");
+  assert.ok(out.startsWith('import * as arc from "open-arc";\n'), "arc import added");
   assert.ok(out.includes(`// @openarc:begin textUtils.add\n${addBody}\n// @openarc:end textUtils.add`), "add body byte-identical inside its markers");
   assert.ok(out.includes(`// @openarc:begin textUtils.slug\n${slugBody}\n// @openarc:end textUtils.slug`), "slug body byte-identical inside its markers");
   assert.ok(out.includes("type AddFn = (a: number, b: number) => number;"), out);

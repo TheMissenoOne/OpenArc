@@ -9,14 +9,14 @@
 // 5. Date.parse without 'clock'; scaffold without a clean tsc; COMPILER_VERSION from core/package.json.
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
-import type { Json } from "@openarc/core";
-import { runOracle } from "@openarc/core/harness";
+import type { Json } from "open-arc";
+import { runOracle } from "open-arc/harness";
 import type { CompileRequest, Ports } from "../src/types.ts";
 import fakePorts from "./fakes/ports.memory.ts";
 import { run } from "../src/compile.ts";
 import * as engine from "../src/engine.ts";
 
-const root = process.cwd(); // the stage0 checkout, so "@openarc/core" and "typescript" resolve for the type checker
+const root = process.cwd(); // the stage0 checkout, so "open-arc" and "typescript" resolve for the type checker
 const req: CompileRequest = { root, ids: [], model: { host: "http://h", model: "m", seed: 1, numCtx: 8192 }, sandbox: { nodeBin: "/n/bin/node", nodePrefix: "/n", heapMb: 256, addressSpaceBytes: 2 ** 32, cpuSeconds: 10 } };
 const M = ".openarc/manifest.json";
 const TAGS = JSON.stringify({ models: [{ name: "qwen3.5:9b", digest: "d1" }] });
@@ -28,7 +28,7 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
 // ── 1. context and scope
 {
   const fx = [
-    'import * as arc from "@openarc/core";',
+    'import * as arc from "open-arc";',
     'import type { Entry } from "./fx-types.ts";',
     'import { twice } from "./fx-lib.ts";',
     "type Total = (es: Entry[]) => number;",
@@ -62,7 +62,7 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
   const snap = fake.snapshot() as Snap;
   assert.equal(res.exit, 0, JSON.stringify(res.diagnostics));
   const prompt = chats(snap)[0]!.messages[1]!.content;
-  assert.match(prompt, /## Imports already in the file\nimport \* as arc from "@openarc\/core";\nimport type \{ Entry \} from "\.\/fx-types\.ts";\nimport \{ twice \} from "\.\/fx-lib\.ts";/, "L0 shows the file's imports");
+  assert.match(prompt, /## Imports already in the file\nimport \* as arc from "open-arc";\nimport type \{ Entry \} from "\.\/fx-types\.ts";\nimport \{ twice \} from "\.\/fx-lib\.ts";/, "L0 shows the file's imports");
   assert.match(prompt, /## Already in src\/fx\.ts \(call these, don't re-implement them\)\nconst helper: \(e: Entry\) => boolean\nconst total: Total/, "L0 shows implemented same-file values");
   assert.match(prompt, /const total: Total\n\n## Intent/, "pending regions and the region itself are not offered");
   assert.match(prompt, /\/\/ Side: not in scope; the compiler adds import type \{ Side \} from "\.\/fx-types\.ts" if you use it\nexport type Side/);
@@ -86,7 +86,7 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
 // ── 2 + 3. identical retries vary sampling; attempts saved; a failing compiler region is W043 / stale
 {
   const src = (intent: string) => [
-    'import * as arc from "@openarc/core";',
+    'import * as arc from "open-arc";',
     "type Inc = (n: number) => number;",
     `export const incSpec = arc.defineRegion<Inc>({ id: "fx2.inc", intent: "${intent}" });`,
     "// @openarc:begin fx2.inc",
@@ -151,7 +151,7 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
   assert.equal(engine.thinExamples([{ args: [1], expected: 2 }]), "examples:1");
   assert.equal(engine.thinExamples([{ args: [1] }, { args: [2] }, { args: ["a"] }]), "no-edge-case");
   for (const edge of [0, "", [], {}, null, -3, "$NaN"]) assert.equal(engine.thinExamples([{ args: [1] }, { args: [2] }, { args: [[{ k: edge }]] }]), null, `edge ${JSON.stringify(edge)}`);
-  const w = fakePorts({ files: { "src/w.ts": 'import * as arc from "@openarc/core";\ntype F = (n: number) => number;\nexport const fSpec = arc.defineRegion<F>({ id: "w.f", intent: "x", examples: [{ args: [1], expected: 1 }] });\n' } });
+  const w = fakePorts({ files: { "src/w.ts": 'import * as arc from "open-arc";\ntype F = (n: number) => number;\nexport const fSpec = arc.defineRegion<F>({ id: "w.f", intent: "x", examples: [{ args: [1], expected: 1 }] });\n' } });
   const p = await engine.parse(w.instance, req, []);
   await engine.analyze(w.instance, req, p, [], { offline: true });
   const ds: { code: string; detail?: string }[] = [];
@@ -185,7 +185,7 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
 
   // the engine side: plan entry with the oracle, the module copied into the stage, the report
   const files = {
-    "src/g.ts": 'import * as arc from "@openarc/core";\ntype F = (n: number) => number;\nexport const fSpec = arc.defineRegion<F>({ id: "g.f", intent: "x", examples: [{ args: [1], expected: 1 }, { args: [4], expected: 4 }] });\n// @openarc:begin g.f\nexport const f: F = (n) => n;\n// @openarc:end g.f\n',
+    "src/g.ts": 'import * as arc from "open-arc";\ntype F = (n: number) => number;\nexport const fSpec = arc.defineRegion<F>({ id: "g.f", intent: "x", examples: [{ args: [1], expected: 1 }, { args: [4], expected: 4 }] });\n// @openarc:begin g.f\nexport const f: F = (n) => n;\n// @openarc:end g.f\n',
     "legacy/g.js": "export const f = (n) => n;\n",
   };
   const o = fakePorts({ files, proc: [{ code: 0, stdout: "", timedOut: false }, { code: 0, stdout: '{"name":"#1","ok":true}\n{"name":"#2","ok":false,"actual":{"args":[-1],"got":"$-0","oracle":"$NaN"}}\n{"done":2}\n', timedOut: false }] });
@@ -216,8 +216,8 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
 
   // scaffold doesn't need a clean tsc: b.ts imports a symbol that only exists once a.ts is scaffolded
   const files = {
-    "src/a.ts": 'import * as arc from "@openarc/core";\ntype Classify = (name: string) => string | null;\nexport const classifySpec = arc.defineRegion<Classify>({ id: "a.classify", intent: "x" });\n',
-    "src/b.ts": 'import * as arc from "@openarc/core";\nimport { classify } from "./a.ts";\ntype All = (names: string[]) => (string | null)[];\nexport const allSpec = arc.defineRegion<All>({ id: "b.all", intent: "x" });\nexport const first = classify("x");\n',
+    "src/a.ts": 'import * as arc from "open-arc";\ntype Classify = (name: string) => string | null;\nexport const classifySpec = arc.defineRegion<Classify>({ id: "a.classify", intent: "x" });\n',
+    "src/b.ts": 'import * as arc from "open-arc";\nimport { classify } from "./a.ts";\ntype All = (names: string[]) => (string | null)[];\nexport const allSpec = arc.defineRegion<All>({ id: "b.all", intent: "x" });\nexport const first = classify("x");\n',
   };
   const s = fakePorts({ files });
   const ds: unknown[] = [];

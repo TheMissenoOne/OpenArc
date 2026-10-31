@@ -2,7 +2,7 @@
 // Each block in compile.ts is one or two calls into this module, which keeps the blocks small enough
 // for a small model to regenerate. Regionizing the engine itself is the next self-hosting step.
 import ts from "typescript";
-import type { Json } from "@openarc/core";
+import type { Json } from "open-arc";
 import type { Candidate, ChildSpan, CompileRequest, Diagnostic, ImportDecl, ManifestView, Ports, RegionState, StagedFile } from "./types.ts";
 import type { BackendConfig, ContextLevel, OpenArcConfig } from "./config.ts";
 import { hostOf, parseConfig } from "./config.ts";
@@ -285,7 +285,7 @@ export function scaffoldInMemory(p: Project, diagnostics: Diagnostic[]): string[
     const lines = linesOf(text);
     lines.splice(endLine + 1, 0, "", ...scaffoldLines(s));
     let out = lines.join("\n");
-    if (!/import \* as arc from "@openarc\/core"/.test(out)) out = `import * as arc from "@openarc/core";\n${out}`;
+    if (!/import \* as arc from "open-arc"/.test(out)) out = `import * as arc from "open-arc";\n${out}`;
     p.files.set(s.file, out);
     done.push(s.id);
   }
@@ -1071,7 +1071,7 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   const base = p.accepted.get(r.file) ?? p.files.get(r.file)!;
   // static. Allowed (§7.2, matching RULES): deps, openarc, modules the file already imports, and type-only imports of
   // closure types the context showed as "not in scope" (from their own file).
-  const allowed = new Set([...r.spec.deps, "@openarc/core", ...importedSpecifiers(base)]);
+  const allowed = new Set([...r.spec.deps, "open-arc", ...importedSpecifiers(base)]);
   const shownType = (i: ImportDecl) => !i.default && i.names.length > 0 && i.names.every((n) => r.typeImports.get(n) === i.from);
   const bad = imports.filter((i) => !allowed.has(i.from) && !shownType(i));
   if (bad.length) return fail(bad.map((i) => `OARC-E071 import "${i.from}" is not allowed (allowed: ${[...allowed].join(", ")}, or a type shown as not in scope from its own file)`));
@@ -1428,7 +1428,7 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
     usedIds.add(id);
   }
   if (!inserts.length) return res;
-  if (bound.has("arc") && !/import \* as arc from "@openarc\/core"/.test(text)) return refuse(rel, "the name `arc` is already bound; specs need `import * as arc from \"@openarc/core\"`"), res;
+  if (bound.has("arc") && !/import \* as arc from "open-arc"/.test(text)) return refuse(rel, "the name `arc` is already bound; specs need `import * as arc from \"open-arc\"`"), res;
 
   for (const ins of inserts.sort((a, b) => b.from - a.from)) {
     const ind = /^\s*/.exec(lines[ins.from]!)![0];
@@ -1436,7 +1436,7 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
     lines.splice(ins.from, 0, `${ind}// @openarc:begin ${ins.id}`);
     lines.splice(ins.specAt, 0, ...ins.spec);
   }
-  if (!/import \* as arc from "@openarc\/core"/.test(text)) lines.splice(lines[0]?.startsWith("#!") ? 1 : 0, 0, 'import * as arc from "@openarc/core";');
+  if (!/import \* as arc from "open-arc"/.test(text)) lines.splice(lines[0]?.startsWith("#!") ? 1 : 0, 0, 'import * as arc from "open-arc";');
   const out = lines.join("\n");
 
   // The result must type-check no worse than before, and analyze as developer-owned function regions.

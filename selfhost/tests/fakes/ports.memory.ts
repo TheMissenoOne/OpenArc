@@ -1,7 +1,7 @@
 // Authoritative fake. All Ports in memory.
 // init: { files?, http?: string[], proc?: [{ code, stdout, timedOut }] }
 // snapshot(): { files, requests, runs } (requests never include postJson headers). now() is fixed; newTxId() yields tx1, tx2, ...
-import { defineFake, type Json } from "@openarc/core";
+import { defineFake, type Json } from "open-arc";
 import type { Ports, ProcPort } from "../../src/types.ts";
 import { memoryFs, sortedFiles } from "./fs.memory.ts";
 import { stubHttp } from "./http.stub.ts";
