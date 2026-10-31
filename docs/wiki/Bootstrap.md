@@ -5,7 +5,7 @@
 | Stage | What | Status |
 |---|---|---|
 | **0** | `stage0/`: every region hand-written, then built into the `openarc` npm package | done: 21/21 regions pass their examples |
-| **1** | stage 0 (installed as `openarc-stage0`) compiles the pristine `selfhost/` scaffold | in progress: second run: 16/29 regions compiler-owned (first run: 14/29) |
+| **1** | stage 0 (installed as `openarc-stage0`) compiles the pristine `selfhost/` scaffold | in progress: 8/29 regions verified after the correction below (first run 14/29, second run claimed 16/29) |
 | **2** | the package built from stage 1 recompiles the scaffold with stage 1's cache: 0 model calls, byte-identical output | pending: after stage 1 completes |
 
 Stage 0 stays installed as the known-good compiler. A broken stage N never has to repair itself.
@@ -85,3 +85,9 @@ Nothing incorrect was committed by the transaction: failed regions stayed `pendi
 1. Find out why the context package (and with it the fingerprint) changed for 10 cached regions, and tighten block verification.
 2. Configure a `fallbackBackend` (a larger local model or an API; see [[Configuration]]) for the regions a 9B model can't do.
 3. Stage 2.
+
+## Correction after the second run
+
+The second run's "16/29" overstated it. `compile.run.parse` was committed with wrong code: it built a journal and called `commit()` during parsing. The cause was an OpenArc bug: with `--keep-going`, when a sibling block failed (`compile.run.recover`), the joint check for `compile.run` was skipped, but the other generated blocks were committed anyway. A block's only behavioural test is its function's examples, so none of the 8 committed `compile.run` blocks had really been verified.
+
+All `compile.run` blocks are back to pending, which leaves **8/29 verified regions** (all function regions with their own examples). The engine is being fixed: blocks are held back until their whole function passes its examples (`OARC-W042`). The 8 function regions are unaffected.

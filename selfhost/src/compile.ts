@@ -88,10 +88,7 @@ export async function run(ports: Ports, req: CompileRequest): Promise<CompileRes
   const done = (exit: 0 | 1): CompileResult => ({ exit, diagnostics, modelCalls });
 
   // @openarc:begin compile.run.lock
-  locked = await ports.fs.createExclusive('.openarc/lock');
-  if (!locked) {
-    diagnostics.push({ code: 'OARC-E095' });
-  }
+  arc.pending("compile.run.lock");
   // @openarc:end compile.run.lock
   if (!locked) return done(1);
 
@@ -101,28 +98,24 @@ export async function run(ports: Ports, req: CompileRequest): Promise<CompileRes
     // @openarc:end compile.run.recover
 
     // @openarc:begin compile.run.parse
-    project = await engine.parse(ports, req, diagnostics);
-      const journal = planJournal(txid, targets.map(t => ({ target: t, staged: '' })) as any);
-      await commit(ports.fs, journal);
+    arc.pending("compile.run.parse");
     // @openarc:end compile.run.parse
     if (hasErrors(diagnostics)) return done(1);
 
     // @openarc:begin compile.run.analyze
-    await engine.analyze(ports, req, project, diagnostics);
+    arc.pending("compile.run.analyze");
     // @openarc:end compile.run.analyze
     if (hasErrors(diagnostics)) return done(1);
 
     // @openarc:begin compile.run.plan
-    targets = engine.plan(project, req, diagnostics);
+    arc.pending("compile.run.plan");
     // @openarc:end compile.run.plan
     if (targets.length === 0) return done(hasErrors(diagnostics) ? 1 : 0);
 
     for (const id of targets) {
       let candidate: Candidate | null = null;
       // @openarc:begin compile.run.generate
-      const r = await engine.generate(ports, req, project, id, diagnostics);
-        candidate = r.candidate;
-        modelCalls += r.modelCalls;
+      arc.pending("compile.run.generate");
       // @openarc:end compile.run.generate
       if (candidate === null) {
         if (!req.keepGoing) return done(1); // nothing staged yet → disk untouched
@@ -132,17 +125,17 @@ export async function run(ports: Ports, req: CompileRequest): Promise<CompileRes
     }
 
     // @openarc:begin compile.run.stage
-    staged = await engine.stage(ports, req, project, candidates, txid, diagnostics);
+    arc.pending("compile.run.stage");
     // @openarc:end compile.run.stage
     if (staged.length === 0) return done(1);
 
     // @openarc:begin compile.run.commit
-    await commit(ports.fs, planJournal(txid, staged.map((f, i) => ({ target: f.target, staged: `.openarc/txn/${txid}/stage/${i}` }))));
+    arc.pending("compile.run.commit");
     // @openarc:end compile.run.commit
     return done(hasErrors(diagnostics) ? 1 : 0);
   } finally {
     // @openarc:begin compile.run.unlock
-    await ports.fs.remove('.openarc/lock');
+    arc.pending("compile.run.unlock");
     // @openarc:end compile.run.unlock
   }
 }
