@@ -1,5 +1,7 @@
 # OpenArc
 
+[npm: open-arc](https://www.npmjs.com/package/open-arc) · [GitHub](https://github.com/TheMissenoOne/OpenArc) · [Wiki](https://github.com/TheMissenoOne/OpenArc/wiki)
+
 Compile typed specs into verified TypeScript with **small local models**.
 
 You write the contract: a function type, an intent and examples. OpenArc builds a minimal context package for that one function, the way a unit test isolates code. It asks a local model for the body, then verifies the result:
@@ -10,7 +12,7 @@ You write the contract: a function type, an intent and examples. OpenArc builds 
 Only then does it splice the body in. Your hand edits are never overwritten.
 
 ```ts
-import * as arc from "openarc";
+import * as arc from "open-arc";
 
 type NormalizeTitle = (title: string) => string;
 
@@ -39,12 +41,14 @@ export const normalizeTitle: NormalizeTitle = (title) => {
 ## Use
 
 ```bash
-npm i -D openarc
+npm i -D open-arc
 npx openarc init          # openarc.config.json, tsconfig.json, .openarc/
 # write defineRegion specs in src/*.ts
 npx openarc scaffold      # adds markers + typed placeholders (deterministic, no model)
 npx openarc compile       # generates, verifies and commits every pending/stale region
 npx openarc graph         # region tree with ownership states
+npx openarc watch         # nodemon-style: recompiles regions as you edit specs (one at a time)
+npx openarc extract src/x.ts   # adopt existing functions as regions (bodies kept as-is)
 ```
 
 | Command | Effect |
@@ -54,6 +58,7 @@ npx openarc graph         # region tree with ownership states
 | `release <id>` | hand an edited region back to the compiler (the body is backed up first) |
 | `resolve <id> --keep\|--regen\|--unlink` | settle a conflict |
 | `inspect <id>` | spec, state and provenance |
+| `check <id> --oracle <module>#<export>` | compare a compiled region with a reference implementation on its examples plus seeded variations, in the sandbox |
 
 ## Configuration: `openarc.config.json`
 
@@ -113,4 +118,4 @@ Functions that take ports (filesystem, HTTP, …) are tested with developer-writ
 
 ## Status
 
-0.2.0. OpenArc compiles parts of itself; see `SPEC-phase0.md` §14 (bootstrap).
+0.5.0 (alpha). OpenArc compiles parts of itself; see the [wiki](https://github.com/TheMissenoOne/OpenArc/wiki) and [`SPEC-phase0.md`](https://github.com/TheMissenoOne/OpenArc/blob/main/SPEC-phase0.md).

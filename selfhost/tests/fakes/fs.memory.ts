@@ -1,6 +1,6 @@
 // Authoritative fake (spec §9.4). In-memory FsPort. init: { files?: { [path]: content } }.
 // snapshot(): { files } with sorted keys.
-import { defineFake, type Json } from "openarc";
+import { defineFake, type Json } from "@openarc/core";
 import type { FsPort } from "../../src/types.ts";
 
 export function memoryFs(init: Json | undefined): { fs: FsPort; files: Map<string, string> } {

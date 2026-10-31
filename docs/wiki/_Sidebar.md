@@ -7,6 +7,8 @@
 - [[Context Packages]]
 - [[Safety Model]]
 - [[Fakes]]
+- [[Adopting Existing Code]]
+- [[Watch Mode]]
 - [[CLI Reference]]
 - [[Bootstrap]]
 - [[Design Log]]

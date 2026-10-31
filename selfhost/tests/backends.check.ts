@@ -1,10 +1,10 @@
 // Request shapes of every backend, against a fake HttpPort. No network. Run: node tests/backends.check.ts
 import assert from "node:assert";
-import type { Json } from "openarc";
+import type { Json } from "@openarc/core";
 import type { Ports } from "../src/types.ts";
 import type { BackendConfig } from "../src/config.ts";
 import { parseConfig } from "../src/config.ts";
-import { complete, ANTHROPIC_VERSION } from "../src/backends.ts";
+import { complete, ANTHROPIC_VERSION, OUTPUT_SCHEMA } from "../src/backends.ts";
 import { MODEL_OUTPUT_SCHEMA } from "../src/model.ts";
 
 const OUT = '{"body":"return 1;","imports":[]}';
@@ -16,7 +16,11 @@ function fake(response: string) {
 const env = { OPENAI_API_KEY: "sk-test-openai", OPENROUTER_API_KEY: "sk-or-test", ANTHROPIC_API_KEY: "sk-ant-test" };
 const openaiReply = JSON.stringify({ choices: [{ message: { role: "assistant", content: OUT } }] });
 const msgs = [{ role: "system", content: "S" }, { role: "user", content: "U" }];
-const strictSchema = { ...(MODEL_OUTPUT_SCHEMA as object), required: ["body", "imports"] };
+// The §8.4 schema plus an optional `default` on imports items; strict mode lists it as required and nullable.
+const item = (required: string[], def: Json) => ({ type: "object", required, additionalProperties: false, properties: { from: { type: "string" }, names: { type: "array", items: { type: "string" } }, default: def } });
+const schemaWith = (required: string[], def: Json) => ({ ...(MODEL_OUTPUT_SCHEMA as object), properties: { body: { type: "string" }, imports: { type: "array", items: item(required, def) } } });
+assert.deepStrictEqual(OUTPUT_SCHEMA, schemaWith(["from", "names"], { type: "string" }));
+const strictSchema = { ...schemaWith(["from", "names", "default"], { type: ["string", "null"] }), required: ["body", "imports"] };
 
 // openai
 {
@@ -58,7 +62,7 @@ const strictSchema = { ...(MODEL_OUTPUT_SCHEMA as object), required: ["body", "i
   assert.deepStrictEqual(seen, [{
     url: "https://api.anthropic.com/v1/messages",
     headers: { "x-api-key": "sk-ant-test", "anthropic-version": ANTHROPIC_VERSION },
-    body: { model: "claude-opus-5-5", max_tokens: 16000, system: "S", messages: [{ role: "user", content: "U" }], output_config: { format: { type: "json_schema", schema: MODEL_OUTPUT_SCHEMA } } },
+    body: { model: "claude-opus-5-5", max_tokens: 16000, system: "S", messages: [{ role: "user", content: "U" }], output_config: { format: { type: "json_schema", schema: OUTPUT_SCHEMA } } },
   }]);
   const refused = fake(JSON.stringify({ stop_reason: "refusal", content: [] }));
   await assert.rejects(complete(refused.ports, b, "S", "U", env), /stop_reason refusal/);
@@ -69,6 +73,11 @@ const strictSchema = { ...(MODEL_OUTPUT_SCHEMA as object), required: ["body", "i
   assert.equal(await complete(ports, { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, think: false }, "S", "U", env), OUT);
   assert.equal(seen[0]!.url, "http://127.0.0.1:11434/api/chat");
   assert.equal((seen[0]!.body as { model: string }).model, "qwen3.5:9b");
+  assert.deepStrictEqual((seen[0]!.body as { options: Json }).options, { temperature: 0, seed: 1, num_ctx: 8192, num_predict: 2048 }, "output cap = outputReserveTokens");
+  assert.deepStrictEqual((seen[0]!.body as { format: Json }).format, OUTPUT_SCHEMA);
+  // a varied retry (engine.retrySampling) reaches the request
+  await complete(ports, { provider: "ollama", model: "m", maxContextTokens: 4096, outputReserveTokens: 1000, seed: 5, temperature: 0.4 }, "S", "U", env);
+  assert.deepStrictEqual((seen[1]!.body as { options: Json }).options, { temperature: 0.4, seed: 5, num_ctx: 4096, num_predict: 1000 });
 }
 // missing key: OARC-E080 detail token, never the key
 {
@@ -88,5 +97,33 @@ const strictSchema = { ...(MODEL_OUTPUT_SCHEMA as object), required: ["body", "i
   assert.match(cfg({ provider: "anthropic", model: "m", maxContextTokens: 1 })!, /apiKeyEnv/);
   assert.match(cfg({ provider: "gemini", model: "m", maxContextTokens: 1 })!, /unknown provider/);
   assert.equal(cfg({ provider: "openai", model: "m", maxContextTokens: 1, apiKeyEnv: "K" }), undefined);
+}
+// connection error (Ollama died mid-run): retried exactly once, then given up
+{
+  const ollama: BackendConfig = { provider: "ollama", model: "m", maxContextTokens: 8192 };
+  const reply = JSON.stringify({ message: { role: "assistant", content: OUT }, done: true });
+  const flaky = (failures: Error[]) => {
+    let calls = 0;
+    const logs: string[] = [];
+    const ports = { log: (l: string) => logs.push(l), http: { async postJson() { calls++; const e = failures.shift(); if (e) throw e; return reply; } } } as unknown as Ports;
+    return { ports, logs, calls: () => calls };
+  };
+  const refused = () => Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+  const once = flaky([refused()]);
+  assert.equal(await complete(once.ports, ollama, "S", "U", env, 0), OUT);
+  assert.equal(once.calls(), 2);
+  assert.match(once.logs[0]!, /retrying once/);
+  const twice = flaky([refused(), refused()]);
+  await assert.rejects(complete(twice.ports, ollama, "S", "U", env, 0), /fetch failed/);
+  assert.equal(twice.calls(), 2);
+  const other = flaky([new Error("HTTP 500: boom")]);
+  await assert.rejects(complete(other.ports, ollama, "S", "U", env, 0), /HTTP 500/);
+  assert.equal(other.calls(), 1, "only connection errors are retried");
+  const body = flaky([new Error("HTTP 502: upstream said fetch failed, ECONNREFUSED")]);
+  await assert.rejects(complete(body.ports, ollama, "S", "U", env, 0), /HTTP 502/);
+  assert.equal(body.calls(), 1, "a response body that mentions a connection error is not retried");
+  const hosted = flaky([Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:1234"), { code: "ECONNREFUSED" })]);
+  assert.equal(await complete(hosted.ports, { provider: "openai", model: "local", baseUrl: "http://127.0.0.1:1234/v1", maxContextTokens: 8192 }, "S", "U", env, 0).catch((e) => e.message), "openai: no message content");
+  assert.equal(hosted.calls(), 2);
 }
 console.log("backends: request shapes ok");

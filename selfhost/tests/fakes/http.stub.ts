@@ -1,6 +1,6 @@
 // Authoritative fake. init: { responses: string[] }, returned in order; throws when exhausted.
 // snapshot(): { requests: [{ url, body }] }. postJson headers are accepted but never recorded: they carry API keys.
-import { defineFake, type Json } from "openarc";
+import { defineFake, type Json } from "@openarc/core";
 import type { HttpPort } from "../../src/types.ts";
 
 export function stubHttp(init: Json | undefined) {

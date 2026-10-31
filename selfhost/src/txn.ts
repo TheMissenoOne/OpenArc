@@ -1,4 +1,4 @@
-import * as arc from "openarc";
+import * as arc from "@openarc/core";
 import type { FsPort, Journal } from "./types.ts";
 
 // ── txn.planJournal ───────────────────────────────────────────── spec §8.1 STAGE
@@ -26,7 +26,16 @@ export const planJournalSpec = arc.defineRegion<PlanJournal>({
 });
 
 // @openarc:begin txn.planJournal
-export const planJournal: PlanJournal = (txid, files) => arc.todo("txn.planJournal");
+export const planJournal: PlanJournal = (txid, files) => {
+  return {
+      txid,
+      entries: files.map((file, index) => ({
+        target: file.target,
+        staged: file.staged,
+        backup: `.openarc/txn/${txid}/backup/${index}`
+      }))
+    };
+};
 // @openarc:end txn.planJournal
 
 // ── txn.commit / txn.recover ──────────────────────────────────── spec §8.1 COMMIT, §8.2
@@ -59,7 +68,19 @@ export const commitSpec = arc.defineRegion<Commit>({
 });
 
 // @openarc:begin txn.commit
-export const commit: Commit = (fs, journal) => arc.todo("txn.commit");
+export const commit: Commit = async (fs, journal) => {
+  await fs.write('.openarc/txn/' + journal.txid + '/journal.json', JSON.stringify(journal));
+  for (const entry of journal.entries) {
+    const targetContent = await fs.read(entry.target);
+    if (targetContent !== null) {
+      await fs.write(entry.backup, targetContent);
+    } else {
+      await fs.write(entry.backup + '.absent', '');
+    }
+    await fs.rename(entry.staged, entry.target);
+  }
+  await fs.remove('.openarc/txn/' + journal.txid);
+};
 // @openarc:end txn.commit
 
 export const recoverSpec = arc.defineRegion<Recover>({

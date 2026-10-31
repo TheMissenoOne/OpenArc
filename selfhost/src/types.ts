@@ -1,6 +1,6 @@
 // Contracts shared by every region. These types are authoritative and hand-written.
 // OpenArc never generates or edits this file.
-import type { Json } from "openarc";
+import type { Json } from "@openarc/core";
 
 // ---------- diagnostics (spec §11) ----------
 // No message field: messages come from a table keyed by code. Examples compare
@@ -71,6 +71,7 @@ export interface PlanResult {
 export interface ImportDecl {
   from: string;
   names: string[];
+  default?: string; // a default import's local name (import x from "from"); absent for named-only imports
 }
 export type ModelOutput =
   | { ok: true; body: string; imports: ImportDecl[] }
@@ -85,7 +86,7 @@ export interface OllamaChatRequest {
   model: string;
   stream: false;
   format: Json;
-  options: { temperature: 0; seed: number; num_ctx: number };
+  options: { temperature: number; seed: number; num_ctx: number; num_predict?: number }; // backends.ts sets num_predict and varies temperature/seed on retries
   messages: { role: "system" | "user"; content: string }[];
   think?: boolean; // set by backends.ts from BackendConfig.think, not by model.buildRequest
   keep_alive?: string; // set by backends.ts from BackendConfig.keepAlive, not by model.buildRequest
@@ -132,7 +133,9 @@ export type Command =
   | { cmd: "freeze" | "release" | "inspect"; id: string }
   | { cmd: "resolve"; id: string; mode: "keep" | "regen" | "unlink" }
   | { cmd: "graph" }
-  | { cmd: "usage"; reason: "unknown-command" | "missing-id" | "resolve-needs-mode" };
+  | { cmd: "extract"; file: string; fn?: string; id?: string } // spec §10; absent flags are omitted
+  | { cmd: "watch"; debounceMs: number } // spec §15
+  | { cmd: "usage"; reason: "unknown-command" | "missing-id" | "resolve-needs-mode" | "missing-file" | "bad-flag" };
 
 // ---------- ports: every effect arrives through a parameter (spec §7.5) ----------
 /** Paths are project-relative POSIX. `remove` deletes a file or a whole directory tree. `list` returns direct child names, sorted. */

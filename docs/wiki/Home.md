@@ -21,6 +21,8 @@ The hypothesis behind it:
 - [[Context Packages]]: how much the model sees, and when that grows
 - [[Safety Model]]: what the model can and cannot touch, enforced in code
 - [[Fakes]]: testing functions with effects
+- [[Adopting Existing Code]]: `openarc extract` turns functions you already have into regions
+- [[Watch Mode]]: `openarc watch` recompiles regions as you save, one at a time
 - [[CLI Reference]]
 - [[Bootstrap]]: OpenArc compiling OpenArc
 - [[Design Log]]: every finding that changed the spec

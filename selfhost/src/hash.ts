@@ -1,5 +1,5 @@
-import * as arc from "openarc";
-import type { Json } from "openarc";
+import * as arc from "@openarc/core";
+import type { Json } from "@openarc/core";
 import type { ChildSpan } from "./types.ts";
 
 // ── hash.canonicalJson ────────────────────────────────────────── spec §4.2

@@ -1,0 +1,44 @@
+{
+  "name": "openarc-vscode",
+  "displayName": "OpenArc",
+  "description": "Navigation, CodeLens, diagnostics and region tinting for OpenArc specs and regions.",
+  "version": "0.1.0",
+  "publisher": "openarc",
+  "license": "MIT",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Linters"],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:openarc.config.json",
+    "workspaceContains:**/openarc.config.json"
+  ],
+  "contributes": {
+    "commands": [
+      { "command": "openarc.compile", "title": "Compile", "category": "OpenArc" },
+      { "command": "openarc.graph", "title": "Graph", "category": "OpenArc" },
+      { "command": "openarc.release", "title": "Release region", "category": "OpenArc" },
+      { "command": "openarc.freeze", "title": "Freeze region", "category": "OpenArc" }
+    ],
+    "colors": [
+      { "id": "openarc.pendingBackground", "description": "Background of pending OpenArc regions.",
+        "defaults": { "dark": "#80808014", "light": "#80808014", "highContrast": "#00000000" } },
+      { "id": "openarc.compilerBackground", "description": "Background of compiler-owned OpenArc regions.",
+        "defaults": { "dark": "#3794ff12", "light": "#0066bf0d", "highContrast": "#00000000" } },
+      { "id": "openarc.developerBackground", "description": "Background of developer-owned OpenArc regions.",
+        "defaults": { "dark": "#89d18512", "light": "#3880360d", "highContrast": "#00000000" } },
+      { "id": "openarc.conflictedBackground", "description": "Background of conflicted OpenArc regions.",
+        "defaults": { "dark": "#f4877126", "light": "#e5140014", "highContrast": "#00000000" } }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "vscode:prepublish": "npm run compile",
+    "test": "tsc -p . && node test/markers.check.mjs"
+  },
+  "dependencies": {
+    "typescript": "~5.9.3"
+  },
+  "devDependencies": {
+    "@types/vscode": "~1.85.0"
+  }
+}

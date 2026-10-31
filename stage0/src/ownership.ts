@@ -1,4 +1,4 @@
-import * as arc from "openarc";
+import * as arc from "open-arc";
 import type { ManifestView, ObservedRegion, OwnershipResult } from "./types.ts";
 
 // ── ownership.detect ──────────────────────────────────────────── spec §6.2

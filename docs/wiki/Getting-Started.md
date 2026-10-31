@@ -12,9 +12,11 @@ Examples always run in a sandbox. If `bwrap` is missing, OpenArc refuses to run 
 
 ## Install
 
+The package is [`open-arc` on npm](https://www.npmjs.com/package/open-arc); the command it installs is `openarc`.
+
 ```bash
 mkdir my-app && cd my-app && npm init -y && npm pkg set type=module
-npm i -D openarc
+npm i -D open-arc
 npx openarc init
 ```
 
@@ -25,7 +27,7 @@ npx openarc init
 `src/tasks.ts`:
 
 ```ts
-import * as arc from "openarc";
+import * as arc from "open-arc";
 
 type NormalizeTitle = (title: string) => string;
 
@@ -44,6 +46,7 @@ A wrong example, such as `expected: 42`, is a type error in your editor before O
 
 ```bash
 npx openarc scaffold   # adds markers + a typed placeholder (no model involved)
+npx tsc -p .           # optional: after scaffold, so imports of other files' regions resolve
 npx openarc compile
 ```
 

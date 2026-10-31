@@ -11,6 +11,6 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
-    "openarc": "file:../../stage0/build/openarc-0.2.0.tgz"
+    "open-arc": "file:../../stage0/build/open-arc-0.6.2.tgz"
   }
 }

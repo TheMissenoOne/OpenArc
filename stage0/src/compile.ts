@@ -1,4 +1,4 @@
-import * as arc from "openarc";
+import * as arc from "open-arc";
 import type { Candidate, CompileRequest, CompileResult, Diagnostic, Ports, StagedFile } from "./types.ts";
 import * as engine from "./engine.ts";
 import { planJournal, commit, recover } from "./txn.ts";
@@ -111,7 +111,9 @@ export async function run(ports: Ports, req: CompileRequest): Promise<CompileRes
     // @openarc:begin compile.run.plan
     if (project !== null) targets = engine.plan(project, req, diagnostics);
     // @openarc:end compile.run.plan
-    if (targets.length === 0) return done(hasErrors(diagnostics) ? 1 : 0);
+    // Nothing to generate: still commit a manifest-only transaction when ownership changed (W060 -> developer),
+    // otherwise the transition is never recorded and a later spec change can't be detected as E061.
+    if (targets.length === 0 && (project === null || !engine.manifestChanged(project))) return done(hasErrors(diagnostics) ? 1 : 0);
 
     for (const id of targets) {
       let candidate: Candidate | null = null;

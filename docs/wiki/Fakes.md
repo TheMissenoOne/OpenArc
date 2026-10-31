@@ -13,7 +13,7 @@ examples: [{
 `tests/fakes/fs.memory.ts`:
 
 ```ts
-import { defineFake } from "openarc";
+import { defineFake } from "open-arc";
 import type { FsPort } from "../../src/types.ts";
 
 export default defineFake<FsPort>((init) => {

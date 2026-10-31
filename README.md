@@ -1,11 +1,13 @@
 # OpenArc
 
+[![npm](https://img.shields.io/npm/v/open-arc)](https://www.npmjs.com/package/open-arc)
+
 **Compile typed specs into verified TypeScript with small local models.**
 
 You write the contract: a function type, an intent and examples. OpenArc gives a local model only the context that one function needs, the way a unit test isolates code. It verifies the returned body with tsc, static rules and your examples in a sandbox, and only then splices it in. Hand edits are never overwritten, and the model can't touch anything outside its own region.
 
 ```ts
-import * as arc from "openarc";
+import * as arc from "open-arc";
 
 type NormalizeTitle = (title: string) => string;
 
@@ -19,9 +21,12 @@ export const normalizeTitleSpec = arc.defineRegion<NormalizeTitle>({
 });
 ```
 
+Install from npm: [`open-arc`](https://www.npmjs.com/package/open-arc) (the command is `openarc`).
+
 ```bash
-npm i -D openarc && npx openarc init
+npm i -D open-arc && npx openarc init
 npx openarc scaffold && npx openarc compile
+npx openarc watch    # or keep it running: recompiles regions as you save, one at a time
 ```
 
 **Documentation:** [Wiki](https://github.com/TheMissenoOne/OpenArc/wiki) (source in [`docs/wiki/`](docs/wiki)) · [Specification](SPEC-phase0.md)
@@ -32,14 +37,14 @@ npx openarc scaffold && npx openarc compile
 |---|---|
 | `SPEC-phase0.md` | normative specification (v0.3) |
 | `selfhost/` | **OpenArc written as an OpenArc project.** It's the source of truth; regions are compiled by OpenArc itself |
-| `stage0/` | the bootstrap compiler: `selfhost/` with every region written by hand; builds the `openarc` npm package |
+| `stage0/` | the bootstrap compiler: `selfhost/` with every region written by hand; builds the `open-arc` npm package |
 | `examples/demo/` | the smallest real project |
 | `docs/wiki/` | wiki pages |
 
 ## Develop
 
 ```bash
-cd stage0 && npm i && npx tsc -p . && node tools/run-examples.ts --strict   # 21/21 regions
+cd stage0 && npm i && npx tsc -p . && node tools/run-examples.ts --strict   # 24/24 regions
 node tools/build.ts && (cd build && npm pack)                                # openarc-x.y.z.tgz
 cd ../selfhost && npm i && npx openarc compile --keep-going                  # OpenArc compiling OpenArc
 ```

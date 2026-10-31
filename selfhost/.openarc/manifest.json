@@ -38,190 +38,6 @@
         "at": "2026-10-31T17:41:14.678Z"
       }
     },
-    "compile.run.lock": {
-      "kind": "block",
-      "parent": "compile.run",
-      "file": "src/compile.ts",
-      "ownership": "compiler",
-      "hash": "sha256:5b23a4842e3f08a501da0769492b5d1c6d7d0d73d9f1a390a33e127cedde9a36",
-      "specHash": "sha256:ddb174128773d59a17e090741317381deefb00c16bdbc98a2872b53649fb1dc8",
-      "fingerprint": "sha256:50a1bf000e8d6b7f5064fa3b6eb170703a74a86dcb1ec43a947a42fb258d7232",
-      "provenance": {
-        "source": "generated",
-        "backend": "local",
-        "model": "qwen3.5:9b",
-        "contextLevel": 1,
-        "attempts": 2,
-        "verifiedBy": [
-          "tsc",
-          "static",
-          "examples:1/2 (1 inconclusive: sibling blocks pending)",
-          "via:compile.run"
-        ],
-        "at": "2026-10-31T17:41:14.681Z"
-      }
-    },
-    "compile.run.parse": {
-      "kind": "block",
-      "parent": "compile.run",
-      "file": "src/compile.ts",
-      "ownership": "compiler",
-      "hash": "sha256:f9f39d9e6c0f2ce4ccc2295d5af3252be9691c97f6c26ad8cd5457df30421f17",
-      "specHash": "sha256:7d34bc6d151163ecf4cf2becd6eb3afeabd3131122222c60f39a317cf825167e",
-      "fingerprint": "sha256:ef75bfa665120fa0b2b3aa06e7fde56c95bf42a8900daeef6e9989d744af147b",
-      "provenance": {
-        "source": "generated",
-        "backend": "local",
-        "model": "qwen3.5:9b",
-        "contextLevel": 1,
-        "attempts": 2,
-        "verifiedBy": [
-          "tsc",
-          "static",
-          "examples:1/2 (1 inconclusive: sibling blocks pending)",
-          "via:compile.run"
-        ],
-        "at": "2026-10-31T17:41:14.685Z"
-      }
-    },
-    "compile.run.analyze": {
-      "kind": "block",
-      "parent": "compile.run",
-      "file": "src/compile.ts",
-      "ownership": "compiler",
-      "hash": "sha256:2bde46f0beb20a6a6baacef56e21309caf77e1c0290694f2631df66db0a8f240",
-      "specHash": "sha256:534288de2f14354134ef85c08f521b8220782888f3153cdf78f50ba6ee152d68",
-      "fingerprint": "sha256:1623e29254bd9c83f7b51fa87f506d3d50125afe6d9d4fcb88d5026936a1e68d",
-      "provenance": {
-        "source": "generated",
-        "backend": "local",
-        "model": "qwen3.5:9b",
-        "contextLevel": 1,
-        "attempts": 1,
-        "verifiedBy": [
-          "tsc",
-          "static",
-          "examples:1/2 (1 inconclusive: sibling blocks pending)",
-          "via:compile.run"
-        ],
-        "at": "2026-10-31T17:41:14.697Z"
-      }
-    },
-    "compile.run.plan": {
-      "kind": "block",
-      "parent": "compile.run",
-      "file": "src/compile.ts",
-      "ownership": "compiler",
-      "hash": "sha256:a32e41657d3ab69f3b9e71b198bb3866413e03fcb63d3e7e5ea0f5d38154ac38",
-      "specHash": "sha256:982c5da10635a843dede502a827d13ec20aa40482f9bcb78f9e2f6cb3d685fd5",
-      "fingerprint": "sha256:3ed5c8a634f794a4d2de9a37c198de1e0b070c0bcd2b12f4c7164d5884cc965c",
-      "provenance": {
-        "source": "generated",
-        "backend": "local",
-        "model": "qwen3.5:9b",
-        "contextLevel": 1,
-        "attempts": 1,
-        "verifiedBy": [
-          "tsc",
-          "static",
-          "examples:1/2 (1 inconclusive: sibling blocks pending)",
-          "via:compile.run"
-        ],
-        "at": "2026-10-31T17:41:14.699Z"
-      }
-    },
-    "compile.run.generate": {
-      "kind": "block",
-      "parent": "compile.run",
-      "file": "src/compile.ts",
-      "ownership": "compiler",
-      "hash": "sha256:d3a83d825e289e5f70b590a52aeca727f990a3f7d207bfa28cb5bb503731fc2a",
-      "specHash": "sha256:142bcf3e1731fce591aaabc93f98df05d70e7d4b11162d75c877f0e410144b04",
-      "fingerprint": "sha256:c1c318f35a3d82df5bd972d416b892efa1e3f3358e6a36e2fa3cac44b0230c85",
-      "provenance": {
-        "source": "generated",
-        "backend": "local",
-        "model": "qwen3.5:9b",
-        "contextLevel": 1,
-        "attempts": 2,
-        "verifiedBy": [
-          "tsc",
-          "static",
-          "examples:1/2 (1 inconclusive: sibling blocks pending)",
-          "via:compile.run"
-        ],
-        "at": "2026-10-31T17:41:14.701Z"
-      }
-    },
-    "compile.run.stage": {
-      "kind": "block",
-      "parent": "compile.run",
-      "file": "src/compile.ts",
-      "ownership": "compiler",
-      "hash": "sha256:806ec91b47aabe3f9ec1fc0322315b128a6c5838f88e89351063944bd511c81e",
-      "specHash": "sha256:8026ce7d01ad54a73f3f8efed45ea55646b068f6b2c66263ad8c58f43d8d3490",
-      "fingerprint": "sha256:1376262c4a92552044b358a1d5edd08cf2f274aa202b2a1132d0fa3599af2c77",
-      "provenance": {
-        "source": "generated",
-        "backend": "local",
-        "model": "qwen3.5:9b",
-        "contextLevel": 1,
-        "attempts": 1,
-        "verifiedBy": [
-          "tsc",
-          "static",
-          "examples:1/2 (1 inconclusive: sibling blocks pending)",
-          "via:compile.run"
-        ],
-        "at": "2026-10-31T17:41:14.703Z"
-      }
-    },
-    "compile.run.commit": {
-      "kind": "block",
-      "parent": "compile.run",
-      "file": "src/compile.ts",
-      "ownership": "compiler",
-      "hash": "sha256:ffb17a082cda02517896480649117ee5f15eb90cb4926ee6d13ef1b40355324d",
-      "specHash": "sha256:10ee919a320559de3e5dcbc7b0f1941865cc03723204ad0342761700f3b267ce",
-      "fingerprint": "sha256:894d0acae8a7ec624b74c3d648c4efbfb2b39bf82fb8bf527a237c0327bcccb5",
-      "provenance": {
-        "source": "generated",
-        "backend": "local",
-        "model": "qwen3.5:9b",
-        "contextLevel": 1,
-        "attempts": 1,
-        "verifiedBy": [
-          "tsc",
-          "static",
-          "examples:1/2 (1 inconclusive: sibling blocks pending)",
-          "via:compile.run"
-        ],
-        "at": "2026-10-31T17:41:14.705Z"
-      }
-    },
-    "compile.run.unlock": {
-      "kind": "block",
-      "parent": "compile.run",
-      "file": "src/compile.ts",
-      "ownership": "compiler",
-      "hash": "sha256:f1ec601b5fa85e411ba271e31deb41d7f7e92f9a000f827a02edb06960f30ef4",
-      "specHash": "sha256:e5e5adf5335c21a690eada7e80b5287cad9299db140a419fd78e91d391960e8f",
-      "fingerprint": "sha256:e126f465d4ce50e5773f32a7173ef8f7e44f3849cc7fa3548b38799dda322a8f",
-      "provenance": {
-        "source": "generated",
-        "backend": "local",
-        "model": "qwen3.5:9b",
-        "contextLevel": 1,
-        "attempts": 1,
-        "verifiedBy": [
-          "tsc",
-          "static",
-          "examples:1/2 (1 inconclusive: sibling blocks pending)",
-          "via:compile.run"
-        ],
-        "at": "2026-10-31T17:41:14.707Z"
-      }
-    },
     "ids.findDuplicateIds": {
       "kind": "function",
       "parent": null,
@@ -253,7 +69,7 @@
       "ownership": "compiler",
       "hash": "sha256:c056105a9bccf7d88b9ff42851a45590e0927db51d88cbb06368dd43a817bd0b",
       "specHash": "sha256:dfe36e3c1603646e753511ffd6153470466b9fdf6b40770fa44313ee81cff1dd",
-      "fingerprint": "sha256:94214773543b2fa3d8860803ef8152227382022884aedfe277bd370f35185001",
+      "fingerprint": "sha256:53841c68b5ff7c70ca8799b66b457818eeef464c5bdda9ab99d95c34a48c18ea",
       "provenance": {
         "source": "generated",
         "backend": "local",
@@ -265,7 +81,7 @@
           "static",
           "examples:1/1"
         ],
-        "at": "2026-10-31T17:41:14.711Z"
+        "at": "2026-10-31T18:14:05.596Z"
       }
     },
     "model.call": {
@@ -274,21 +90,21 @@
       "file": "src/model.ts",
       "symbol": "call",
       "ownership": "compiler",
-      "hash": "sha256:2995ea2b6bd168c3512a13fc9b16b5fe9c76e1d9cf2a42ae241250d9b8dbe909",
+      "hash": "sha256:ecd624275e819be44a957b8c68ac13888e7350be84fd90140290b3308844057f",
       "specHash": "sha256:8d036e092e21c504fa30e23e2e88528edbd3ac55b2332395e4845d521b2e0c48",
-      "fingerprint": "sha256:ee4572d5854af8f5c3321c52eda31e4e814fb4ca6e9a8c7edcffab96d74a45a2",
+      "fingerprint": "sha256:234bf8b23fe11a088ab6d1912aa4518ce63cdd2f957f0bcdda131f4cf3405b7c",
       "provenance": {
         "source": "generated",
         "backend": "local",
         "model": "qwen3.5:9b",
         "contextLevel": 0,
-        "attempts": 1,
+        "attempts": 2,
         "verifiedBy": [
           "tsc",
           "static",
           "examples:1/1"
         ],
-        "at": "2026-10-31T17:41:14.714Z"
+        "at": "2026-10-31T18:14:05.597Z"
       }
     },
     "ownership.detect": {
@@ -335,6 +151,52 @@
           "examples:1/1"
         ],
         "at": "2026-10-31T17:41:14.721Z"
+      }
+    },
+    "txn.planJournal": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/txn.ts",
+      "symbol": "planJournal",
+      "ownership": "compiler",
+      "hash": "sha256:4abccd4a7f6bbb187f3c925fa5d87c9d768be227bf2d4cf4889e4075df17674a",
+      "specHash": "sha256:0e1bbc7f5c2f78af998f59201c1b298916e96aecd8c02e7e742604f82d74849b",
+      "fingerprint": "sha256:521b58e4892e754b8a2acacc638a63b59fad3a8d942ed210ffc82075d040976c",
+      "provenance": {
+        "source": "generated",
+        "backend": "local",
+        "model": "qwen3.5:9b",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:2/2"
+        ],
+        "at": "2026-10-31T18:14:05.598Z"
+      }
+    },
+    "txn.commit": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/txn.ts",
+      "symbol": "commit",
+      "ownership": "compiler",
+      "hash": "sha256:f4a1f4a891893e80cb536f0e91e5adeafc14d931ab6b049e79066f992b6b3208",
+      "specHash": "sha256:7cec40b2df589239724d039326410384222dc5fb9ac014b076af30c2cf93c44f",
+      "fingerprint": "sha256:dca03e2d6314ef1e8c1dfa078ecc02fb1341ba31e7766dd3364cf6cefa1b5340",
+      "provenance": {
+        "source": "generated",
+        "backend": "local",
+        "model": "qwen3.5:9b",
+        "contextLevel": 0,
+        "attempts": 2,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:1/1"
+        ],
+        "at": "2026-10-31T18:14:05.599Z"
       }
     }
   }

@@ -1,4 +1,4 @@
-import * as arc from "openarc";
+import * as arc from "@openarc/core";
 import type { Diagnostic } from "./types.ts";
 
 // ── block.checkRestrictions ───────────────────────────────────── spec §3.4
