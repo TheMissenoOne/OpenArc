@@ -53,6 +53,11 @@ jobs:
         working-directory: stage0
         run: node tools/run-examples.ts --strict
 
+      # the DOM for tests/ui.check.ts (jsdom, react): without it the UI compile through the sandbox is skipped
+      - name: Install the UI fixture
+        working-directory: stage0/tests/fixtures/ui
+        run: npm ci
+
       # includes tests/sandbox.check.ts: doctor + a real compile against a fake Ollama server, through this OS's sandbox
       - name: Checks
         working-directory: stage0

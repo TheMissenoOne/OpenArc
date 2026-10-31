@@ -10,7 +10,7 @@ export const fooSpec = arc.defineRegion<F>({
   intent: "…" | ["…", "…"],                  // guidance for the model; never treated as verified
   effects: [],                               // "clock" | "random" | "log"
   deps: ["./helpers.ts", "node:crypto"],     // the only imports a body may add
-  examples: [{ name?: "…", args: [...], expected: …, tolerance?: 1e-6, exact?: false }],
+  examples: [{ name?: "…", args: [...], expected: …, tolerance?: 1e-6, exact?: false }, { args: [...], throws: true | "…" }],
   tolerance: 1e-9,                           // optional: the default numeric tolerance of every example
   calls: ["helpers.slug", "ports.fs.read"],  // optional: the only imported/port functions the body may call
   sketch: (a, b) => { … arc.hole<T>("…") … }, // optional: the body as typed code with holes (see Sketches)
@@ -53,6 +53,23 @@ examples: [{ args: [[1, 1], [2, 2], [2, 2]], expected: 1.4142135623730951 }, { a
 ```
 
 Failure messages print values faithfully: `got [-0,1,NaN]; expected [0,1,0]`, not `got [0,1,null]`.
+
+Recursive types work in `F`: `type Nested = Array<number | null | undefined | Nested>` type-checks in `args` and `expected` (before 0.7.1 it was `TS2589` on the spec itself). The tokens are accepted down to 8 levels of nesting; deeper values are checked against the plain type.
+
+## Examples that throw
+
+Write `throws` instead of `expected` when the call must fail. `throws: true` passes when the call throws (or its promise rejects) with anything; a string passes when it appears in the error's message:
+
+```ts
+type Find = (xs: number[], x: number) => number;
+examples: [
+  { args: [[1, 3, 5], 5], expected: 2 },
+  { args: [[1, 3, 5], 4], throws: "not found" },
+  { args: [[], 1], throws: true },
+]
+```
+
+An example has `expected` or `throws`, never both (the type rejects it). `fakesAfter` still applies after the throw, and a body that is still pending counts as pending, not as a throw. When a body returns instead, the failure says what it returned: `got {"returned":0}; expected {"throws":"not found"}`; a different message prints as `got {"throws":"<message>"}`. The context package shows these examples to the model like any other.
 
 ## Thin examples
 
@@ -129,7 +146,7 @@ export const passwordSpec = arc.defineRegion<Strategy<PasswordCred>>({
 
 - **Holes.** `arc.hole<T>("…")` as an expression is one expression of type `T` (written, or inferred: `const n: number = arc.hole("…")`). As a statement it is zero or more statements, with the block rules: no `return`, `break` or `continue` out of it, no `this`, no declaration the sketch uses later (`OARC-E035`). A function-valued hole (`arc.hole<(s: string) => string>("…")`) is a local helper. Descriptions are string literals; two statement holes in a row are ambiguous (`OARC-E010`).
 - **Checked before the model.** The sketch type-checks against `F` with your file: a hole of the wrong type is `OARC-E070` (detail `sketch:TS<code>`) before any model call.
-- **What the model does.** It sees the sketch with `«1»`, `«2»`… in place, one line per hole (its type and description), and replies `{"fills": {"1": "…", "2": "…"}}`. The compiler splices the fills (an expression fill is parenthesised) and commits the sketch with them as the region body. A model that sends a whole body anyway is not rejected outright: containment recovers its fills.
+- **What the model does.** It sees the sketch with `«1»`, `«2»`… in place, one line per hole (its type and description), and replies `{"fills": {"1": "…", "2": "…"}}`. The compiler splices the fills (an expression fill is parenthesised) and commits the sketch with them as the region body. A model that sends a whole body anyway is not rejected outright: containment recovers its fills. With `outputFormat: "code"` there is no schema to carry per-hole fills, so the model is asked for the whole filled sketch as one code block and containment recovers the fills the same way.
 - **Containment (`OARC-E099`).** The body must be the sketch with only the holes filled: comments, whitespace and quote style don't matter, anything else does (`body line 3 has 'invalid' where the sketch has "unknown"`).
 - **Calls.** Fills may call what the sketch itself calls plus `calls` (`OARC-E098` otherwise). Most sketches need no `calls` at all. The sketch's own calls are never checked: you wrote them.
 - **Coverage (`OARC-W045`, detail `hole:<id>#<n>`).** Every hole must be reached by a passing example, or the region isn't committed. Add an example that goes through it.

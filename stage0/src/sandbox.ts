@@ -14,6 +14,7 @@ export const buildArgvSpec = arc.defineRegion<BuildArgv>({
     "Return exactly the argv in the example, substituting cfg fields. bwrap provides network/fs/pid isolation;",
     "node --permission blocks fs-write, child processes and workers; prlimit caps CPU and address space; --max-old-space-size caps the heap.",
     "Bind nodePrefix read-only because nodeBin is often outside /usr (asdf, nvm, volta).",
+    "Bind each of cfg.extraReadPaths read-only at its own path, in order, after --dev /dev (so --tmpfs /tmp can't hide one under /tmp), and let node read each one (--allow-fs-read after /work).",
   ],
   examples: [
     {
@@ -25,6 +26,7 @@ export const buildArgvSpec = arc.defineRegion<BuildArgv>({
         addressSpaceBytes: 4294967296,
         cpuSeconds: 10,
         regionId: "tasks.normalizeTitle",
+        extraReadPaths: [],
       }],
       expected: [
         "bwrap", "--unshare-all", "--die-with-parent", "--new-session",
@@ -41,6 +43,36 @@ export const buildArgvSpec = arc.defineRegion<BuildArgv>({
         "/work/.openarc/harness.mjs", "tasks.normalizeTitle",
       ],
     },
+    {
+      name: "symlinked node_modules",
+      args: [{
+        stageDir: "/tmp/oa-stage",
+        nodeBin: "/usr/bin/node",
+        nodePrefix: "/usr",
+        heapMb: 256,
+        addressSpaceBytes: 4294967296,
+        cpuSeconds: 10,
+        regionId: "a.b",
+        extraReadPaths: ["/home/u/shared/node_modules", "/tmp/pkgs/core"],
+      }],
+      expected: [
+        "bwrap", "--unshare-all", "--die-with-parent", "--new-session",
+        "--ro-bind", "/tmp/oa-stage", "/work",
+        "--ro-bind", "/usr", "/usr",
+        "--ro-bind", "/usr", "/usr",
+        "--symlink", "usr/lib64", "/lib64",
+        "--symlink", "usr/lib", "/lib",
+        "--symlink", "usr/bin", "/bin",
+        "--tmpfs", "/tmp", "--proc", "/proc", "--dev", "/dev",
+        "--ro-bind", "/home/u/shared/node_modules", "/home/u/shared/node_modules",
+        "--ro-bind", "/tmp/pkgs/core", "/tmp/pkgs/core",
+        "--chdir", "/work",
+        "prlimit", "--as=4294967296", "--cpu=10",
+        "/usr/bin/node",
+        "--permission", "--allow-fs-read=/work", "--allow-fs-read=/home/u/shared/node_modules", "--allow-fs-read=/tmp/pkgs/core", "--max-old-space-size=256",
+        "/work/.openarc/harness.mjs", "a.b",
+      ],
+    },
   ],
 });
 
@@ -53,10 +85,12 @@ export const buildArgv: BuildArgv = (cfg) => [
   "--symlink", "usr/lib64", "/lib64",
   "--symlink", "usr/lib", "/lib",
   "--symlink", "usr/bin", "/bin",
-  "--tmpfs", "/tmp", "--proc", "/proc", "--dev", "/dev", "--chdir", "/work",
+  "--tmpfs", "/tmp", "--proc", "/proc", "--dev", "/dev",
+  ...cfg.extraReadPaths.flatMap((p) => ["--ro-bind", p, p]),
+  "--chdir", "/work",
   "prlimit", `--as=${cfg.addressSpaceBytes}`, `--cpu=${cfg.cpuSeconds}`,
   cfg.nodeBin,
-  "--permission", "--allow-fs-read=/work", `--max-old-space-size=${cfg.heapMb}`,
+  "--permission", "--allow-fs-read=/work", ...cfg.extraReadPaths.map((p) => `--allow-fs-read=${p}`), `--max-old-space-size=${cfg.heapMb}`,
   "/work/.openarc/harness.mjs", cfg.regionId,
 ];
 // @openarc:end sandbox.buildArgv

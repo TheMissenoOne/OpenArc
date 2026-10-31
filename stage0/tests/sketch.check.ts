@@ -4,7 +4,8 @@
 // 2. Containment (E099): per-hole fills and a whole-body reply are accepted with their fills recovered; a whole body
 //    that changes non-hole code or drops a statement is rejected. A statement fill with `return` is E035, a fill that
 //    calls an off-list port is E098. The spec hash covers the sketch (whitespace-insensitive).
-// 3. The context package and the request: Sketch with «n», Holes, calls allowed in fills, the {fills} schema.
+// 3. The context package and the request: Sketch with «n», Holes, calls allowed in fills, the {fills} schema; in
+//    outputFormat "code" no schema, a whole filled sketch as a code block, fills recovered by containment, tokens counted.
 // 4. A real compile through this OS's sandbox against a fake Ollama: a wrong fill fails an example and is repaired;
 //    the committed body is the sketch with the fills; W045 for a hole no example reaches; E100 for an example the
 //    sketch decides before any hole.
@@ -139,6 +140,27 @@ assert.deepStrictEqual(sketch.checkSketchBody(sk, sketch.spliceFills(sk, { ...FI
   assert.match(chat.body.messages[0]!.content, /\{"fills"/);
   assert.match(chat.body.messages[1]!.content, /Reply with JSON only: \{"fills": \{"1": "<code>"/);
 }
+// outputFormat "code": no schema; the model writes the whole filled sketch as one code block and containment recovers
+// the fills. Tokens are counted for sketch requests like any other.
+{
+  const config = JSON.stringify({ version: 1, backends: { local: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, outputFormat: "code" } }, compilation: { defaultBackend: "local", maxAttempts: 2 } });
+  const reply = (code: string) => JSON.stringify({ message: { role: "assistant", content: "```ts\n" + code + "\n```" }, done: true, prompt_eval_count: 300, eval_count: 30 });
+  const fake = fakePorts({ files: { "src/fx.ts": SRC(SKETCH), ".openarc/manifest.json": '{"schema":1,"regions":{}}', "openarc.config.json": config }, http: [TAGS, reply(hidden), reply(whole)] });
+  const { run } = await import("../src/compile.ts");
+  const res = await run(fake.instance as Ports, req);
+  assert.equal(res.exit, 0, JSON.stringify(res.diagnostics));
+  const snap = fake.snapshot() as { files: Record<string, string>; requests: { url: string; body: { format?: unknown; messages: { content: string }[] } }[] };
+  const sent = snap.requests.filter((q) => q.url.endsWith("/api/chat")).map((q) => q.body);
+  assert.equal(sent.length, 2, "attempt 1 changed non-hole code (E099) and was repaired");
+  assert.ok(sent.every((b) => !("format" in b)), "no fills schema in code mode");
+  assert.equal(sent[0]!.messages[0]!.content, sketch.SKETCH_CODE_SYSTEM);
+  assert.match(sent[0]!.messages[1]!.content, /Reply with ONE fenced code block[\s\S]*with each «n» replaced by its fill/);
+  assert.match(sent[1]!.messages[1]!.content, /OARC-E099 sketch not preserved/);
+  const text = snap.files["src/fx.ts"]!;
+  assert.ok(text.includes("export const password: Password = async (c, ports) => {\n  const email = c.email.trim().toLowerCase();") && text.includes("await ports.clock.now();"), text);
+  const prov = JSON.parse(snap.files[".openarc/manifest.json"]!).regions["fx.password"].provenance;
+  assert.deepStrictEqual([prov.outputFormat, prov.attempts, prov.tokens], ["code", 2, { prompt: 600, completion: 60 }]);
+}
 
 // ── 4. a real compile through the sandbox, fake Ollama
 let replies: string[] = [];
@@ -149,7 +171,7 @@ const server = createServer((rq, rs) => {
   rq.on("end", () => {
     rs.setHeader("content-type", "application/json");
     if (rq.url === "/api/tags") return rs.end(JSON.stringify({ models: [{ name: "stub:1", digest: "d1" }] }));
-    if (rq.url === "/api/chat") return rs.end(JSON.stringify({ message: { role: "assistant", content: replies[chats++] ?? "{}" }, done: true }));
+    if (rq.url === "/api/chat") return rs.end(JSON.stringify({ message: { role: "assistant", content: replies[chats++] ?? "{}" }, done: true, prompt_eval_count: 200, eval_count: 20 }));
     rs.statusCode = 404;
     rs.end("{}");
   });
@@ -221,6 +243,7 @@ try {
   assert.ok(!text.includes("__openarcHit"), "the probes never reach the committed source");
   const m = JSON.parse(readFileSync(join(dir, ".openarc", "manifest.json"), "utf8"));
   assert.deepStrictEqual(m.regions["fx.password"].provenance.verifiedBy, ["tsc", "static", "examples:4/4"]);
+  assert.deepStrictEqual(m.regions["fx.password"].provenance.tokens, { prompt: 400, completion: 40 }, "both fills requests are counted");
 
   // E100: the sketch returns before any hole for an empty email, and the example disagrees: one model call, then stop
   const early = SKETCH.replace("const email =", 'if (c.email === "") return { ok: false, reason: "invalid" };\n    const email =');

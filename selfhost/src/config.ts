@@ -40,7 +40,13 @@ export interface BackendConfig {
   /** Set by the engine per request, never read from the file: the structured-output schema to use instead of the
    *  `{body, imports}` one (sketch regions reply `{fills, imports}`). `strict` is for OpenAI json_schema. */
   outputSchema?: { loose: Json; strict: Json };
+  outputFormat?: OutputFormat; // default "json"; a region's own outputFormat wins (src/output-format.ts)
 }
+
+/** How the model returns a body. "json": {"body", "imports"} under a JSON schema (Ollama format, OpenAI response_format,
+ *  Anthropic output_config). "code": one fenced code block, import lines first, plain text output (no schema). */
+export type OutputFormat = "json" | "code";
+const OUTPUT_FORMATS: readonly OutputFormat[] = ["json", "code"];
 
 export const DEFAULT_OUTPUT_RESERVE = 3072;
 
@@ -53,7 +59,7 @@ export interface OpenArcConfig {
     maxAttempts: number;
     context: { initialLevel: ContextLevel; expandOnFailure: boolean };
   };
-  regions?: Record<string, { backend?: string; contextLevel?: ContextLevel }>;
+  regions?: Record<string, { backend?: string; contextLevel?: ContextLevel; outputFormat?: OutputFormat }>;
   sandbox?: {
     heapMb?: number;
     addressSpaceBytes?: number;
@@ -108,7 +114,11 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
     if ((b.provider as Preset) === "local" && typeof b.baseUrl !== "string") return bad(`"baseUrl" is required for provider "local" (e.g. http://127.0.0.1:8080/v1)`);
     if (b.structuredOutput !== undefined && !["json_schema", "json_object"].includes(b.structuredOutput)) return bad(`"structuredOutput" must be json_schema or json_object`);
     if (b.ollamaCompat !== undefined && typeof b.ollamaCompat !== "boolean") return bad(`"ollamaCompat" must be true or false`);
+    if (b.outputFormat !== undefined && !OUTPUT_FORMATS.includes(b.outputFormat)) return bad(`"outputFormat" must be json or code`);
   }
+  for (const [id, r] of Object.entries(c.regions ?? {}))
+    if (r.outputFormat !== undefined && !OUTPUT_FORMATS.includes(r.outputFormat))
+      return { config: DEFAULT_CONFIG, error: `openarc.config.json: region "${id}": "outputFormat" must be json or code` };
   return {
     config: {
       ...c,

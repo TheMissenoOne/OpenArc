@@ -345,6 +345,19 @@ Use "imports": [] unless you need something listed under "Allowed new imports" t
 
 export const SKETCH_SYSTEM = "You are a compiler backend. You output JSON only: {\"fills\": {\"<hole number>\": string}, \"imports\": [{\"from\": string, \"names\": string[], \"default\"?: string}]}. Each fill is TypeScript code only, with no markdown.";
 
+/** outputFormat "code" (src/output-format.ts): no schema can carry per-hole fills, so the model writes the whole filled
+ *  sketch as one code block and containment (E099) recovers the fills, the same path as a JSON reply with `body`. */
+export const SKETCH_CODE_PROMPT_TEMPLATE = `Fill the holes of one OpenArc sketch in TypeScript.
+
+{{context}}
+
+{{repair}}
+
+Reply with ONE fenced code block (\`\`\`ts ... \`\`\`). Inside it: first any import lines you need (only for something listed under "Allowed new imports" that the file doesn't already import), then the sketch's statements (without the signature and braces) exactly as given, with each «n» replaced by its fill.
+An expression hole's fill is ONE expression; a statement hole's fill is zero or more statements. Change nothing outside the holes.`;
+
+export const SKETCH_CODE_SYSTEM = "You are a compiler backend. You output exactly one fenced TypeScript code block: optional import lines at the top, then the sketch's statements with every hole filled.";
+
 const importsSchema = (strict: boolean): Json => ({
   type: "array",
   items: {

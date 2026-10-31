@@ -15,7 +15,7 @@ import { describeBackend, testBackend } from "./backends.ts";
 import { clearStaleLock, releaseOwnLock } from "./lock.ts";
 import { createWatcher, regionKey, type RegionKey } from "./watcher.ts";
 import { watchDirs } from "./dirwatch.ts";
-import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, probeTools, type TierChoice } from "./isolation.ts";
+import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools, type TierChoice } from "./isolation.ts";
 
 const MESSAGES: Record<string, string> = {
   "OARC-W001": "'@openarc:' text that is not a valid marker",
@@ -156,6 +156,9 @@ export function realPorts(root: string): Ports {
   };
 }
 
+/** The Node version the harness runs under: sandbox.nodeBin's own, not this CLI's. */
+const harnessNodeVersion = (cfg: OpenArcConfig): string => nodeVersionOf(cfg.sandbox?.nodeBin ?? process.execPath);
+
 const tierOf = (cfg: OpenArcConfig): TierChoice => chooseTier(cfg.sandbox?.isolation ?? "auto", process.platform, probeTools());
 
 /** The sandbox notice for this run, printed once by every command that runs examples: W046 for the node tier, W047 at
@@ -166,7 +169,10 @@ function isolationNotice(cfg: OpenArcConfig): boolean {
     console.error(fmt({ code: "OARC-E092", detail: t.error }));
     return false;
   }
-  if (t.tier === "node") console.error(fmt({ code: "OARC-W046", detail: nodeBlocksNetwork() ? "node" : `node-${process.versions.node}:network-not-blocked` }));
+  if (t.tier === "node") {
+    const v = harnessNodeVersion(cfg);
+    console.error(fmt({ code: "OARC-W046", detail: nodeBlocksNetwork(v) ? "node" : `node-${v}:network-not-blocked` }));
+  }
   if (t.tier === "unsafe-none") console.error(`error   ${fmt({ code: "OARC-W047" }).slice(8)}`);
   return true;
 }
@@ -289,28 +295,10 @@ async function doctor(root: string, ports: Ports): Promise<number> {
   console.log(`isolation: ${config.sandbox?.isolation ?? "auto"} -> ${"error" in t ? `unavailable (${t.error})` : `${t.tier} (${t.reason})`}`);
   if (!isolationNotice(config)) return 1;
   const res = await engine.sandboxProbe(ports, request(root, { config }, []));
-  if (res.error) {
-    console.error(`sandbox: ${res.error}`);
-    return 1;
-  }
-  const want = engine.DOCTOR_EXPECTED as string[];
-  const got = res.passed === 1 ? want : (res.failed[0]?.actual as string[] | undefined);
-  if (!Array.isArray(got)) {
-    console.error(`sandbox: the example did not run: ${JSON.stringify(res.failed[0]?.actual ?? null)}`);
-    return 1;
-  }
-  let bad = got[0] !== "2";
-  console.log(`example: ${got[0] === "2" ? "ok (1 + 1 = 2 inside the sandbox)" : `FAIL (got ${got[0]})`}`);
   const tier = "error" in t ? "" : t.tier;
-  for (const [i, what] of ["file write", "child process", "network"].entries()) {
-    const r = got[i + 1];
-    const allowed = r === "allowed";
-    const excused = allowed && what === "network" && tier === "node" && !nodeBlocksNetwork();
-    if (allowed && !excused && tier !== "unsafe-none") bad = true;
-    console.log(`${what.padEnd(13)} ${allowed ? (excused ? "ALLOWED (Node < 25 has no network permission; use Node 25+ or an OS sandbox)" : "ALLOWED") : `blocked (${r})`}`);
-  }
-  console.log(bad ? "doctor: FAIL" : "doctor: ok");
-  return bad ? 1 : 0;
+  const r = engine.doctorReport(res, tier, tier === "node" && !nodeBlocksNetwork(harnessNodeVersion(config)));
+  for (const line of r.lines) (line.startsWith("sandbox:") ? console.error : console.log)(line);
+  return r.ok ? 0 : 1;
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -513,7 +501,7 @@ async function main(argv: string[]): Promise<number> {
       }
       const state = engine.displayState(project, r);
       const note = state === "stale" ? { stale: "the spec changed since this body was verified; it may not satisfy the current examples (openarc compile)" } : {};
-      console.log(JSON.stringify({ id: r.id, kind: r.kind, file: r.file, parent: r.parent, state, ownership: r.state, ...note, intent: r.spec.intent, examples: r.spec.examples.length, manifest: project.manifest.regions[r.id] ?? null }, null, 2));
+      console.log(JSON.stringify({ id: r.id, kind: r.kind, file: r.file, parent: r.parent, state, ownership: r.state, ...note, intent: r.spec.intent, examples: r.spec.examples.length, tokens: project.manifest.regions[r.id]?.provenance.tokens ?? null, manifest: project.manifest.regions[r.id] ?? null }, null, 2));
       return 0;
     }
     case "freeze":

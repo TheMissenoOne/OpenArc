@@ -11,6 +11,7 @@ import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nodeBlocksNetwork, probeTools } from "../src/isolation.ts";
+import { NETWORK_DENIED } from "../src/engine.ts";
 
 const stage0 = process.cwd();
 const main = join(stage0, "src", "main.ts");
@@ -70,7 +71,10 @@ try {
       assert.match(doc.out, /example: ok/);
       assert.match(doc.out, /file write +blocked/);
       assert.match(doc.out, /child process +blocked/);
-      if (want !== "node" || nodeBlocksNetwork()) assert.match(doc.out, /network +blocked/);
+      if (want !== "node" || nodeBlocksNetwork()) {
+        const net = /network +blocked \((\w+)\)/.exec(doc.out);
+        assert.ok(net && NETWORK_DENIED.includes(net[1]!), `the connection to doctor's own socket is denied, not just failed: ${doc.out}`);
+      }
       if (want === "node") assert.match(doc.out, /OARC-W046/);
 
       const crlf = iso === "node";

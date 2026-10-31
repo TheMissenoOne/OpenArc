@@ -2,7 +2,7 @@
 // bwrap (Linux) keeps its argv in the sandbox.buildArgv region; this module picks the tier for this machine and builds
 // the others: sandbox-exec (macOS), node (Node's permission model only; Windows and the fallback everywhere), container
 // (podman/docker, only when asked for) and unsafe-none (only when asked for, by that name).
-import { existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, symlinkSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join, relative, isAbsolute } from "node:path";
@@ -52,11 +52,20 @@ export function probeTools(): Tools {
   if (probed) return probed;
   const bwrap = process.platform === "linux" && onPath("bwrap") && onPath("prlimit") &&
     spawnSync("bwrap", ["--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "true"], { stdio: "ignore", timeout: 10_000 }).status === 0;
+  let engine: string | null | undefined;
   return (probed = {
     bwrap,
     sandboxExec: process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec"),
-    container: onPath("podman") ? "podman" : onPath("docker") ? "docker" : null,
+    // ponytail: a getter, so only runs that ask for the container tier (or doctor) pay for `podman info`
+    get container() {
+      return engine === undefined ? (engine = containerEngine()) : engine;
+    },
   });
+}
+
+/** podman, else docker, whichever is on PATH AND answers `info`: a binary with a stopped daemon is no container tier. */
+export function containerEngine(): string | null {
+  return ["podman", "docker"].find((e) => onPath(e) && spawnSync(e, ["info"], { stdio: "ignore", timeout: 15_000 }).status === 0) ?? null;
 }
 
 const real = (p: string) => {
@@ -84,14 +93,22 @@ const inside = (dir: string, p: string) => {
 export function readPaths(root: string, stageDir: string): string[] {
   const nm = join(root, "node_modules");
   const out = [real(stageDir)];
-  if (existsSync(nm)) out.push(...linkedPackages(nm));
+  // nm as spelled too: Node checks a package's package.json under the unresolved path (a symlinked node_modules)
+  if (existsSync(nm)) out.push(nm, ...linkedPackages(nm));
   // Windows: Node's loader keeps 8.3 short names (RUNNER~1) that the native realpath expands; grant both spellings
   return [...new Set(out.flatMap((p) => [p, realNative(p)]))];
 }
 
-function linkedPackages(nm: string): string[] {
-  const nmReal = real(nm);
-  const out = [nmReal];
+const isLink = (p: string) => {
+  try {
+    return lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+};
+
+/** The symlinked package entries of a node_modules directory (scoped ones included). */
+function packageLinks(nm: string): string[] {
   const entries = (dir: string) => {
     try {
       return readdirSync(dir);
@@ -99,19 +116,45 @@ function linkedPackages(nm: string): string[] {
       return [];
     }
   };
-  for (const name of entries(nm)) {
-    const paths = name.startsWith("@") ? entries(join(nm, name)).map((n) => join(nm, name, n)) : [join(nm, name)];
-    for (const p of paths) {
-      try {
-        if (!lstatSync(p).isSymbolicLink()) continue;
-      } catch {
-        continue;
-      }
-      const target = real(p);
-      if (!out.some((o) => inside(o, target))) out.push(target);
-    }
+  // a scope: the scope directory itself (it may be a link to elsewhere) and then each package in it
+  return entries(nm)
+    .flatMap((name) => (name.startsWith("@") ? [join(nm, name), ...entries(join(nm, name)).map((n) => join(nm, name, n))] : [join(nm, name)]))
+    .filter(isLink);
+}
+
+function linkedPackages(nm: string): string[] {
+  const out = [real(nm)];
+  for (const p of packageLinks(nm)) {
+    const target = real(p);
+    if (!out.some((o) => inside(o, target))) out.push(target);
   }
   return out;
+}
+
+/** bwrap shows the harness only the stage (at /work), whose node_modules is a `cp -al` copy of the project's. Links in it
+ *  that lead out of the project (a symlinked node_modules: a shared install, pnpm's store, file: deps, npm link) would
+ *  dangle there. This makes those links in the stage copy absolute, and returns their real paths: sandbox.buildArgv binds
+ *  each one read-only at the same path and lets node read it. Links inside the project resolve within the stage as before.
+ *  Idempotent; a stage that isn't on disk (in-memory ports) is left alone. */
+export function bwrapReadPaths(root: string, stageDir: string): string[] {
+  const nm = join(root, "node_modules");
+  if (!existsSync(nm)) return [];
+  const rootReal = real(root);
+  const outside = (p: string) => !inside(rootReal, real(p));
+  // A symlinked node_modules is copied as the link itself; inside the real directory, relative links already resolve.
+  const links: string[] = isLink(nm) ? (outside(nm) ? [nm] : []) : packageLinks(nm).filter(outside);
+  for (const link of links) {
+    const staged = join(stageDir, relative(root, link));
+    const target = real(link);
+    try {
+      if (!isLink(staged) || readlinkSync(staged) === target) continue;
+      unlinkSync(staged); // not rmSync: on Node 23 it silently leaves a link to a directory in place
+      symlinkSync(target, staged);
+    } catch {
+      // not staged on disk
+    }
+  }
+  return linkedPackages(nm).filter((p) => !inside(rootReal, p));
 }
 
 const sbplString = (s: string) => `"${s.replace(/[\\"]/g, (c) => `\\${c}`)}"`;
@@ -167,3 +210,10 @@ export function tierArgv(tier: Exclude<SandboxTier, "bwrap">, a: TierArgs): stri
 
 /** Node's permission model denies network only from v25.0.0 (--allow-net); before that the node tier has no network isolation. */
 export const nodeBlocksNetwork = (version = process.versions.node) => Number(version.split(".")[0]) >= 25;
+
+/** The version of the Node binary that runs the harness (sandbox.nodeBin), "unknown" if it does not answer. */
+export function nodeVersionOf(nodeBin: string): string {
+  if (nodeBin === process.execPath) return process.versions.node;
+  const r = spawnSync(nodeBin, ["--version"], { encoding: "utf8", timeout: 10_000 });
+  return /^v(\d+\.\d+\.\d+)/.exec(r.stdout ?? "")?.[1] ?? "unknown";
+}

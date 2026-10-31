@@ -1,4 +1,5 @@
-// Model backends: one bounded interface, request in, raw `{body, imports}` JSON text out (spec §13).
+// Model backends: one bounded interface, request in, raw text out: `{body, imports}` JSON, or a fenced code block when
+// outputFormat is "code" (src/output-format.ts; no schema is sent then) (spec §13).
 // Hand-written. The ollama path goes through the model.buildRequest and model.call regions (dogfooding).
 // Hosted APIs use plain fetch through HttpPort; no SDK dependencies.
 import type { Json } from "open-arc";
@@ -6,6 +7,7 @@ import type { HttpPort, Ports } from "./types.ts";
 import type { BackendConfig } from "./config.ts";
 import { DEFAULT_OUTPUT_RESERVE, hostOf } from "./config.ts";
 import { MODEL_OUTPUT_SCHEMA, buildRequest, call } from "./model.ts";
+import { parseCodeOutput } from "./output-format.ts";
 
 export const ANTHROPIC_VERSION = "2026-10-21";
 
@@ -49,27 +51,43 @@ const isConnectionError = (e: unknown) => {
  *  retried with double the cap, up to that room; if the retry fails, the truncated reply is returned (parse/repair then
  *  handles it like any other reply) rather than lost. */
 export async function complete(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined> = process.env, retryDelayMs = 10_000): Promise<string> {
+  return (await completeWithUsage(ports, b, system, user, env, retryDelayMs)).text;
+}
+
+/** Tokens one or more requests used, as the provider reports them: Ollama prompt_eval_count/eval_count, OpenAI
+ *  usage.prompt_tokens/completion_tokens, Anthropic usage.input_tokens/output_tokens. null: the provider reported none. */
+export type Tokens = { prompt: number; completion: number };
+export const addTokens = (a: Tokens | null, b: Tokens | null): Tokens | null =>
+  a && b ? { prompt: a.prompt + b.prompt, completion: a.completion + b.completion } : (a ?? b);
+const tokensOf = (prompt: unknown, completion: unknown): Tokens | null =>
+  typeof prompt === "number" || typeof completion === "number" ? { prompt: Number(prompt) || 0, completion: Number(completion) || 0 } : null;
+
+/** complete() plus the tokens of every request it made (a truncated reply's retry counts too). */
+export async function completeWithUsage(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined> = process.env, retryDelayMs = 10_000): Promise<{ text: string; tokens: Tokens | null }> {
   const room = b.maxContextTokens - Math.ceil((system.length + user.length) / 3.5);
   // ponytail: never below MIN_OUTPUT, even when the estimate says the prompt alone fills the window (the estimate is rough).
   let cur: BackendConfig = { ...b, outputReserveTokens: Math.min(b.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE, Math.max(room, MIN_OUTPUT)) };
   let r = await withReconnect(ports, cur, system, user, env, retryDelayMs);
+  let tokens = r.tokens;
+  const done = () => ({ text: r.text, tokens });
   while (r.truncated) {
     const cap = cur.outputReserveTokens!;
     const next = Math.min(cap * 2, room);
     if (next <= cap) {
       ports.log(`  backend ${b.provider} ${b.model}: output truncated at ${cap} tokens; no room left in the ${b.maxContextTokens}-token context`);
-      return r.text;
+      return done();
     }
     ports.log(`  backend ${b.provider} ${b.model}: output truncated at ${cap} tokens, retrying with ${next}`);
     cur = { ...cur, outputReserveTokens: next };
     try {
       r = await withReconnect(ports, cur, system, user, env, retryDelayMs);
+      tokens = addTokens(tokens, r.tokens);
     } catch (e) {
       ports.log(`  backend ${b.provider} ${b.model}: retry with ${next} tokens failed (${String((e as Error).message ?? e).slice(0, 160)}); using the reply truncated at ${cap}`);
-      return r.text;
+      return done();
     }
   }
-  return r.text;
+  return done();
 }
 const MIN_OUTPUT = 256;
 
@@ -85,7 +103,7 @@ async function withReconnect(ports: Ports, b: BackendConfig, system: string, use
   }
 }
 
-type Reply = { text: string; truncated: boolean };
+type Reply = { text: string; truncated: boolean; tokens: Tokens | null };
 
 /** Ollama's OpenAI-compatible /v1 (explicit `ollamaCompat`, else a baseUrl on port 11434 ending in /v1). */
 export const isOllamaCompat = (b: BackendConfig): boolean => b.ollamaCompat ?? /:11434\/v1$/.test(baseUrlOf(b));
@@ -94,9 +112,11 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
   const seed = b.seed ?? 1;
   const temperature = b.temperature ?? 0;
   const maxTokens = b.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE;
+  const code = b.outputFormat === "code"; // plain text: no schema of any kind is sent
   if (b.provider === "ollama") {
     const cfg = { host: hostOf(b), model: b.model, seed, numCtx: b.maxContextTokens };
     const req = buildRequest(system, user, cfg, b.outputSchema?.loose ?? OUTPUT_SCHEMA);
+    if (code) delete (req as Partial<typeof req>).format;
     // The output cap: without num_predict a confused model can generate for minutes and still return truncated JSON.
     req.options = { ...req.options, temperature, num_predict: maxTokens };
     if (b.think !== undefined) req.think = b.think;
@@ -105,7 +125,8 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
     let raw = "";
     const http: HttpPort = { ...ports.http, postJson: async (url, body, headers) => (raw = await ports.http.postJson(url, body, headers)) };
     const text = await call(http, cfg, req);
-    return { text, truncated: (JSON.parse(raw) as { done_reason?: string }).done_reason === "length" };
+    const res = JSON.parse(raw) as { done_reason?: string; prompt_eval_count?: number; eval_count?: number };
+    return { text, truncated: res.done_reason === "length", tokens: tokensOf(res.prompt_eval_count, res.eval_count) };
   }
   const key = apiKey(b, env);
   try {
@@ -118,7 +139,7 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
         temperature,
         seed,
         max_tokens: maxTokens,
-        response_format,
+        ...(code ? {} : { response_format }),
         // Ollama's /v1 ignores keep-alive config and may think: pass both explicitly (unknown fields are ignored there).
         ...(isOllamaCompat(b) ? { keep_alive: b.keepAlive ?? "2m", reasoning_effort: "none" } : {}),
         messages: [
@@ -128,14 +149,15 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
       };
       const headers: Record<string, string> = { ...b.headers };
       if (key) headers.authorization = `Bearer ${key}`;
-      const res = JSON.parse(await ports.http.postJson(`${baseUrlOf(b)}/chat/completions`, body, headers)) as { choices?: { finish_reason?: string; message?: { content?: string | null } }[] };
+      const res = JSON.parse(await ports.http.postJson(`${baseUrlOf(b)}/chat/completions`, body, headers)) as { choices?: { finish_reason?: string; message?: { content?: string | null } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
       const content = res.choices?.[0]?.message?.content;
       const truncated = res.choices?.[0]?.finish_reason === "length";
+      const tokens = tokensOf(res.usage?.prompt_tokens, res.usage?.completion_tokens);
       if (typeof content !== "string") {
-        if (truncated) return { text: "", truncated };
+        if (truncated) return { text: "", truncated, tokens };
         throw new Error("openai: no message content");
       }
-      return { text: content, truncated };
+      return { text: content, truncated, tokens };
     }
     // anthropic: structured outputs (output_config.format). Forced tool_choice is rejected by current models
     // (Opus 5.5, Sonnet 5.5), and API version 2026-10-21 rejects temperature/top_p/top_k, so no sampling fields.
@@ -145,18 +167,19 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
       max_tokens: maxTokens,
       system,
       messages: [{ role: "user", content: user }],
-      output_config: { format: { type: "json_schema", schema: b.outputSchema?.loose ?? OUTPUT_SCHEMA } },
+      ...(code ? {} : { output_config: { format: { type: "json_schema", schema: b.outputSchema?.loose ?? OUTPUT_SCHEMA } } }),
     };
     const headers: Record<string, string> = { ...b.headers, "x-api-key": key!, "anthropic-version": ANTHROPIC_VERSION };
-    const res = JSON.parse(await ports.http.postJson(`${baseUrlOf(b)}/messages`, body, headers)) as { stop_reason?: string; content?: { type: string; text?: string }[] };
+    const res = JSON.parse(await ports.http.postJson(`${baseUrlOf(b)}/messages`, body, headers)) as { stop_reason?: string; content?: { type: string; text?: string }[]; usage?: { input_tokens?: number; output_tokens?: number } };
     if (res.stop_reason === "refusal") throw new Error(`anthropic: stop_reason ${res.stop_reason}`);
     const truncated = res.stop_reason === "max_tokens"; // thinking counts against max_tokens: a truncated reply may have no text yet
+    const tokens = tokensOf(res.usage?.input_tokens, res.usage?.output_tokens);
     const text = res.content?.find((c) => c.type === "text")?.text;
     if (typeof text !== "string") {
-      if (truncated) return { text: "", truncated };
+      if (truncated) return { text: "", truncated, tokens };
       throw new Error("anthropic: no text block");
     }
-    return { text, truncated };
+    return { text, truncated, tokens };
   } catch (e) {
     // ponytail: providers sometimes echo the key in error bodies; scrub it before it reaches diagnostics or logs.
     const msg = (e as Error).message;
@@ -180,8 +203,9 @@ export async function testBackend(ports: Ports, b: BackendConfig, env: Record<st
     }
     if (!(tags.models ?? []).some((m) => m.name === b.model || m.name === `${b.model}:latest`)) return done(false, `model not pulled: run \`ollama pull ${b.model}\``);
   }
-  const system = "You are a connection test. Reply with JSON only.";
-  const user = 'Return exactly this JSON object: {"body": "return 1;", "imports": []}';
+  const code = b.outputFormat === "code";
+  const system = code ? "You are a connection test. Reply with one fenced code block only." : "You are a connection test. Reply with JSON only.";
+  const user = code ? "Return exactly this:\n```ts\nreturn 1;\n```" : 'Return exactly this JSON object: {"body": "return 1;", "imports": []}';
   let text: string;
   try {
     // ponytail: a small cap and no reconnect pause; the timeout covers a server that accepts and never answers
@@ -191,6 +215,10 @@ export async function testBackend(ports: Ports, b: BackendConfig, env: Record<st
     text = await Promise.race([call, timeout]).finally(() => clearTimeout(timer));
   } catch (e) {
     return done(false, explainFailure(e, b));
+  }
+  if (code) {
+    const out = parseCodeOutput(text);
+    return out.ok ? done(true, `replied ${JSON.stringify(out.body.slice(0, 40))}`) : done(false, `invalid reply (${out.diagnostic.detail}): ${JSON.stringify(text.slice(0, 80))}`);
   }
   try {
     const out = JSON.parse(text) as { body?: unknown };

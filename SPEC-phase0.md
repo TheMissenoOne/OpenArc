@@ -37,13 +37,17 @@ export type Effect =
   | "log";    // console.*
 
 export type NumberToken = "$NaN" | "$Infinity" | "$-Infinity";
-// T where a number may also be a NumberToken and undefined may be "$undefined" (JSON can't write them; §9.3)
+// T where a number may also be a NumberToken and undefined may be "$undefined" (JSON can't write them; §9.3).
+// Depth-limited (8 levels; deeper values are checked as plain T), so a recursive alias in F
+// (type Nested = Array<number | Nested>) type-checks instead of failing the spec with TS2589.
 export type Encoded<T> = …;
 
 export interface Example<F extends (...a: any[]) => any> {
   name?: string;
   args: { [K in keyof Parameters<F>]: Encoded<Parameters<F>[K]> | FakeRef };
   expected: Encoded<Awaited<ReturnType<F>>>;   // compared with example equality (§9.3)
+  // OR, instead of expected: the call must throw or reject; a string must appear in the error message (§9.3)
+  throws: true | string;
   tolerance?: number;   // numeric tolerance for this example (§9.3)
   exact?: boolean;      // bit-exact numbers: Object.is, no tolerance (NaN still equals NaN)
 }
@@ -281,7 +285,8 @@ fingerprint = sha256(canonicalJson({
   depContracts: sorted list of printed export types of every module in spec.deps that is project-local,
   model: { name, digest },   // digest from Ollama GET /api/tags
   options: { temperature, seed, num_ctx },
-  promptTemplate: "<version>",
+  promptTemplate: "<version>",   // PROMPT_TEMPLATE_VERSION, or CODE_PROMPT_TEMPLATE_VERSION for outputFormat "code"
+  outputFormat: "json" | "code", // §8.4.1
   compiler: "<openarc version>",  // COMPILER_VERSION = the version in core/package.json (the published package's version)
   typescript: "<version>"
 }))
@@ -312,8 +317,10 @@ Path: `.openarc/manifest.json`. It is committed to version control. It is writte
       "provenance": {
         "source": "generated",          // "generated" | "extracted" | "scaffold"
         "model": "qwen2.5-coder:14b@sha256:…",
+        "outputFormat": "json",          // §8.4.1
         "attempts": 2,
         "verifiedBy": ["tsc", "static", "examples:3/3"],
+        "tokens": { "prompt": 4307, "completion": 982 }, // every model call that produced this body, failed attempts included (§8.4.2); absent when the backend reports none
         "at": "2026-10-31T12:00:00Z"
       }
     }
@@ -452,6 +459,22 @@ The prompt is the versioned template `PROMPT_TEMPLATE` (`src/model.ts`) filled w
 
 The compiler, not the model, merges `imports` into the file's import list after checking them against rule §7.2. Child slots in a parent body MUST appear verbatim as the line `/*«openarc-child:<id>»*/`. The compiler replaces each one with the child's current full region text. A missing or duplicated slot is `OARC-E083`.
 
+### 8.4.1 Output format
+
+`outputFormat` (§13; per backend, overridden per region) selects how the model returns the body. `"json"` (the default) is everything above. `"code"` asks, with the versioned template `CODE_PROMPT_TEMPLATE` (`src/output-format.ts`), for **one fenced code block**: optional `import` lines at the top, then the body statements (function regions) or the block's statements. No schema is sent (no Ollama `format`, OpenAI `response_format` or Anthropic `output_config`); the output is plain text. The context package's rules describe import lines instead of the JSON `imports` field.
+
+The compiler parses a `"code"` reply as follows (`parseCodeOutput`):
+1. `<think>…</think>` blocks are removed (an unclosed one runs to the end of the reply).
+2. The first fence tagged `ts`, `typescript` or nothing is the code; fences with other tags are skipped. A fence with no closing line is `OARC-E081` `unclosed-fence` (a reply cut at the cap); fences but none of those tags is `no-ts-fence`. A reply with no fence at all is taken whole.
+3. Leading import declarations become `imports`: named, default (`default`), namespace (`namespace`, merged as `import * as x from "m";`) and `import type`. A side-effect import, a rename inside braces or import attributes is `OARC-E081` `bad-import:<text>`. An import after the first statement stays in the body (and fails tsc).
+4. Nothing left is `OARC-E081` `empty`.
+
+The result is the same `{body, imports}` as a `"json"` reply and goes through exactly the same steps: unwrapping (§8.9), import rules (§7.2), write scope (§8.7), static rules and `calls` (§7), tsc, the sandbox and the coverage probe (§8.10). Truncation (§8.4) and failed attempts (§8.11) work the same way. The output format is in the fingerprint (§4.3) and `provenance.outputFormat`. It exists to measure whether code as an escaped JSON string under constrained decoding costs small models accuracy (benchmark 2026-10-31, finding 6); the default stays `"json"` until that is measured.
+
+### 8.4.2 Token accounting
+
+Each model call records the tokens the provider reports: Ollama `prompt_eval_count`/`eval_count`, OpenAI-compatible `usage.prompt_tokens`/`completion_tokens`, Anthropic `usage.input_tokens`/`output_tokens`, as `{prompt, completion}` (`null` when the provider reports neither). A truncated reply's retries (§8.4) are added to the same attempt. Each failed attempt records its tokens (§8.11); a generated region's `provenance.tokens` is the sum over every call this run made for it, failed attempts included, and its cache entry keeps that sum, so a cache hit reports the tokens that produced the body. `openarc inspect <id>` prints it as `tokens`.
+
 ### 8.5 Repair prompt
 
 This is the original request plus the previous `body` plus the diagnostics (code, message, and for E090 the example name with expected and actual values, printed faithfully as in §9.3). Attempts are capped at 3 total per node per run.
@@ -460,7 +483,7 @@ At temperature 0 with a fixed seed, a retry prompt that is byte-identical to the
 
 ### 8.6 Cache
 
-`.openarc/cache/<fingerprint>.json = {body, imports, verifiedBy}` is written only after SANDBOX passes. A cache hit still goes through STATIC and SANDBOX, because neighbouring code may have changed. If nothing changed, a run makes **zero** model calls.
+`.openarc/cache/<fingerprint>.json = {body, imports, sampling?, tokens?}` is written only after SANDBOX passes. A cache hit still goes through STATIC and SANDBOX, because neighbouring code may have changed. If nothing changed, a run makes **zero** model calls.
 
 ---
 
@@ -523,7 +546,7 @@ The fix is in the examples: `compile.run` gained one that compiles a one-region 
 
 ### 8.11 Failed attempts
 
-Every failed attempt (invalid output, STATIC, or SANDBOX failure, including a cache hit that no longer verifies) is written to `.openarc/attempts/<id>/<n>.json`: `{n, at, attempt, source?, backend, model, contextLevel, promptHash, sampling, body | raw, imports?, problems}`. `n` counts up across runs; only the 20 highest are kept per region. `.openarc/.gitignore` lists `attempts/` (`openarc init` adds missing lines to an existing file). Nothing reads these files: they are for the developer.
+Every failed attempt (invalid output, STATIC, or SANDBOX failure, including a cache hit that no longer verifies) is written to `.openarc/attempts/<id>/<n>.json`: `{n, at, attempt, source?, backend, model, outputFormat, contextLevel, promptHash, sampling, tokens, body | raw, imports?, problems}` (`tokens`: §8.4.2). `n` counts up across runs; only the 20 highest are kept per region. `.openarc/.gitignore` lists `attempts/` (`openarc init` adds missing lines to an existing file). Nothing reads these files: they are for the developer.
 
 ## 9. Verification
 
@@ -551,7 +574,7 @@ Each example run executes the staged program in a fresh process, isolated by one
 
 - An explicitly configured tier that is unavailable is `OARC-E092` (detail `bwrap-unavailable`, `sandbox-exec-unavailable`, `no-podman-or-docker`) and no example runs. `"none"` is invalid configuration (`OARC-E051`); turning the sandbox off MUST be spelled `"unsafe-none"`.
 - Every tier but `unsafe-none` runs `node --permission` with no grant other than `--allow-fs-read`: no `--allow-net`, `--allow-child-process`, `--allow-worker`, `--allow-addons`, `--allow-wasi` or `--allow-fs-write`, and `--max-old-space-size=<heapMb>`. Node's permission model denies network access only from v25.0.0 (when `--allow-net` was added); on Node 23.6–24 the `node` tier does not block the network, and W046 carries the detail `node-<version>:network-not-blocked`.
-- `node` and `sandbox-exec`: `--allow-fs-read` is granted for the real paths of the stage, the project's `node_modules` and the targets of symlinked packages in it (`file:` deps). `node_modules` is not copied: module resolution walks up from the stage, which lives inside the project. The harness gets the stage path as `argv[3]`; bwrap and container mount the stage at `/work` and pass none (`.openarc/harness.mjs`: `main(process.argv[3] ?? "/work", process.argv[2])`, written into every stage by the compiler).
+- `node` and `sandbox-exec`: `--allow-fs-read` is granted for the real paths of the stage, the project's `node_modules` and the targets of symlinked packages in it (`file:` deps), and for `<root>/node_modules` as spelled, because Node checks a package's `package.json` under the unresolved path when `node_modules` is itself a symlink (0.7.1). `node_modules` is not copied: module resolution walks up from the stage, which lives inside the project. The harness gets the stage path as `argv[3]`; bwrap and container mount the stage at `/work` and pass none (`.openarc/harness.mjs`: `main(process.argv[3] ?? "/work", process.argv[2])`, written into every stage by the compiler).
 - `sandbox-exec` profile: `(allow default)`, then `(deny network*)`, `(deny file-write*)` except `/dev` and the temp directory, and `(deny file-read-data)` under the home directory except the stage, `node_modules`, linked packages and the Node prefix.
 - `container`: `<podman|docker> run --rm --network=none --security-opt label=disable -v <stage>:/work:ro -v <root>/node_modules:/work/node_modules:ro -w /work <image> timeout -s KILL <cpuSeconds+5> node --permission --allow-fs-read=/work --max-old-space-size=<heapMb> /work/.openarc/harness.mjs <id>`. Image: `sandbox.containerImage`, default `docker.io/library/node:<host Node version>-slim`.
 - Tiers without `prlimit` rely on the heap cap and the wall-clock timeout, which kills the process (`OARC-E091`); the permission model prevents child processes, so there is no tree to leave behind.
@@ -563,11 +586,14 @@ The `bwrap` tier:
 bwrap --unshare-all --die-with-parent --new-session \
       --ro-bind <stage> /work --ro-bind /usr /usr --ro-bind <node-prefix> <node-prefix> \
       --symlink usr/lib64 /lib64 --symlink usr/lib /lib --symlink usr/bin /bin \
-      --tmpfs /tmp --proc /proc --dev /dev --chdir /work \
+      --tmpfs /tmp --proc /proc --dev /dev \
+      [--ro-bind <extra> <extra>]... --chdir /work \
   prlimit --as=<bytes ≥ 4294967296> --cpu=<sec> \
-  <node-bin> --permission --allow-fs-read=/work \
+  <node-bin> --permission --allow-fs-read=/work [--allow-fs-read=<extra>]... \
        --max-old-space-size=<heapMb> /work/.openarc/harness.mjs <id>
 ```
+
+`<extra>` (`SandboxConfig.extraReadPaths`, from `isolation.bwrapReadPaths`) is every real path outside the project that the project's `node_modules` leads to: `node_modules` itself when it is a symlink (a shared install), and the targets of symlinked packages (pnpm's store, `file:` deps, `npm link`). The stage's `node_modules` is a `cp -al` copy, so links in it that leave the project are rewritten as absolute links to those paths; links inside the project resolve within the stage as before. The extra binds come after `--tmpfs /tmp`, so a path under `/tmp` is not hidden by it. Before 0.7.1 such links dangled in the sandbox and every stderr line of `ERR_MODULE_NOT_FOUND` became an example failure (benchmark 2026-10-31, finding 1).
 
 The executable form is `selfhost/src/sandbox.ts` (`sandbox.buildArgv`). The following were verified on the target machine (Fedora 43, Node v25.9.0, bwrap) [F8]:
 - `<node-bin>` MUST be the **resolved** binary. A version-manager shim (asdf/nvm/volta) on `PATH` silently resolved to `/usr/bin/node` v22 inside the sandbox. `<node-prefix>` is its install prefix, bound read-only.
@@ -582,7 +608,7 @@ The executable form is `selfhost/src/sandbox.ts` (`sandbox.buildArgv`). The foll
 
 ### 9.3 Harness
 
-For each example, the harness decodes the value tokens `"$NaN"`, `"$Infinity"`, `"$-Infinity"` and `"$undefined"` in `args` and `expected` (fake refs are left alone), calls `S(...args)`, awaits the result, and compares it to `expected` with **example equality**: deep equality that is strict about structure (arrays, plain objects with the same own keys; anything else through `isDeepStrictEqual`), except for numbers. Two numbers match when both are NaN, or `a === b` (so `-0` equals `0`), or both are finite and `|a − b| ≤ tolerance × max(1, |a|, |b|)`, where `tolerance` is the example's, else the spec's, else `1e-9`. With `exact: true` numbers match only under `Object.is` (NaN still equals NaN). `fakesAfter` snapshots compare as JSON under the same rules. A failing outcome records `actual` with `-0`, NaN, ±Infinity and `undefined` as the tokens `"$-0"`, `"$NaN"`, `"$Infinity"`, `"$-Infinity"`, `"$undefined"`, and messages print them unquoted (`got [-0,1,NaN]`). Output on stdout is JSON lines `{name, ok, actual?}`, followed by a final `{done: n}`. A thrown error counts as a failure, with the actual result recorded as `{throws: message}`. A run is **complete** only if the `done` line is present and `n` equals the number of outcome lines. Generated code can call `process.exit()`, so a missing `done` line counts as a failure (`OARC-E090`, detail `incomplete`) even if every printed outcome passed. [F8]
+For each example, the harness decodes the value tokens `"$NaN"`, `"$Infinity"`, `"$-Infinity"` and `"$undefined"` in `args` and `expected` (fake refs are left alone), calls `S(...args)`, awaits the result, and compares it to `expected` with **example equality**: deep equality that is strict about structure (arrays, plain objects with the same own keys; anything else through `isDeepStrictEqual`), except for numbers. Two numbers match when both are NaN, or `a === b` (so `-0` equals `0`), or both are finite and `|a − b| ≤ tolerance × max(1, |a|, |b|)`, where `tolerance` is the example's, else the spec's, else `1e-9`. With `exact: true` numbers match only under `Object.is` (NaN still equals NaN). `fakesAfter` snapshots compare as JSON under the same rules. A failing outcome records `actual` with `-0`, NaN, ±Infinity and `undefined` as the tokens `"$-0"`, `"$NaN"`, `"$Infinity"`, `"$-Infinity"`, `"$undefined"`, and messages print them unquoted (`got [-0,1,NaN]`). Output on stdout is JSON lines `{name, ok, actual?}`, followed by a final `{done: n}`. A thrown error counts as a failure, with the actual result recorded as `{throws: message}`, except in a `throws` example: there the call must throw or reject (`OpenArcTodoError` still counts as pending), and a string `throws` must be a substring of the error's message. A `throws` example that returns fails with `actual: {returned: <value>}`; one whose message doesn't match fails with `{throws: message}`. `fakesAfter` is checked after the throw as usual. A run is **complete** only if the `done` line is present and `n` equals the number of outcome lines. Generated code can call `process.exit()`, so a missing `done` line counts as a failure (`OARC-E090`, detail `incomplete`) even if every printed outcome passed. [F8]
 
 ### 9.4 Fakes [F6]
 
@@ -763,6 +789,7 @@ The configuration sits at the project root, like `package.json`, and selects the
 }
 ```
 
+- `outputFormat`: `"json"` (default) or `"code"`, on a backend or in `regions.<id>` (which wins); §8.4.1. Any other value is `OARC-E051`.
 - `sandbox.isolation`: `"auto"` (default), `"bwrap"`, `"sandbox-exec"`, `"node"`, `"container"` or `"unsafe-none"` (§9.2). `sandbox.containerImage` sets the container tier's image.
 - `ui.dom`: `"jsdom"` (since 0.8.0) opts into UI regions (§2.6): their checks render components in the project's own `jsdom` (with `react` and `react-dom`), installed as devDependencies. Any other value is E051.
 
@@ -772,7 +799,7 @@ The configuration sits at the project root, like `package.json`, and selects the
   - `"anthropic"`: the Messages API, `POST {baseUrl}/messages` (default `https://api.anthropic.com/v1`) with headers `x-api-key` and `anthropic-version`, `max_tokens`, and `output_config: {format: {type: "json_schema", schema}}`. The text block of the reply is the `{body, imports}` JSON.
   - Presets (0.6.4), normalised to the providers above when the config is read; explicit fields always win: `"openrouter"` is `"openai"` with `baseUrl` `https://openrouter.ai/api/v1`, `apiKeyEnv` `OPENROUTER_API_KEY`, header `X-Title: OpenArc` and `structuredOutput` `json_object`. `"local"` is `"openai"` with a required `baseUrl`, no key, and `ollamaCompat` true when the URL contains `:11434`. `"openai"` defaults `apiKeyEnv` to `OPENAI_API_KEY` at OpenAI's own URL, and `"anthropic"` defaults it to `ANTHROPIC_API_KEY`. The fingerprint's backend part includes the preset, `structuredOutput` and `ollamaCompat`, so a changed preset recompiles. `openarc backends test [name]` sends one small structured request through this path and reports OK or FAIL with a reason.
   
-  Every provider returns the raw `{body, imports}` text, which goes through `model.parseOutput` unchanged.
+  Every provider returns the raw `{body, imports}` text, which goes through `model.parseOutput` unchanged. With `outputFormat: "code"` no provider gets a schema field, and the raw text goes through `parseCodeOutput` (§8.4.1).
 - **Keys only via env var names.** A hosted backend names its key with `apiKeyEnv` (the *name* of an environment variable). A literal `apiKey` field is invalid config (`OARC-E051`). An unset variable is `OARC-E080` with detail `missing-key:<ENV_NAME>`. The key is never printed, logged, snapshotted or put in a diagnostic.
 - `maxContextTokens` sets the context budget (§8.8) for every provider; Ollama also gets it as `num_ctx`. `outputReserveTokens` (default 3072) is the output cap: Ollama gets it as `num_predict`, hosted APIs as `max_tokens`. A truncated reply is retried with double the cap (§8.4).
 - `ollamaCompat` (openai provider): the endpoint is Ollama's OpenAI-compatible `/v1`. Default: true when `baseUrl` ends in `:11434/v1`. The request then also carries `keep_alive` (from `keepAlive`, default `"2m"`) and `reasoning_effort: "none"`, because that endpoint otherwise loads the model with the default keep-alive and lets a reasoning model think. Ollama ignores fields it doesn't know.
