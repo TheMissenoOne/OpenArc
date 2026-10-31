@@ -54,6 +54,8 @@ export interface RegionSpec<F extends AnyFn> {
   /** default numeric tolerance for every example (see Example.tolerance) */
   tolerance?: number;
   refine?: "concrete" | "next";
+  /** Allowlist of imported or port functions the body may call ("engine.parse", "ports.fs.remove", "engine.*"). Absent: unrestricted. */
+  calls?: string[];
 }
 
 export interface BlockSpec {
@@ -61,6 +63,8 @@ export interface BlockSpec {
   intent: string | string[]; // array form is joined with single spaces (static, no .join call)
   effects?: Effect[];
   deps?: string[];
+  /** Allowlist of imported or port functions the body may call ("engine.parse", "ports.fs.remove", "engine.*"). Absent: unrestricted. */
+  calls?: string[];
 }
 
 export function defineRegion<F extends AnyFn>(spec: RegionSpec<F>): RegionSpec<F> {

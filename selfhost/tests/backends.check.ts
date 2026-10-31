@@ -30,7 +30,7 @@ const strictSchema = { ...schemaWith(["from", "names", "default"], { type: ["str
   assert.deepStrictEqual(seen, [{
     url: "https://api.openai.com/v1/chat/completions",
     headers: { authorization: "Bearer sk-test-openai" },
-    body: { model: "gpt-5", temperature: 0, seed: 3, max_tokens: 2048, response_format: { type: "json_schema", json_schema: { name: "openarc_region", strict: true, schema: strictSchema } }, messages: msgs },
+    body: { model: "gpt-5", temperature: 0, seed: 3, max_tokens: 3072, response_format: { type: "json_schema", json_schema: { name: "openarc_region", strict: true, schema: strictSchema } }, messages: msgs },
   }]);
 }
 // openrouter-style: baseUrl + extra headers + json_object
@@ -73,7 +73,7 @@ const strictSchema = { ...schemaWith(["from", "names", "default"], { type: ["str
   assert.equal(await complete(ports, { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, think: false }, "S", "U", env), OUT);
   assert.equal(seen[0]!.url, "http://127.0.0.1:11434/api/chat");
   assert.equal((seen[0]!.body as { model: string }).model, "qwen3.5:9b");
-  assert.deepStrictEqual((seen[0]!.body as { options: Json }).options, { temperature: 0, seed: 1, num_ctx: 8192, num_predict: 2048 }, "output cap = outputReserveTokens");
+  assert.deepStrictEqual((seen[0]!.body as { options: Json }).options, { temperature: 0, seed: 1, num_ctx: 8192, num_predict: 3072 }, "output cap = outputReserveTokens (default 3072)");
   assert.deepStrictEqual((seen[0]!.body as { format: Json }).format, OUTPUT_SCHEMA);
   // a varied retry (engine.retrySampling) reaches the request
   await complete(ports, { provider: "ollama", model: "m", maxContextTokens: 4096, outputReserveTokens: 1000, seed: 5, temperature: 0.4 }, "S", "U", env);
@@ -126,4 +126,41 @@ const strictSchema = { ...schemaWith(["from", "names", "default"], { type: ["str
   assert.equal(await complete(hosted.ports, { provider: "openai", model: "local", baseUrl: "http://127.0.0.1:1234/v1", maxContextTokens: 8192 }, "S", "U", env, 0).catch((e) => e.message), "openai: no message content");
   assert.equal(hosted.calls(), 2);
 }
-console.log("backends: request shapes ok");
+// truncated output (cut at the output cap): retried with double the cap, up to the context window minus the prompt
+{
+  const replies = (rs: string[]) => {
+    const caps: Json[] = [];
+    const logs: string[] = [];
+    const ports = { log: (l: string) => logs.push(l), http: { async postJson(_u: string, body: Json) { caps.push(body); return rs.shift()!; } } } as unknown as Ports;
+    return { ports, caps, logs };
+  };
+  const cut = JSON.stringify({ message: { role: "assistant", content: '{"body":"retur' }, done: true, done_reason: "length" });
+  const whole = JSON.stringify({ message: { role: "assistant", content: OUT }, done: true, done_reason: "stop" });
+  const o = replies([cut, cut, whole]);
+  assert.equal(await complete(o.ports, { provider: "ollama", model: "m", maxContextTokens: 16384 }, "S", "U", env), OUT);
+  assert.deepStrictEqual(o.caps.map((b) => (b as { options: { num_predict: number } }).options.num_predict), [3072, 6144, 12288]);
+  assert.match(o.logs[0]!, /output truncated at 3072 tokens, retrying with 6144/);
+  // capped by the context window minus the prompt (8192 - ceil(7000/3.5) = 6192), then given up with the cut text
+  const big = "x".repeat(7000);
+  const c = replies([cut, cut, cut]);
+  assert.equal(await complete(c.ports, { provider: "ollama", model: "m", maxContextTokens: 8192 }, "S", big.slice(1), env), '{"body":"retur');
+  assert.deepStrictEqual(c.caps.map((b) => (b as { options: { num_predict: number } }).options.num_predict), [3072, 6144, 6192]);
+  assert.match(c.logs[2]!, /no room left/);
+  // openai finish_reason, anthropic stop_reason
+  const oa = replies([JSON.stringify({ choices: [{ finish_reason: "length", message: { content: '{"bo' } }] }), openaiReply]);
+  assert.equal(await complete(oa.ports, { provider: "openai", model: "m", maxContextTokens: 32768, outputReserveTokens: 1000 }, "S", "U", env), OUT);
+  assert.deepStrictEqual(oa.caps.map((b) => (b as { max_tokens: number }).max_tokens), [1000, 2000]);
+  const an = replies([JSON.stringify({ stop_reason: "max_tokens", content: [{ type: "thinking", thinking: "" }] }), JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: OUT }] })]);
+  assert.equal(await complete(an.ports, { provider: "anthropic", model: "m", apiKeyEnv: "ANTHROPIC_API_KEY", maxContextTokens: 64000, outputReserveTokens: 16000 }, "S", "U", env), OUT);
+  assert.deepStrictEqual(an.caps.map((b) => (b as { max_tokens: number }).max_tokens), [16000, 32000]);
+}
+// openai provider pointed at Ollama's /v1: keep_alive and reasoning_effort "none" (auto-detected or ollamaCompat)
+{
+  const { ports, seen } = fake(openaiReply);
+  await complete(ports, { provider: "openai", model: "qwen3.5:9b", baseUrl: "http://127.0.0.1:11434/v1", maxContextTokens: 8192, structuredOutput: "json_object" }, "S", "U", env);
+  await complete(ports, { provider: "openai", model: "q", baseUrl: "http://gpu-box:8080/v1", ollamaCompat: true, keepAlive: "10m", maxContextTokens: 8192 }, "S", "U", env);
+  await complete(ports, { provider: "openai", model: "q", baseUrl: "http://gpu-box:8080/v1", maxContextTokens: 8192 }, "S", "U", env);
+  const extra = (b: Json) => ({ keep_alive: (b as { keep_alive?: string }).keep_alive, reasoning_effort: (b as { reasoning_effort?: string }).reasoning_effort });
+  assert.deepStrictEqual(seen.map((q) => extra(q.body)), [{ keep_alive: "2m", reasoning_effort: "none" }, { keep_alive: "10m", reasoning_effort: "none" }, { keep_alive: undefined, reasoning_effort: undefined }]);
+}
+console.log("backends: request shapes, truncation retry, ollama /v1 ok");

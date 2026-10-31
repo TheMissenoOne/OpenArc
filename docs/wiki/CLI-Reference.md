@@ -38,11 +38,13 @@ Errors are `OARC-Exxx` and warnings `OARC-Wxxx`. The full table is in `SPEC-phas
 | E070 | type error in the generated body (shown with the line) |
 | E082 | attempts exhausted for a region |
 | E090 | an example failed |
-| E096 | a file changed on disk while the compile ran; nothing was written, run it again |
-| E097 | the generated code tried to write outside its region |
+| E096 | a file changed on disk while the compile ran; nothing was written, run it again (watch re-queues it by itself) |
+| E097 | the generated code tried to write outside its region (a comment that merely mentions `@openarc:` is stripped instead, and logged) |
+| E098 | the body calls an imported or port function that its spec's `calls` list doesn't allow (detail: the call path) |
 | W060 | manual edit detected; region is now yours |
 | E061 | you changed the spec of a region you had edited; resolve it |
 | E080 | the model backend is unreachable (retried once after 10 s; `stopped:3-consecutive` means the run gave up on it) |
 | W042 | a generated block was held back until its sibling blocks exist; it's cached for the next run |
 | W043 | a compiler-owned region's recompile failed, so it keeps a body that does not satisfy its current spec; `compile` exits 1 and `graph` shows it as `stale` |
 | W044 | thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); consider `openarc check --oracle` |
+| W045 | a generated block is unverified: no passing example of its function reaches it. It isn't cached as verified or committed; add an example that runs through it |

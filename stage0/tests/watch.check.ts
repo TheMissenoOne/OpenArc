@@ -10,7 +10,7 @@ import { createWatcher, HISTORY, regionKey } from "../src/watcher.ts";
 import { clearStaleLock, releaseOwnLock } from "../src/lock.ts";
 
 /** A fake project: a region is stale while the spec it was last compiled with differs from its current spec. */
-function harness(opts: { specs: Record<string, string>; fails?: string[]; problems?: (string | null)[]; files?: Record<string, string>; during?: (id: string) => void }) {
+function harness(opts: { specs: Record<string, string>; fails?: string[]; e096Once?: string[]; unreached?: string[]; problems?: (string | null)[]; files?: Record<string, string>; during?: (id: string) => void }) {
   const specs = { ...opts.specs };
   const compiledWith: Record<string, string> = {};
   const compiled: string[] = [];
@@ -39,6 +39,12 @@ function harness(opts: { specs: Record<string, string>; fails?: string[]; proble
       opts.during?.(id);
       await new Promise((r) => setTimeout(r, 15)); // longer than the debounce
       if (opts.fails?.includes(id)) return { exit: 1, diagnostics: [{ code: "OARC-E082", id }], modelCalls: 3 };
+      if (opts.unreached?.includes(id)) return { exit: 0, diagnostics: [{ code: "OARC-W045", id: `${id}.blk`, detail: `unreached:${id}` }], modelCalls: 1 };
+      const e096 = opts.e096Once?.indexOf(id) ?? -1;
+      if (e096 >= 0) {
+        opts.e096Once!.splice(e096, 1); // the region passed, but the file was saved mid-compile: nothing written
+        return { exit: 1, diagnostics: [{ code: "OARC-E096", file: "src/x.ts" }], modelCalls: 1 };
+      }
       compiledWith[id] = spec;
       return { exit: 0, diagnostics: [], modelCalls: 1 };
     },
@@ -165,6 +171,30 @@ const history = (files: Map<string, string>) => (files.get(HISTORY) ?? "").split
   assert.equal(h.analyses(), 3, "start, after a, after b");
   assert.deepStrictEqual(h.w.state().queue, { pending: [], running: null, rerun: [] });
   assert.deepStrictEqual(h.asked, ["a", "b"]);
+}
+
+// ── 10. E096 (file saved during the compile, e.g. an edit to a sibling region): re-queued at the front, never remembered
+//        as failed, no backend pause; history says "requeued"
+{
+  const h = harness({ specs: { a: "s1", b: "s1" }, e096Once: ["a"] });
+  await h.w.start();
+  await h.settle();
+  assert.deepStrictEqual(h.compiled, ["a", "a", "b"], "a is retried first, before b");
+  assert.match(h.lines.find((l) => l.includes("OARC-E096"))!, /^\[watch\] a {2}✗ 1 attempt · OARC-E096 · \d+\.\ds · re-queued \(file changed during compile\)$/);
+  assert.ok(!h.lines.some((l) => l.includes("backend not ready")), "no pause");
+  assert.deepStrictEqual(h.w.state().failed, []);
+  assert.deepStrictEqual(history(h.files).map((e) => `${e.id}:${e.state}`), ["a:running", "a:requeued", "a:running", "a:done", "b:running", "b:done"]);
+}
+
+// ── 11. W045 (a generated block no passing example reaches): exit 0, but held back, so the region is remembered as failed
+//        and not re-queued after the post-run analysis
+{
+  const h = harness({ specs: { a: "s1" }, unreached: ["a"] });
+  await h.w.start();
+  await h.settle();
+  assert.deepStrictEqual(h.compiled, ["a"], "not re-queued");
+  assert.match(h.lines.find((l) => l.includes("W045"))!, /a {2}✗ 1 attempt · OARC-W045 unreached:a · .* · held back: an example must reach every block \(W045\)$/);
+  assert.deepStrictEqual(h.w.state().failed, ["a"]);
 }
 
 // ── 9. a region's key: developer-owned blocks (no fingerprint, never regenerated) don't blank the fingerprint

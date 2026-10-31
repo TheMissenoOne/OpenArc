@@ -1,4 +1,4 @@
-import { guardBody, guardSplice, specStatements } from "../src/engine.ts";
+import { guardBody, guardSplice, specStatements, stripMarkerComments } from "../src/engine.ts";
 import assert from "node:assert";
 const ok = (s: string | null) => s === null;
 assert(ok(guardBody("return title.trim();")));
@@ -10,6 +10,12 @@ assert(!ok(guardBody("return (")), "syntax error");
 assert(ok(guardBody('const re = /^\\/\\/ @openarc:(begin|end) (\\S+)$/;\nreturn re.test("// @openarc:begin x") && t.includes("@openarc:");')), "marker text in strings/regex is inert");
 assert(!ok(guardBody("const t = `\n// @openarc:end a\n`;\nreturn t;")), "marker-shaped line inside a template");
 assert(!ok(guardBody("return 1; /* @openarc:begin x */")), "marker in a comment");
+// The compiler strips comments that mention the prefix before guardBody (§8.7): only marker-SHAPED lines still fail.
+const strip = (b: string) => guardBody(stripMarkerComments(b).body);
+assert(ok(strip("// matches @openarc: markers\nreturn 1;")), "a comment about markers is stripped, not rejected");
+assert(ok(strip("return 1; /* @openarc:begin x */")), "not a marker (markers are // line comments): stripped");
+assert(!ok(strip("// @openarc:end a\nexport const b = 1;\n// @openarc:begin a")), "marker forgery is still rejected");
+assert(!ok(strip("  // @openarc:begin x\nreturn 1;")), "an indented marker-shaped line is still rejected");
 const before = ['import * as arc from "open-arc";', 'export const fSpec = arc.defineRegion<F>({ id: "a", intent: "x", examples: [{ args: [1], expected: 2 }] });', "// @openarc:begin a", "export const f: F = (n) => arc.todo(\"a\");", "// @openarc:end a", ""].join("\n");
 const good = before.replace('arc.todo("a")', "n + 1").replace('import * as arc from "open-arc";', 'import * as arc from "open-arc";\nimport { helper } from "./h.ts";');
 assert(ok(guardSplice(before, good, "a")), "body + import allowed");

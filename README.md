@@ -4,7 +4,7 @@
 
 **Compile typed specs into verified TypeScript with small local models.**
 
-You write the contract: a function type, an intent and examples. OpenArc gives a local model only the context that one function needs, the way a unit test isolates code. It verifies the returned body with tsc, static rules and your examples in a sandbox, and only then splices it in. Hand edits are never overwritten, and the model can't touch anything outside its own region.
+You write the contract: a function type, an intent and examples. OpenArc gives a local model only the context that one function needs, the way a unit test isolates code. It verifies the returned body with tsc, static rules (including an optional `calls` allowlist of the functions it may call) and your examples in a sandbox, where a block only counts as verified if an example actually runs it. Only then does it splice the body in. Hand edits are never overwritten, and the model can't touch anything outside its own region.
 
 ```ts
 import * as arc from "open-arc";
@@ -45,6 +45,7 @@ npx openarc watch    # or keep it running: recompiles regions as you save, one a
 
 ```bash
 cd stage0 && npm i && npx tsc -p . && node tools/run-examples.ts --strict   # 24/24 regions
+for f in tests/*.check.ts; do node $f; done                                   # no model, no network
 node tools/build.ts && (cd build && npm pack)                                # openarc-x.y.z.tgz
 cd ../selfhost && npm i && npx openarc compile --keep-going                  # OpenArc compiling OpenArc
 ```

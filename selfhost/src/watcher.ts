@@ -28,7 +28,7 @@ export interface WatchDeps {
   backoffMs?: number[]; // pause schedule; the last value repeats
 }
 
-type HistoryState = "running" | "done" | "failed" | "interrupted";
+type HistoryState = "running" | "done" | "failed" | "requeued" | "interrupted";
 
 /** The key of a function region and its blocks. Developer/conflicted blocks never get a fingerprint and are never
  *  regenerated, so only the other regions' fingerprints count (else one hand-written block blanks the whole fp). */
@@ -121,8 +121,15 @@ export function createWatcher(d: WatchDeps) {
       const secs = `${(ms / 1000).toFixed(1)}s`;
       const err = res.diagnostics.find((x) => x.code.startsWith("OARC-E"));
       const transient = err !== undefined && (err.code === "OARC-E080" || err.code === "OARC-E095");
-      const detail = err ? `${err.code}${err.detail ? ` ${err.detail}` : ""}` : "failed";
-      if (res.exit === 0) {
+      // E096: the region may have passed, but a file it commits to was saved during the compile (often an edit to ANOTHER
+      // region in the same file), so nothing was written. Not a failure of this region: retry it first, without a pause.
+      const requeue = !transient && res.diagnostics.some((x) => x.code === "OARC-E096");
+      // W045: a generated block that no passing example reaches is held back (§8.10). The run exits 0, but the region is
+      // still pending: remember it as failed, or it would be re-queued forever. Better examples change its key.
+      const unreached = res.diagnostics.find((x) => x.code === "OARC-W045");
+      const why = err ?? unreached;
+      const detail = why ? `${why.code}${why.detail ? ` ${why.detail}` : ""}` : "failed";
+      if (res.exit === 0 && !unreached) {
         pauses = 0;
         failed.delete(id);
         const n = examples[id] ?? 0;
@@ -130,10 +137,12 @@ export function createWatcher(d: WatchDeps) {
         await record(id, "done", ms, plural(res.modelCalls, "attempt"));
       } else {
         // W043: a compiler-owned region keeps its last body, which was verified against an older spec.
-        const after = res.diagnostics.some((x) => x.code === "OARC-W043" && x.id === id) ? "stale: keeps a body that fails the current spec" : "still pending";
+        const after = requeue ? "re-queued (file changed during compile)"
+          : !err && unreached ? "held back: an example must reach every block (W045)"
+          : res.diagnostics.some((x) => x.code === "OARC-W043" && x.id === id) ? "stale: keeps a body that fails the current spec" : "still pending";
         say(`${id}  ✗ ${plural(res.modelCalls, "attempt")} · ${detail.length > 72 ? `${detail.slice(0, 71)}…` : detail} · ${secs} · ${after}`);
-        await record(id, "failed", ms, detail);
-        if (!transient) failed.set(id, key);
+        await record(id, requeue ? "requeued" : "failed", ms, detail);
+        if (!transient && !requeue) failed.set(id, key);
       }
       // Re-analyse after every run, while `running` is still set so edits saved during it land in rerun (front). Also
       // without an edit: the commit itself rewrote files, and other regions' targets can change with them.
@@ -142,9 +151,9 @@ export function createWatcher(d: WatchDeps) {
         await refresh();
       }
       queue = { ...queue, running: null };
-      if (transient) {
-        queue = { ...queue, rerun: [id, ...queue.rerun.filter((x) => x !== id)] }; // backend/lock trouble: retry it first
-        if (!stopping) await pause(detail);
+      if (transient || requeue) {
+        queue = { ...queue, rerun: [id, ...queue.rerun.filter((x) => x !== id)] }; // backend/lock trouble or E096: retry it first
+        if (transient && !stopping) await pause(detail);
       }
     }
   }
