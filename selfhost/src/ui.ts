@@ -113,6 +113,15 @@ export function uiSections(s: { ui?: UiInfo }): [string, string][] {
   ];
 }
 
+/** E010 detail when F isn't a type name the spec file exports: the component file imports F from there (scaffoldUi). */
+export function uiTypeProblem(typeNode: ts.TypeNode | undefined, sf: ts.SourceFile, checker: ts.TypeChecker): string | null {
+  const bad = "ui:F-must-be-an-exported-type-name";
+  if (!typeNode || !ts.isTypeReferenceNode(typeNode) || !ts.isIdentifier(typeNode.typeName) || typeNode.typeArguments) return bad;
+  const mod = checker.getSymbolAtLocation(sf);
+  const name = typeNode.typeName.text;
+  return mod && checker.getExportsOfModule(mod).some((e) => e.name === name) ? null : bad;
+}
+
 /** The component file for a `X.spec.tsx` spec: `X.tsx`, next to it. */
 export const componentFile = (specFile: string): string | null => (/\.spec\.tsx$/.test(specFile) ? specFile.replace(/\.spec\.tsx$/, ".tsx") : null);
 

@@ -13,8 +13,7 @@ export const LoginPage: LoginPageFn = (props) => {
     const data = new FormData(e.currentTarget);
     setBusy(true);
     setError("");
-    const result = await props.onLogin({ email: String(data.get("email") ?? ""), password: String(data.get("password") ?? "") });
-    setBusy(false);
+    const result = await props.onLogin({ email: String(data.get("email") ?? ""), password: String(data.get("password") ?? "") }).finally(() => setBusy(false)); // a rejection re-enables the button too
     if (result.ok) props.onSuccess(result);
     else setError(result.error);
   };

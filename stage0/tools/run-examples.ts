@@ -20,7 +20,7 @@ const files = (dir: string): string[] =>
     e.isDirectory() ? files(`${dir}/${e.name}`) : /\.ts$/.test(e.name) ? [`${dir}/${e.name}`] : []);
 const mods: Record<string, unknown>[] = [];
 for (const file of files(`${root}/src`)) {
-  if (!readFileSync(file, "utf8").includes("defineRegion")) continue; // e.g. main.ts would run the CLI
+  if (!/\bdefine(Region|Concept)\b/.test(readFileSync(file, "utf8"))) continue; // a concept may live in a file of its own; main.ts would run the CLI
   mods.push(await import(pathToFileURL(file).href));
 }
 const concepts = new Map<string, ConceptSpec>();
@@ -29,7 +29,7 @@ for (const mod of mods) for (const v of Object.values(mod)) if (typeof v === "ob
 for (const mod of mods) {
   for (const value of Object.values(mod)) {
     let spec = value as RegionSpec<AnyFn>;
-    if (typeof spec !== "object" || spec === null || typeof spec.id !== "string" || !("intent" in spec || "sketch" in spec)) continue;
+    if (typeof spec !== "object" || spec === null || typeof spec.id !== "string" || !("intent" in spec || "sketch" in spec || "concept" in spec)) continue;
     if (spec.concept) {
       const c = concepts.get(spec.concept);
       if (!c) throw new Error(`${spec.id}: unknown concept ${spec.concept}`);

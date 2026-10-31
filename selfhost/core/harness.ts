@@ -77,6 +77,14 @@ export function valuesEqual(a: unknown, b: unknown, o: EqualOptions = {}): boole
   return isDeepStrictEqual(a, b);
 }
 
+/** The built-in `action` fake ({ $fake: "action#<name>" }): a function that records its calls and returns init.returns[i]
+ *  for the i-th call. Any other "<file>#<name>" is tests/fakes/<file>.ts, one instance per full name. */
+export const action = (init: Json | undefined): FakeInstance<(...a: unknown[]) => Promise<unknown>> => {
+  const returns = ((init as { returns?: Json[] } | undefined)?.returns ?? []) as unknown[];
+  const calls: unknown[][] = [];
+  return { instance: async (...a) => (calls.push(a), structuredClone(returns[calls.length - 1])), snapshot: () => ({ calls: toJson(calls) }) };
+};
+
 // join, not `${root}/${rel}`: the root is an OS path (C:\… on Windows), and pathToFileURL handles the drive letter
 const importFile = (root: string, rel: string) => import(pathToFileURL(join(root, rel)).href);
 
@@ -98,20 +106,31 @@ export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyF
     const withHits = (o: Outcome): Outcome => (scope.hits.size ? { ...o, hits: [...scope.hits].sort() } : o);
     const passed = (): Outcome => withHits({ name, ok: true });
     try {
+      // fakes anywhere in an argument (a function-valued field may be one: Encoded<T>), each created once per example
+      const resolve = async (v: unknown): Promise<unknown> => {
+        if (isFakeRef(v)) {
+          let inst = fakes.get(v.$fake);
+          if (!inst) {
+            const file = v.$fake.split("#")[0]!;
+            inst = file === "action" ? action(v.init) : ((await importFile(root, `tests/fakes/${file}.ts`)).default as FakeFactory<unknown>)(v.init);
+            fakes.set(v.$fake, inst);
+          }
+          return inst.instance;
+        }
+        if (Array.isArray(v)) {
+          const out: unknown[] = [];
+          for (const x of v) out.push(await resolve(x));
+          return out;
+        }
+        if (isPlain(v)) {
+          const out: Record<string, unknown> = {};
+          for (const [k, x] of Object.entries(v)) out[k] = await resolve(x);
+          return out;
+        }
+        return v;
+      };
       const args: unknown[] = [];
-      for (const a of decodeTokens(ex.args) as unknown[]) {
-        if (!isFakeRef(a)) {
-          args.push(structuredClone(a));
-          continue;
-        }
-        let inst = fakes.get(a.$fake);
-        if (!inst) {
-          const mod = await importFile(root, `tests/fakes/${a.$fake}.ts`);
-          inst = (mod.default as FakeFactory<unknown>)(a.init);
-          fakes.set(a.$fake, inst);
-        }
-        args.push(inst.instance);
-      }
+      for (const a of decodeTokens(ex.args) as unknown[]) args.push(await resolve(structuredClone(a)));
       if (ex.throws !== undefined) {
         // `throws` example: the call must throw (or reject); a string must appear in the message. Pending still reports pending.
         let message: string | null = null;

@@ -27,6 +27,7 @@ writeFileSync(`${root}/build/package.json`, JSON.stringify({
     "./ui": { types: "./dist/core/ui.d.ts", default: "./dist/core/ui.js" },
     "./ui/jsx-runtime": { types: "./dist/core/ui-jsx-runtime.d.ts", default: "./dist/core/ui-jsx-runtime.js" },
     "./palette/*": { types: "./dist/src/palette/*.d.ts", default: "./dist/src/palette/*.js" },
+    "./palette/loginPage": null, // a .tsx React component, not compiled into dist: copy it from palette/ instead
   },
   files: ["dist", "README.md", "palette"],
   engines: { node: ">=23.6" },

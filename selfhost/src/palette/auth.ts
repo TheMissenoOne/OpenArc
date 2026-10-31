@@ -27,10 +27,14 @@ export interface UserStore {
   findByEmail(email: string): Promise<User | null>;
   findApiKey(keyId: string): Promise<ApiKeyRecord | null>;
   findMagicLink(tokenId: string): Promise<MagicLinkRecord | null>;
-  consumeMagicLink(tokenId: string): Promise<void>;
+  /** Atomically mark the link used (compare-and-set used: false -> true). True only for the one call that flipped it. */
+  consumeMagicLink(tokenId: string): Promise<boolean>;
   recordFailure(userId: string): Promise<void>;
 }
 export interface Hasher {
+  /** A valid stored hash in this adapter's own format (algorithm, salt, cost) whose secret nobody knows: what an attempt
+   *  hashes and compares against when there is no stored hash, so an unknown user costs the same as a wrong secret. */
+  readonly dummyHash: string;
   /** Hash `secret` with the parameters (algorithm, salt, cost) of `like`, an existing stored hash: equal secrets give equal hashes. */
   hash(secret: string, like: string): Promise<string>;
   /** Constant-time string comparison (node:crypto timingSafeEqual on equal-length buffers). */
@@ -51,15 +55,12 @@ export type PasswordCred = { email: string; password: string };
 export type ApiKeyCred = { apiKey: string }; // "<keyId>.<secret>"
 export type MagicLinkCred = { token: string }; // "<tokenId>.<secret>"
 
-/** Compared against when there is no stored hash, so an unknown user costs the same as a wrong secret. */
-export const DUMMY_HASH = "$dummy$";
-
 export const authConcept = arc.defineConcept({
   id: "auth",
   interface: "Strategy",
   intent: [
     "Authenticate one credential against stored users. Every strategy returns an AuthResult and never throws for bad input.",
-    "An unknown user gets the same answer as a wrong secret, and every attempt runs exactly one constant-time compare (ports.hasher.equal), against DUMMY_HASH when there is no stored hash.",
+    "An unknown user gets the same answer as a wrong secret, and every attempt runs exactly one constant-time compare (ports.hasher.equal), against ports.hasher.dummyHash when there is no stored hash.",
     "Never put a secret in the result.",
   ],
   laws: [
@@ -118,7 +119,7 @@ export const passwordSpec = arc.defineRegion<Strategy<PasswordCred>>({
   sketch: async (cred, ports) => {
     const email = arc.hole<string>("cred.email trimmed and lower-cased");
     const user = await ports.users.findByEmail(email);
-    const stored = user?.passwordHash ?? DUMMY_HASH;
+    const stored = user?.passwordHash ?? ports.hasher.dummyHash;
     const match = ports.hasher.equal(await ports.hasher.hash(cred.password, stored), stored);
     if (user === null || !match) {
       arc.hole("if the user exists, record the failure for user.id");
@@ -139,7 +140,7 @@ export const apiKeySpec = arc.defineRegion<Strategy<ApiKeyCred>>({
   concept: "auth",
   intent: [
     "cred.apiKey is '<keyId>.<secret>' (splitToken). Look the key up with ports.users.findApiKey(keyId).",
-    "Hash the secret with ports.hasher.hash(secret, record.secretHash) and compare once with ports.hasher.equal; when the key is malformed, unknown or revoked, hash and compare against DUMMY_HASH instead.",
+    "Hash the secret with ports.hasher.hash(secret, record.secretHash) and compare once with ports.hasher.equal; when the key is malformed, unknown or revoked, hash and compare against ports.hasher.dummyHash instead.",
     "Malformed, unknown, revoked or wrong: { ok: false, reason: 'invalid' }; a wrong secret for a live key records a failure for its userId. Locks don't apply to API keys.",
   ],
   calls: ["ports.users.findApiKey", "ports.hasher.hash", "ports.hasher.equal", "ports.users.recordFailure"],
@@ -169,7 +170,7 @@ export const apiKey: Strategy<ApiKeyCred> = (cred, ports) => arc.todo("auth.apiK
 export const magicLinkSpec = arc.defineRegion<Strategy<MagicLinkCred>>({
   id: "auth.magicLink",
   concept: "auth",
-  intent: "A one-time sign-in link. An expired link says so only when its secret matched; a used link is invalid.",
+  intent: "A one-time sign-in link. An expired link says so only when its secret matched; a used link is invalid. Only the request whose atomic consumeMagicLink claim succeeds signs in: a link authenticates at most once, even under concurrent requests.",
   calls: ["ports.clock.now", "ports.users.consumeMagicLink"],
   fixtures: {
     ports: { $fake: "palette.auth", init: { links: [{ tokenId: "t1", userId: "u1", secretHash: "h:abc", expiresAt: 2000, used: false }], now: 1000 } },
@@ -188,15 +189,21 @@ export const magicLinkSpec = arc.defineRegion<Strategy<MagicLinkCred>>({
       fakesAfter: { "palette.auth": { compares: 1, consumed: ["t1"] } },
     },
     { name: "malformed token", args: [{ token: "" }, { $fake: "palette.auth", init: { links: [], now: 1000 } }], expected: { ok: false, reason: "invalid" } },
+    {
+      name: "a link a concurrent request claimed first is invalid",
+      args: [{ token: "t1.abc" }, { $fake: "palette.auth", init: { links: [{ tokenId: "t1", userId: "u1", secretHash: "h:abc", expiresAt: 2000, used: false }], now: 1000, claimedConcurrently: ["t1"], track: ["consumed"] } }],
+      expected: { ok: false, reason: "invalid" },
+      fakesAfter: { "palette.auth": { compares: 1, consumed: [] } },
+    },
   ],
   sketch: async (cred, ports) => {
     const [tokenId, secret] = splitToken(cred.token) ?? ["", ""];
     const link = tokenId ? await ports.users.findMagicLink(tokenId) : null;
-    const stored = link !== null && !link.used ? link.secretHash : DUMMY_HASH;
+    const stored = link !== null && !link.used ? link.secretHash : ports.hasher.dummyHash;
     const match = ports.hasher.equal(await ports.hasher.hash(secret, stored), stored);
     if (link === null || link.used || !match) return { ok: false, reason: "invalid" };
     if (arc.hole<boolean>("the link has expired: link.expiresAt is not later than ports.clock.now()")) return { ok: false, reason: "expired" };
-    arc.hole("consume the link so it can't be used again");
+    if (!(await ports.users.consumeMagicLink(tokenId))) return { ok: false, reason: "invalid" }; // the atomic claim: one sign-in per link
     return { ok: true, userId: link.userId };
   },
 });

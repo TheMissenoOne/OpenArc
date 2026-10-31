@@ -6,11 +6,13 @@
 //    round-robin fairness, least-connections minimum, framing round trips under random chunking.
 //    The UI part (loginPage.spec.tsx) is checked by tests/ui.check.ts.
 // 4. The pending copy (tools/palette.ts) compiles end to end through this OS's sandbox against a fake Ollama that
-//    answers with the hand-written bodies (fills for sketches): every region verified, every hole reached.
+//    answers with the hand-written bodies (fills for sketches): every region verified, every hole reached. The copy
+//    tool refuses to overwrite existing files without --force.
+// A magic link signs in at most once, also when two requests race (the store's atomic claim).
 import assert from "node:assert/strict";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,6 +20,7 @@ import type { AnyFn, Json, RegionSpec } from "open-arc";
 import { runExamples } from "open-arc/harness";
 import type { CompileRequest, Ports } from "../src/types.ts";
 import fakePorts from "./fakes/ports.memory.ts";
+import authFake from "./fakes/palette.auth.ts";
 import * as engine from "../src/engine.ts";
 import * as sketch from "../src/sketch.ts";
 import { PALETTE_FAKES, PALETTE_FILES as ALL_FILES, pendingCopy } from "../tools/palette.ts";
@@ -86,6 +89,24 @@ const enumerates: auth.Strategy<auth.ApiKeyCred> = async (cred, ports) => {
   return !r.ok && (await ports.users.findApiKey(cred.apiKey.split(".")[0]!)) === null ? { ok: false, reason: "expired" } : r;
 };
 assert.ok((await failing("auth.apiKey", enumerates)).includes("law: unknown user is the same error as a wrong secret"), "a distinct error for unknown keys enumerates users");
+// a magic link authenticates at most once: the claim is the store's atomic compare-and-set, also when two requests race
+{
+  const ports = authFake({ links: [{ tokenId: "t1", userId: "u1", secretHash: "h:abc", expiresAt: 2000, used: false }], now: 1000 }).instance;
+  const race = await Promise.all([auth.magicLink({ token: "t1.abc" }, ports), auth.magicLink({ token: "t1.abc" }, ports)]);
+  assert.deepStrictEqual(race.filter((r) => r.ok), [{ ok: true, userId: "u1" }], JSON.stringify(race));
+  assert.deepStrictEqual(await auth.magicLink({ token: "t1.abc" }, ports), { ok: false, reason: "invalid" }, "a replay after the race");
+  const ignoresClaim: auth.Strategy<auth.MagicLinkCred> = async (cred, ports) => { // check-then-act: the 0.8.0 body
+    const [tokenId, secret] = auth.splitToken(cred.token) ?? ["", ""];
+    const link = tokenId ? await ports.users.findMagicLink(tokenId) : null;
+    const stored = link !== null && !link.used ? link.secretHash : ports.hasher.dummyHash;
+    const match = ports.hasher.equal(await ports.hasher.hash(secret, stored), stored);
+    if (link === null || link.used || !match) return { ok: false, reason: "invalid" };
+    if (link.expiresAt <= ports.clock.now()) return { ok: false, reason: "expired" };
+    await ports.users.consumeMagicLink(tokenId);
+    return { ok: true, userId: link.userId };
+  };
+  assert.deepStrictEqual(await failing("auth.magicLink", ignoresClaim), ["a link a concurrent request claimed first is invalid"], "a check-then-act consume signs in twice");
+}
 const rrWithUnhealthy: lb.Strategy = (backends, keys) => keys.map((_, i) => backends.length ? backends[i % backends.length]!.id : null);
 assert.ok((await failing("lb.roundRobin", rrWithUnhealthy)).includes("law: never route to an unhealthy backend"));
 const noRest: p2p.Decoder = (chunks) => ({ ...p2p.decodeVarint(chunks), rest: [] });
@@ -184,6 +205,16 @@ try {
   }
   assert.deepStrictEqual(m.regions["lb.consistentHash"]!.provenance.waived, { "equal backends share requests evenly": "hashing pins each key to a backend, so the spread is statistical, not even per batch" });
   console.log(`palette.check: the pending copy compiled through the sandbox: ${p.regions.length} regions committed`);
+  // tools/palette.ts never overwrites a copy you may have edited, unless --force
+  const tool = (...a: string[]) => spawnSync(process.execPath, [join(root, "tools", "palette.ts"), ...a], { encoding: "utf8" });
+  const authCopy = join(dir, "src", "palette", "auth.ts");
+  writeFileSync(authCopy, "// my edit\n");
+  const refused = tool(dir);
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.match(refused.stderr, /would be overwritten \(rerun with --force/);
+  assert.equal(readFileSync(authCopy, "utf8"), "// my edit\n", "nothing written");
+  assert.equal(tool(dir, "--force").status, 0);
+  assert.equal(readFileSync(authCopy, "utf8"), pendingCopy(files["src/palette/auth.ts"]!));
 } finally {
   server.close();
   rmSync(dir, { recursive: true, force: true });

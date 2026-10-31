@@ -110,19 +110,28 @@ export function applyConcepts(specs: Map<string, VariantSpec>, concepts: Map<str
   return out;
 }
 
-/** F names the concept's interface (`Strategy<PasswordCred>` for `interface: "Strategy"`), or is assignable to it when
- *  the interface is not generic. */
+/** F names the concept's interface (`Strategy<PasswordCred>` for `interface: "Strategy"`: the same declaration, resolved
+ *  through imports, not just the same name), or is assignable to it when the interface is not generic. */
 function instanceOf(s: VariantSpec, c: ConceptInfo, checker: ts.TypeChecker, program: ts.Program, root: string): boolean {
   const n = s.typeNode;
-  if (n && ts.isTypeReferenceNode(n) && (ts.isIdentifier(n.typeName) ? n.typeName.text : n.typeName.right.text) === c.interface) return true;
   const sf = program.getSourceFile(`${root}/${c.file}`);
   const decl = sf?.statements.find((st): st is ts.TypeAliasDeclaration | ts.InterfaceDeclaration => (ts.isTypeAliasDeclaration(st) || ts.isInterfaceDeclaration(st)) && st.name.text === c.interface);
-  if (!decl || !n || decl.typeParameters?.length) return false;
+  if (!decl || !n) return false;
+  if (ts.isTypeReferenceNode(n)) {
+    let sym = checker.getSymbolAtLocation(n.typeName);
+    if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+    if (sym && sym === checker.getSymbolAtLocation(decl.name)) return true;
+  }
+  if (decl.typeParameters?.length) return false;
   return checker.isTypeAssignableTo(checker.getTypeFromTypeNode(n), checker.getTypeAtLocation(decl.name));
 }
 
-/** One line a caller sees next to a variant's signature: what the concept promises, never the variant's body. */
-export const conceptNote = (c: ConceptInfo): string => `// variant of concept ${c.id}: ${c.intent}${c.intent.endsWith(".") ? "" : "."} Laws: ${c.laws.map((l) => l.name).join("; ")}.`;
+/** One line a caller sees next to a variant's signature: what the concept promises, never the variant's body. A law the
+ *  variant waives is no guarantee, so it is listed as waived, not among the laws. */
+export const conceptNote = (c: ConceptInfo, waived: string[] = []): string => {
+  const laws = c.laws.map((l) => l.name).filter((l) => !waived.includes(l));
+  return `// variant of concept ${c.id}: ${c.intent}${c.intent.endsWith(".") ? "" : "."} Laws: ${laws.join("; ") || "none"}.${waived.length ? ` Waived: ${waived.join("; ")}.` : ""}`;
+};
 
 /** Waived laws of a variant, for the compile log and the manifest provenance. */
 export const waivers = (s: { literal: { [k: string]: Json } }): [string, string][] =>
@@ -145,7 +154,7 @@ export function extraSections(specs: Map<string, ContextSpec>, concepts: Map<str
   const variantOf = (file: string, name: string) => [...specs.values()].find((x) => x.file === file && x.symbol === name && typeof x.literal.concept === "string");
   const noteFor = (v: ContextSpec | undefined) => {
     const c = v && concepts.get(v.literal.concept as string);
-    return c ? `  ${conceptNote(c)}` : "";
+    return c ? `  ${conceptNote(c, waivers(v!).map(([l]) => l))}` : "";
   };
   const own = typeof s.literal.concept === "string" ? concepts.get(s.literal.concept) : undefined;
   if (own) {

@@ -54,7 +54,7 @@ If the spec has `calls`, the package also says "You may call exactly: …" (see 
 ## Sketches, concepts and UI specs
 
 - **Sketch regions** replace the fixed signature with the sketch itself, holes shown as `«1»`, `«2»`…, and a `Holes` section (each hole's type and description). The model writes fills, not a body: for the palette's `auth.password`, two short expressions and one statement. `Functions the sketch calls` lists the signatures of the project functions it calls. A sketch never escalates past L1.
-- **Concept variants** get a `Concept` section (the concept's intent, waived laws); the laws arrive as examples. A region that calls a variant sees its signature with the concept's one-line summary (`// variant of concept auth: … Laws: …`), never its body or examples; editing the concept's intent changes those users' fingerprints and nothing else.
+- **Concept variants** get a `Concept` section (the concept's intent, waived laws); the laws arrive as examples. A region that calls a variant sees its signature with the concept's one-line summary (`// variant of concept auth: … Laws: …`; a law the variant waives is listed as `Waived: …`, not as a law), never its body or examples; editing the concept's intent changes those users' fingerprints and nothing else.
 - **UI regions** add `Structure` (the `ui` tree printed back as TSX), `What the structure words mean` (one line per vocabulary word used) and `UI rules`; their examples include the interaction scripts.
 
 ## Why

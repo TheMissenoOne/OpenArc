@@ -68,7 +68,8 @@ export interface RegionSpec<F extends (...a: any[]) => any> {
   waive?: { [law: string]: string };    // laws that don't apply to this variant, with the reason
   ui?: (...a: Parameters<F>) => UiNode; // a *.spec.tsx structure in the open-arc/ui vocabulary (§2.6); read as syntax
 }
-// intent is optional when sketch or ui is present (a sketch beats an intent; hole descriptions are local intents).
+// intent is optional when sketch, ui or concept is present (a sketch beats an intent; hole descriptions are local
+// intents; a variant has its concept's intent). Without any of them, a missing intent is E010.
 // Example also has script?: UiStep[] and dom?: {text?, notText?, enabled?, disabled?} for UI regions (§9.6), and
 // expected is optional when F returns unknown (a component is checked in the DOM).
 
@@ -121,7 +122,7 @@ segment = lower { lower | upper | digit }
 lower   = "a".."z" ; upper = "A".."Z" ; digit = "0".."9"
 ```
 
-- IDs are unique per project (`OARC-E011` on a duplicate).
+- IDs are unique per project (`OARC-E011` on a duplicate); so are concept ids (`OARC-E011`, detail `duplicate concept id <id>`).
 - An ID's **parent** is determined by marker nesting (§3), not by its dotted prefix. The prefix is convention only.
 - An ID is permanent. Renaming means delete + create (§6.4).
 
@@ -146,7 +147,7 @@ A **concept** is a family of function regions that share an intent and laws: `ar
 - **Laws** are example templates. Every law that a variant does not waive becomes one of its examples, named `law: <name>`, placed before the variant's own examples, with each `"$fixture:<name>"` string (anywhere in `args`, `expected` or `fakesAfter`) replaced by the variant's `fixtures[name]`: pure JSON substitution, done statically by the compiler (and by the dev runner). Laws are authoritative (tier 1, §9.1).
 - **Waivers:** `waive: { "<law>": "<reason>" }` skips a law that can't apply. The reason is printed by `compile` (`<id>: law "<law>" waived: <reason>`) and stored in the manifest provenance as `waived`. A waiver of an unknown law is E010 `waive-unknown-law:<name>`; a missing fixture is E010 `fixture-missing:<name>`; an unknown concept is E010 `concept-unknown:<id>`.
 - **Hashes:** a variant's spec hash includes its concept's hash (`canonicalJson` of the concept literal), so changing a law re-fingerprints every variant. A user's fingerprint includes the concept's one-line summary through its context package (§8.8), and nothing else of the concept.
-- **What a model sees:** a variant's package has a `Concept` section (the concept's intent, the waived laws) and the laws as concrete examples. A region that calls a variant sees its signature plus `// variant of concept <id>: <intent> Laws: <names>.`, never its body or examples.
+- **What a model sees:** a variant's package has a `Concept` section (the concept's intent, the waived laws) and the laws as concrete examples. A region that calls a variant sees its signature plus `// variant of concept <id>: <intent> Laws: <names>.` (laws the variant waives are not listed there but as ` Waived: <names>.`), never its body or examples.
 
 ### 2.6 UI structure specs (since 0.8.0)
 
@@ -632,7 +633,7 @@ For a UI region (§2.6) the harness plan entry carries the structure tree and na
 
 1. registers an in-thread module load hook (`module.registerHooks`, Node ≥ 23.5; no worker) that transpiles `.tsx` with the project's TypeScript (`jsx: react-jsx`);
 2. creates a jsdom document from the project's `node_modules`, installs its globals, and imports `react`, `react-dom/client` and the component;
-3. reports one outcome per check: `ui: structure and accessibility` (the derived checks of the §2.6 table; elements are found by accessible name: `label[for]`, a wrapping label, `aria-label`, or a button's text), `ui: wiring` (every Field filled with a generated value, Submit clicked, the prop that `Form onSubmit` references called exactly once with `{ <name>: value }`), then each example: render with `args[0]` as props, run `script` (`fill {label, value}`, `click {role, name}`), then check `dom.text` / `notText` (body text), `dom.enabled` / `disabled` (by role and name) and `fakesAfter`.
+3. reports one outcome per check: `ui: structure and accessibility` (the derived checks of the §2.6 table; elements are found by accessible name: `label[for]`, a wrapping label, `aria-label`, or a button's text), `ui: wiring` (every Field filled with a generated value, Submit clicked, the prop that `Form onSubmit` references (`props.onLogin`, or a nested path such as `props.actions.login`; the spy goes at that path) called exactly once with `{ <name>: value }`, and while that call is pending the submit button is disabled and named by `busyText` when given), then each example: render with `args[0]` as props, run `script` (`fill {label, value}`, `click {role, name}`), then check `dom.text` / `notText` (body text), `dom.enabled` / `disabled` (by role and name) and `fakesAfter`.
 
 Fakes may sit anywhere inside the props (a function-valued prop can be `{"$fake": …}`). `"action#<name>"` is a built-in fake, named per instance: a function that records its calls and returns `init.returns[i]` on the i-th call; `snapshot()` is `{calls}`. Other names load `tests/fakes/<name before #>.ts` as usual. `verifiedBy` counts the derived checks with the examples (`examples:5/5` for two derived checks and three examples).
 
@@ -663,7 +664,7 @@ A diagnostic is `{code, id?, file?, line?, detail?}`. It has **no message field*
 |---|---|
 | W001 | `@openarc:` text that is not a valid marker |
 | E010 | spec not statically evaluable |
-| E011 | duplicate region id |
+| E011 | duplicate region id (or concept id) |
 | E012 | marker id with no spec |
 | E020 | implementation not assignable to spec type F |
 | E021 | declared symbol ≠ spec.symbol |

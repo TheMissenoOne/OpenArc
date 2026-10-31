@@ -7,7 +7,14 @@
 // 3. Packages: a variant gets a Concept section; a sketch that calls a variant sees its signature plus the concept's
 //    summary, never its body; a prose region sees the variants its file imports.
 // 4. PLAN compiles a sketch's callee before it; a compile logs waivers and records them in the manifest provenance.
+// 5. Duplicate concept ids are E011; a type that merely shares the interface's name is not the interface (E020);
+//    tools/run-examples.ts finds a concept declared in a file without regions; a region with no intent, sketch, ui or
+//    concept is E010.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { CompileRequest, Ports } from "../src/types.ts";
 import fakePorts from "./fakes/ports.memory.ts";
 import * as engine from "../src/engine.ts";
@@ -119,6 +126,7 @@ const analyzed = async (files: Record<string, string>, offline = true) => {
   assert.match(login, /## Calls allowed in fills\nYou may call: auth\.password /);
   assert.ok(!login.includes("cred.email, trimmed") && !login.includes("email is trimmed"), "never the variant's sketch or examples");
   assert.match(ctx("app.greet"), /## Concept variants you can call\nauth\.password: Strategy<PasswordCred> {2}\/\/ variant of concept auth: .*\nauth\.apiKey: Strategy<\{ apiKey: string \}> {2}\/\/ variant/);
+  assert.match(ctx("app.greet"), /\nauth\.apiKey: .*Laws: valid credential authenticates; wrong secret is rejected\. Waived: unknown user is the same error\.\n/, "a waived law is no guarantee to callers");
 
   // ── 4a. PLAN: callees first (the sketch calls auth.password; app.ts imports auth.ts, so app.greet waits too)
   assert.deepStrictEqual(engine.plan(p, req, []).filter((id) => id !== "other.inc"), ["auth.password", "auth.apiKey", "app.login", "app.greet"]);
@@ -140,5 +148,42 @@ const analyzed = async (files: Record<string, string>, offline = true) => {
   assert.deepStrictEqual(m.regions["auth.apiKey"].provenance.waived, { "unknown user is the same error": "a key names no user" });
   const plan = JSON.parse(Object.entries((fake.snapshot() as { files: Record<string, string> }).files).find(([f]) => f.endsWith(".openarc/harness-plan.json"))?.[1] ?? "null");
   assert.equal(plan, null, "the sandbox stage is removed after the run");
+}
+// ── 5a. one concept id, declared twice: E011, never a silent replacement
+{
+  const dup = `import * as arc from "open-arc";\nexport const again = arc.defineConcept({ id: "auth", intent: "x", laws: [] });\n`;
+  const { ds } = await analyzed({ "src/auth.ts": AUTH(), "src/zagain.ts": dup });
+  assert.deepStrictEqual(ds.map((d) => `${d.code} ${d.detail}`), ["OARC-E011 duplicate concept id auth (first declared in src/auth.ts)"]);
+}
+// ── 5b. F must be the concept's own interface type, not an unrelated type that shares its name
+{
+  const other = `export type Strategy<C> = (cred: C) => Promise<boolean>;\n`;
+  const pin = (from: string) => `import * as arc from "open-arc";\nimport type { Strategy } from "${from}";\nexport const pinSpec = arc.defineRegion<Strategy<{ pin: string }>>({ id: "auth.pin", concept: "auth", intent: "check the pin", fixtures: { ports: null, valid: { pin: "1" }, invalid: { pin: "2" }, unknown: { pin: "3" } } });\n`;
+  const errs = async (from: string) => (await analyzed({ "src/auth.ts": AUTH(), "src/other.ts": other, "src/pin.ts": pin(from) })).ds.filter((d) => d.code.startsWith("OARC-E")).map((d) => `${d.code} ${d.id} ${d.detail}`);
+  assert.deepStrictEqual(await errs("./other.ts"), ["OARC-E020 auth.pin concept-interface:Strategy"]);
+  assert.deepStrictEqual(await errs("./auth.ts"), [], "the concept's own Strategy, imported");
+}
+// ── 5d. a region with no guidance at all (no intent, sketch, ui or concept) is E010, not an empty intent
+{
+  const { ds } = await analyzed({ "src/other.ts": OTHER.replace(', intent: "add one"', "") });
+  assert.deepStrictEqual(ds.map((d) => `${d.code} ${d.id} ${d.detail}`), ["OARC-E010 other.inc intent is required unless sketch, ui or concept is present"]);
+  const variant = await analyzed({ "src/auth.ts": AUTH().replace('  intent: "Find the user whose key equals cred.apiKey.",\n', "") });
+  assert.deepStrictEqual(variant.ds, [], "a concept variant has its concept's intent");
+}
+// ── 5c. the dev runner imports a concept-only file
+{
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "openarc-concept-")));
+  try {
+    mkdirSync(join(dir, "src"));
+    mkdirSync(join(dir, "node_modules"));
+    symlinkSync(join(root, "core"), join(dir, "node_modules", "open-arc"), "junction");
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "c", private: true, type: "module" }));
+    writeFileSync(join(dir, "src", "shape.ts"), `import * as arc from "open-arc";\nexport type Area = (n: number) => number;\nexport const areaConcept = arc.defineConcept({ id: "area", intent: "an area", laws: [{ name: "zero is zero", args: [0], expected: 0 }] });\n`);
+    writeFileSync(join(dir, "src", "square.ts"), `import * as arc from "open-arc";\nimport type { Area } from "./shape.ts";\nexport const squareSpec = arc.defineRegion<Area>({ id: "geo.square", concept: "area", examples: [{ args: [3], expected: 9 }] });\nexport const square: Area = (n) => n * n;\n`);
+    const out = execFileSync(process.execPath, [join(root, "tools", "run-examples.ts"), "--strict"], { cwd: dir, encoding: "utf8" });
+    assert.match(out, /ok +geo\.square +2\/2/, out);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 console.log("concepts: laws x fixtures, waivers, E010/E020, spec hashes and fingerprints, packages, PLAN order, provenance ok");
