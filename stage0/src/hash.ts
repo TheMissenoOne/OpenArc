@@ -1,5 +1,5 @@
-import * as arc from "@openarc/core";
-import type { Json } from "@openarc/core";
+import * as arc from "open-arc";
+import type { Json } from "open-arc";
 import type { ChildSpan } from "./types.ts";
 import ts from "typescript";
 import { createHash } from "node:crypto";

@@ -1,4 +1,4 @@
-import * as arc from "@openarc/core";
+import * as arc from "open-arc";
 import type { PlanInput, PlanResult } from "./types.ts";
 import type { Diagnostic } from "./types.ts";
 

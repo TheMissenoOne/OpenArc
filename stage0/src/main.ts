@@ -235,7 +235,7 @@ async function main(argv: string[]): Promise<number> {
       await put("openarc.config.json", JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n");
       await put("tsconfig.json", JSON.stringify(TSCONFIG, null, 2) + "\n");
       await put(manifestPath, '{\n  "schema": 1,\n  "regions": {}\n}\n');
-      await put(".openarc/harness.mjs", 'import { main } from "@openarc/core/harness";\nawait main("/work", process.argv[2]);\n');
+      await put(".openarc/harness.mjs", 'import { main } from "open-arc/harness";\nawait main("/work", process.argv[2]);\n');
       const ignore = ["lock", "sandbox/", "txn/", "watch-history.jsonl", "attempts/"];
       const had = await ports.fs.read(".openarc/.gitignore");
       const missing = ignore.filter((l) => !(had ?? "").split("\n").includes(l));

@@ -22,7 +22,7 @@ export function add(a: number, b: number): number {
 `extract` produces
 
 ```ts
-import * as arc from "@openarc/core";
+import * as arc from "open-arc";
 type AddFn = (a: number, b: number) => number;
 
 export const addSpec = arc.defineRegion<AddFn>({

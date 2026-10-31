@@ -1,5 +1,7 @@
 # OpenArc
 
+[npm: open-arc](https://www.npmjs.com/package/open-arc) · [GitHub](https://github.com/TheMissenoOne/OpenArc) · [Wiki](https://github.com/TheMissenoOne/OpenArc/wiki)
+
 Compile typed specs into verified TypeScript with **small local models**.
 
 You write the contract: a function type, an intent and examples. OpenArc builds a minimal context package for that one function, the way a unit test isolates code. It asks a local model for the body, then verifies the result:
@@ -10,7 +12,7 @@ You write the contract: a function type, an intent and examples. OpenArc builds 
 Only then does it splice the body in. Your hand edits are never overwritten.
 
 ```ts
-import * as arc from "@openarc/core";
+import * as arc from "open-arc";
 
 type NormalizeTitle = (title: string) => string;
 
@@ -39,7 +41,7 @@ export const normalizeTitle: NormalizeTitle = (title) => {
 ## Use
 
 ```bash
-npm i -D @openarc/core
+npm i -D open-arc
 npx openarc init          # openarc.config.json, tsconfig.json, .openarc/
 # write defineRegion specs in src/*.ts
 npx openarc scaffold      # adds markers + typed placeholders (deterministic, no model)

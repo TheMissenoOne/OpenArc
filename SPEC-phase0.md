@@ -23,7 +23,7 @@ The keywords MUST, MUST NOT, SHOULD, and MAY are normative. Diagnostics use the 
 
 ---
 
-## 2. The DSL (`@openarc/core`)
+## 2. The DSL (`open-arc`)
 
 ### 2.1 Types
 
@@ -71,7 +71,7 @@ export function todo(id: string): never;    // pending FUNCTION body; throws Ope
 export function pending(id: string): void;  // pending BLOCK body; throws too, but typed void [F4]
 ```
 
-Convention: import as `import * as arc from "@openarc/core"`. The rest of this document writes `arc.todo` and so on.
+Convention: import as `import * as arc from "open-arc"`. The rest of this document writes `arc.todo` and so on.
 
 At runtime, `defineRegion` and `defineBlock` return their argument unchanged. Removing them from production builds is a later build transform (not v0). Implementations MUST NOT rely on tree shaking.
 
@@ -502,7 +502,7 @@ At PLAN, a function target whose examples are fewer than 3 (`OARC-W044`, detail 
 
 **`openarc extract <file> [--function <name>] [--id <id>]`** adopts existing functions as (F) regions. It is deterministic and never calls a model.
 1. Candidates are the top-level `function` declarations and `const S = (...) => ...` / `= function (...) {...}` statements of a file under `src/`: every exported one, or only `--function <name>` (exported or not). `--id` requires `--function`.
-2. For each, the command writes, above the declaration (and above its JSDoc, which stays attached and outside the markers), `type <Name>Fn = <signature>;`, where the signature is printed by the type checker as a non-generic arrow type, and then `export const <name>Spec = arc.defineRegion<<Name>Fn>({ id, intent: ["[inferred] <first JSDoc line | TODO describe>"], examples: [] })`. `symbol` is added when the id's last segment differs from the function name. Markers go around the declaration lines. `import * as arc from "@openarc/core"` is added if missing.
+2. For each, the command writes, above the declaration (and above its JSDoc, which stays attached and outside the markers), `type <Name>Fn = <signature>;`, where the signature is printed by the type checker as a non-generic arrow type, and then `export const <name>Spec = arc.defineRegion<<Name>Fn>({ id, intent: ["[inferred] <first JSDoc line | TODO describe>"], examples: [] })`. `symbol` is added when the id's last segment differs from the function name. Markers go around the declaration lines. `import * as arc from "open-arc"` is added if missing.
 3. The id defaults to `<file-stem>.<functionName>`, each segment normalised to §2.3 (separators camel-cased, leading non-letters dropped, first letter lowercased).
 4. Each region is recorded as `{kind: "function", ownership: "developer", fingerprint: null, provenance: {source: "extracted"}}` with the hashes ANALYZE computes. The declaration's text is unchanged byte for byte, so nothing is regenerated until `openarc release <id>`. Editing the spec of a developer region is E061 as usual (`resolve --keep` accepts it).
 5. It refuses, with a message and exit code 1: overloaded functions, generic functions (type parameters can't be expressed in a non-generic `F`), default-exported anonymous functions, class methods, declarations that share a line with other code, invalid or already-used ids, and any result that type-checks worse than the original file or fails ANALYZE.
@@ -642,7 +642,7 @@ The configuration sits at the project root, like `package.json`, and selects the
 
 ## 14. Bootstrap [F12]
 
-1. **Stage 0** is `selfhost/` with every region body written by hand, outside OpenArc. Those regions are `developer`-owned. Its acceptance test is the self-hosted examples (`node tools/run-examples.ts --strict`: 24/24). It is built into the npm package `@openarc/core` (`node tools/build.ts`).
+1. **Stage 0** is `selfhost/` with every region body written by hand, outside OpenArc. Those regions are `developer`-owned. Its acceptance test is the self-hosted examples (`node tools/run-examples.ts --strict`: 24/24). It is built into the npm package `open-arc` (`node tools/build.ts`).
 2. **Stage 1:** stage 0, installed as the devDependency `openarc-stage0`, compiles a pristine `selfhost/` scaffold (`selfhost-scaffold.tgz`). Its output is `compiler`-owned regions.
 3. **Stage 2:** the package built from stage 1 compiles the scaffold again, with stage 1's cache. That run must make **zero** model calls and produce a byte-identical tree and manifest (excluding `provenance.at`). Fingerprints use `COMPILER_VERSION`, not a build hash, so stages share cache keys. `COMPILER_VERSION` is read at import time from `core/package.json` (source tree) or the package's own `package.json` (published build), so every release gets new cache keys.
 

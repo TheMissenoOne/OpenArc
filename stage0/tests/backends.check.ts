@@ -1,6 +1,6 @@
 // Request shapes of every backend, against a fake HttpPort. No network. Run: node tests/backends.check.ts
 import assert from "node:assert";
-import type { Json } from "@openarc/core";
+import type { Json } from "open-arc";
 import type { Ports } from "../src/types.ts";
 import type { BackendConfig } from "../src/config.ts";
 import { parseConfig } from "../src/config.ts";

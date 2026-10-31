@@ -1,11 +1,13 @@
 # OpenArc
 
+[![npm](https://img.shields.io/npm/v/open-arc)](https://www.npmjs.com/package/open-arc)
+
 **Compile typed specs into verified TypeScript with small local models.**
 
 You write the contract: a function type, an intent and examples. OpenArc gives a local model only the context that one function needs, the way a unit test isolates code. It verifies the returned body with tsc, static rules and your examples in a sandbox, and only then splices it in. Hand edits are never overwritten, and the model can't touch anything outside its own region.
 
 ```ts
-import * as arc from "@openarc/core";
+import * as arc from "open-arc";
 
 type NormalizeTitle = (title: string) => string;
 
@@ -19,8 +21,10 @@ export const normalizeTitleSpec = arc.defineRegion<NormalizeTitle>({
 });
 ```
 
+Install from npm: [`open-arc`](https://www.npmjs.com/package/open-arc) (the command is `openarc`).
+
 ```bash
-npm i -D @openarc/core && npx openarc init
+npm i -D open-arc && npx openarc init
 npx openarc scaffold && npx openarc compile
 npx openarc watch    # or keep it running: recompiles regions as you save, one at a time
 ```
@@ -33,7 +37,7 @@ npx openarc watch    # or keep it running: recompiles regions as you save, one a
 |---|---|
 | `SPEC-phase0.md` | normative specification (v0.3) |
 | `selfhost/` | **OpenArc written as an OpenArc project.** It's the source of truth; regions are compiled by OpenArc itself |
-| `stage0/` | the bootstrap compiler: `selfhost/` with every region written by hand; builds the `@openarc/core` npm package |
+| `stage0/` | the bootstrap compiler: `selfhost/` with every region written by hand; builds the `open-arc` npm package |
 | `examples/demo/` | the smallest real project |
 | `docs/wiki/` | wiki pages |
 

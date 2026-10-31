@@ -12,9 +12,11 @@ Examples always run in a sandbox. If `bwrap` is missing, OpenArc refuses to run 
 
 ## Install
 
+The package is [`open-arc` on npm](https://www.npmjs.com/package/open-arc); the command it installs is `openarc`.
+
 ```bash
 mkdir my-app && cd my-app && npm init -y && npm pkg set type=module
-npm i -D @openarc/core
+npm i -D open-arc
 npx openarc init
 ```
 
@@ -25,7 +27,7 @@ npx openarc init
 `src/tasks.ts`:
 
 ```ts
-import * as arc from "@openarc/core";
+import * as arc from "open-arc";
 
 type NormalizeTitle = (title: string) => string;
 

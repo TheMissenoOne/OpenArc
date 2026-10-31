@@ -1,4 +1,4 @@
-import * as arc from "@openarc/core";
+import * as arc from "open-arc";
 import type { Command } from "./types.ts";
 
 // ── cli.parseArgv ─────────────────────────────────────────────── spec §6.3
