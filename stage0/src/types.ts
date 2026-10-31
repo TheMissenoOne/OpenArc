@@ -71,6 +71,7 @@ export interface PlanResult {
 export interface ImportDecl {
   from: string;
   names: string[];
+  default?: string; // a default import's local name (import x from "from"); absent for named-only imports
 }
 export type ModelOutput =
   | { ok: true; body: string; imports: ImportDecl[] }
@@ -85,7 +86,7 @@ export interface OllamaChatRequest {
   model: string;
   stream: false;
   format: Json;
-  options: { temperature: 0; seed: number; num_ctx: number };
+  options: { temperature: number; seed: number; num_ctx: number; num_predict?: number }; // backends.ts sets num_predict and varies temperature/seed on retries
   messages: { role: "system" | "user"; content: string }[];
   think?: boolean; // set by backends.ts from BackendConfig.think, not by model.buildRequest
   keep_alive?: string; // set by backends.ts from BackendConfig.keepAlive, not by model.buildRequest

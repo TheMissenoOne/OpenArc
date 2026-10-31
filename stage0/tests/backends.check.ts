@@ -4,7 +4,7 @@ import type { Json } from "openarc";
 import type { Ports } from "../src/types.ts";
 import type { BackendConfig } from "../src/config.ts";
 import { parseConfig } from "../src/config.ts";
-import { complete, ANTHROPIC_VERSION } from "../src/backends.ts";
+import { complete, ANTHROPIC_VERSION, OUTPUT_SCHEMA } from "../src/backends.ts";
 import { MODEL_OUTPUT_SCHEMA } from "../src/model.ts";
 
 const OUT = '{"body":"return 1;","imports":[]}';
@@ -16,7 +16,11 @@ function fake(response: string) {
 const env = { OPENAI_API_KEY: "sk-test-openai", OPENROUTER_API_KEY: "sk-or-test", ANTHROPIC_API_KEY: "sk-ant-test" };
 const openaiReply = JSON.stringify({ choices: [{ message: { role: "assistant", content: OUT } }] });
 const msgs = [{ role: "system", content: "S" }, { role: "user", content: "U" }];
-const strictSchema = { ...(MODEL_OUTPUT_SCHEMA as object), required: ["body", "imports"] };
+// The §8.4 schema plus an optional `default` on imports items; strict mode lists it as required and nullable.
+const item = (required: string[], def: Json) => ({ type: "object", required, additionalProperties: false, properties: { from: { type: "string" }, names: { type: "array", items: { type: "string" } }, default: def } });
+const schemaWith = (required: string[], def: Json) => ({ ...(MODEL_OUTPUT_SCHEMA as object), properties: { body: { type: "string" }, imports: { type: "array", items: item(required, def) } } });
+assert.deepStrictEqual(OUTPUT_SCHEMA, schemaWith(["from", "names"], { type: "string" }));
+const strictSchema = { ...schemaWith(["from", "names", "default"], { type: ["string", "null"] }), required: ["body", "imports"] };
 
 // openai
 {
@@ -58,7 +62,7 @@ const strictSchema = { ...(MODEL_OUTPUT_SCHEMA as object), required: ["body", "i
   assert.deepStrictEqual(seen, [{
     url: "https://api.anthropic.com/v1/messages",
     headers: { "x-api-key": "sk-ant-test", "anthropic-version": ANTHROPIC_VERSION },
-    body: { model: "claude-opus-5-5", max_tokens: 16000, system: "S", messages: [{ role: "user", content: "U" }], output_config: { format: { type: "json_schema", schema: MODEL_OUTPUT_SCHEMA } } },
+    body: { model: "claude-opus-5-5", max_tokens: 16000, system: "S", messages: [{ role: "user", content: "U" }], output_config: { format: { type: "json_schema", schema: OUTPUT_SCHEMA } } },
   }]);
   const refused = fake(JSON.stringify({ stop_reason: "refusal", content: [] }));
   await assert.rejects(complete(refused.ports, b, "S", "U", env), /stop_reason refusal/);
@@ -69,6 +73,11 @@ const strictSchema = { ...(MODEL_OUTPUT_SCHEMA as object), required: ["body", "i
   assert.equal(await complete(ports, { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, think: false }, "S", "U", env), OUT);
   assert.equal(seen[0]!.url, "http://127.0.0.1:11434/api/chat");
   assert.equal((seen[0]!.body as { model: string }).model, "qwen3.5:9b");
+  assert.deepStrictEqual((seen[0]!.body as { options: Json }).options, { temperature: 0, seed: 1, num_ctx: 8192, num_predict: 2048 }, "output cap = outputReserveTokens");
+  assert.deepStrictEqual((seen[0]!.body as { format: Json }).format, OUTPUT_SCHEMA);
+  // a varied retry (engine.retrySampling) reaches the request
+  await complete(ports, { provider: "ollama", model: "m", maxContextTokens: 4096, outputReserveTokens: 1000, seed: 5, temperature: 0.4 }, "S", "U", env);
+  assert.deepStrictEqual((seen[1]!.body as { options: Json }).options, { temperature: 0.4, seed: 5, num_ctx: 4096, num_predict: 1000 });
 }
 // missing key: OARC-E080 detail token, never the key
 {

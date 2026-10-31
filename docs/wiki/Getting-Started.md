@@ -44,6 +44,7 @@ A wrong example, such as `expected: 42`, is a type error in your editor before O
 
 ```bash
 npx openarc scaffold   # adds markers + a typed placeholder (no model involved)
+npx tsc -p .           # optional: after scaffold, so imports of other files' regions resolve
 npx openarc compile
 ```
 

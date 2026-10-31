@@ -120,7 +120,9 @@ export function createWatcher(d: WatchDeps) {
         say(`${id}  ✓ ${plural(res.modelCalls, "attempt")} · ${n}/${n} examples · ${secs}`);
         await record(id, "done", ms, plural(res.modelCalls, "attempt"));
       } else {
-        say(`${id}  ✗ ${plural(res.modelCalls, "attempt")} · ${detail.length > 72 ? `${detail.slice(0, 71)}…` : detail} · ${secs} · still pending`);
+        // W043: a compiler-owned region keeps its last body, which was verified against an older spec.
+        const after = res.diagnostics.some((x) => x.code === "OARC-W043" && x.id === id) ? "stale: keeps a body that fails the current spec" : "still pending";
+        say(`${id}  ✗ ${plural(res.modelCalls, "attempt")} · ${detail.length > 72 ? `${detail.slice(0, 71)}…` : detail} · ${secs} · ${after}`);
         await record(id, "failed", ms, detail);
         if (!transient) failed.set(id, key);
       }

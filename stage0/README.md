@@ -56,6 +56,7 @@ npx openarc extract src/x.ts   # adopt existing functions as regions (bodies kep
 | `release <id>` | hand an edited region back to the compiler (the body is backed up first) |
 | `resolve <id> --keep\|--regen\|--unlink` | settle a conflict |
 | `inspect <id>` | spec, state and provenance |
+| `check <id> --oracle <module>#<export>` | compare a compiled region with a reference implementation on its examples plus seeded variations, in the sandbox |
 
 ## Configuration: `openarc.config.json`
 

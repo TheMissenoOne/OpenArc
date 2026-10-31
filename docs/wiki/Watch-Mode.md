@@ -17,7 +17,7 @@ Like `nodemon` for specs. OpenArc stays running, watches your project, and keeps
 [watch] src/tasks.ts changed: 1 region queued: tasks.parseDue
 ```
 
-Each status line shows the outcome, the model calls it took, the function's examples, the time and, for a failure, the first error code.
+Each status line shows the outcome, the model calls it took, the function's examples, the time and, for a failure, the first error code. A failed region that had no body yet is `still pending`; a compiler-owned region whose recompile failed ends with `stale: keeps a body that fails the current spec` (`OARC-W043`), because its old body stays in the file.
 
 ## What is watched
 

@@ -30,6 +30,8 @@ const MESSAGES: Record<string, string> = {
   "OARC-W040": "block region verified indirectly (through its function's examples)",
   "OARC-W041": "block region has no behavioral verification (its function has no examples)",
   "OARC-W042": "block held back: its function can't be verified until all its blocks exist (kept in the cache, committed by a later run)",
+  "OARC-W043": "region keeps a body that does not satisfy its current spec (its recompile failed; shown as stale)",
+  "OARC-W044": "thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle)",
   "OARC-E041": "refine: \"next\" is unsupported in v0",
   "OARC-E050": "unknown manifest schema",
   "OARC-E051": "invalid openarc.config.json",
@@ -172,9 +174,37 @@ async function analyzeOffline(ports: Ports, root: string, diagnostics: Diagnosti
   return project;
 }
 
+const USAGE = `usage: openarc init | scaffold | compile [--keep-going] [ids...] | watch [--debounce <ms>] | graph | inspect <id>
+       openarc freeze|release <id> | resolve <id> --keep|--regen|--unlink
+       openarc extract <file> [--function <name>] [--id <id>]
+       openarc check <id> --oracle <module>#<export>`;
+
+/** `openarc check <id> --oracle <module>#<export>`: differential test against a reference implementation (engine.oracleCheck). */
+async function check(root: string, ports: Ports, args: string[]): Promise<number> {
+  const [id, flag, oracle] = args;
+  if (!id || flag !== "--oracle" || !oracle || args.length !== 3) {
+    console.error(`openarc: bad-flag\n\n${USAGE}`);
+    return 2;
+  }
+  const diagnostics: Diagnostic[] = [];
+  const project = await analyzeOffline(ports, root, diagnostics);
+  const res = await engine.oracleCheck(ports, request(root, project, [id]), project, id, oracle);
+  if (res.error && !res.inputs) {
+    console.error(`check ${id}: ${res.error}`);
+    return 1;
+  }
+  for (const d of res.disagreements.slice(0, 20)) console.log(`  ${engine.showDisagreement(d)}`);
+  if (res.disagreements.length > 20) console.log(`  … ${res.disagreements.length - 20} more`);
+  console.log(`check ${id} against ${oracle}: ${res.agreed}/${res.inputs} inputs agree (seed 1)${res.error ? `; ${res.error}` : ""}`);
+  return res.disagreements.length || res.error ? 1 : 0;
+}
+
 async function main(argv: string[]): Promise<number> {
   const root = findRoot(process.cwd());
   const ports = realPorts(root);
+  // ponytail: `check` is parsed here, not in the cli.parseArgv region, so the self-hosted tree keeps its generated body.
+  // Move it into cli.parseArgv's spec at the next self-compile.
+  if (argv[0] === "check") return check(root, ports, argv.slice(1));
   const cmd = parseArgv(argv);
   const diagnostics: Diagnostic[] = [];
   const print = () => diagnostics.forEach((d) => console.error(fmt(d)));
@@ -184,7 +214,7 @@ async function main(argv: string[]): Promise<number> {
 
   switch (cmd.cmd) {
     case "usage":
-      console.error(`openarc: ${cmd.reason}\n\nusage: openarc init | scaffold | compile [--keep-going] [ids...] | watch [--debounce <ms>] | graph | inspect <id>\n       openarc freeze|release <id> | resolve <id> --keep|--regen|--unlink\n       openarc extract <file> [--function <name>] [--id <id>]`);
+      console.error(`openarc: ${cmd.reason}\n\n${USAGE}`);
       return 2;
     case "init": {
       const wrote: string[] = [];
@@ -198,8 +228,15 @@ async function main(argv: string[]): Promise<number> {
       await put("tsconfig.json", JSON.stringify(TSCONFIG, null, 2) + "\n");
       await put(manifestPath, '{\n  "schema": 1,\n  "regions": {}\n}\n');
       await put(".openarc/harness.mjs", 'import { main } from "openarc/harness";\nawait main("/work", process.argv[2]);\n');
-      await put(".openarc/.gitignore", "lock\nsandbox/\ntxn/\nwatch-history.jsonl\n");
+      const ignore = ["lock", "sandbox/", "txn/", "watch-history.jsonl", "attempts/"];
+      const had = await ports.fs.read(".openarc/.gitignore");
+      const missing = ignore.filter((l) => !(had ?? "").split("\n").includes(l));
+      if (missing.length) {
+        await ports.fs.write(".openarc/.gitignore", (had ?? "") + (had && !had.endsWith("\n") ? "\n" : "") + missing.join("\n") + "\n");
+        wrote.push(".openarc/.gitignore");
+      }
       console.log(wrote.length ? `created: ${wrote.join(", ")}` : "already initialised");
+      console.log("next: write defineRegion specs in src/*.ts, then `npx openarc scaffold` (adds the exported symbols other files import),\nthen `npx tsc -p .`, then `npx openarc compile`");
       return 0;
     }
     case "scaffold": {
@@ -217,10 +254,13 @@ async function main(argv: string[]): Promise<number> {
       const keepGoing = cmd.ids.includes("--keep-going");
       const res = await run(ports, { ...request(root, project, cmd.ids.filter((a) => !a.startsWith("--"))), keepGoing });
       res.diagnostics.forEach((d) => console.error(fmt(d)));
+      const stale = res.diagnostics.filter((d) => d.code === "OARC-W043").map((d) => d.id);
+      if (stale.length) console.error(`stale: ${stale.join(", ")} keep${stale.length === 1 ? "s" : ""} a body that does not satisfy the current spec`);
       if (res.diagnostics.some((d) => d.code === "OARC-E080" && d.detail === "stopped:3-consecutive"))
         console.error("stopped early: the model backend failed 3 times in a row, so the remaining regions were skipped. Is it running (Ollama OOM-killed?)");
-      console.error(`done: exit ${res.exit} · ${res.modelCalls} model call(s) · ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-      return res.exit;
+      const exit = stale.length ? 1 : res.exit;
+      console.error(`done: exit ${exit} · ${res.modelCalls} model call(s) · ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+      return exit;
     }
     case "extract": {
       const rel = relative(root, resolve(process.cwd(), cmd.file)).split(sep).join("/");
@@ -313,7 +353,7 @@ async function main(argv: string[]): Promise<number> {
       if (cmd.cmd === "graph") {
         const show = (parent: string | null, depth: number) => {
           for (const r of project.regions.filter((x) => x.parent === parent)) {
-            console.log(`${"  ".repeat(depth)}${r.id.padEnd(34 - depth * 2)} ${r.kind === "function" ? "F" : "B"} ${r.state.padEnd(10)} ${r.spec.examples.length} ex  ${r.file}`);
+            console.log(`${"  ".repeat(depth)}${r.id.padEnd(34 - depth * 2)} ${r.kind === "function" ? "F" : "B"} ${engine.displayState(project, r).padEnd(10)} ${r.spec.examples.length} ex  ${r.file}`);
             show(r.id, depth + 1);
           }
         };
@@ -325,7 +365,9 @@ async function main(argv: string[]): Promise<number> {
         console.error(`no region ${cmd.id}`);
         return 1;
       }
-      console.log(JSON.stringify({ id: r.id, kind: r.kind, file: r.file, parent: r.parent, state: r.state, intent: r.spec.intent, examples: r.spec.examples.length, manifest: project.manifest.regions[r.id] ?? null }, null, 2));
+      const state = engine.displayState(project, r);
+      const note = state === "stale" ? { stale: "the spec changed since this body was verified; it may not satisfy the current examples (openarc compile)" } : {};
+      console.log(JSON.stringify({ id: r.id, kind: r.kind, file: r.file, parent: r.parent, state, ownership: r.state, ...note, intent: r.spec.intent, examples: r.spec.examples.length, manifest: project.manifest.regions[r.id] ?? null }, null, 2));
       return 0;
     }
     case "freeze":

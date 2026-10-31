@@ -3,7 +3,7 @@
 // Pending regions are reported but don't fail the run unless --strict is set.
 import { readdirSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { runExamples } from "openarc/harness";
+import { runExamples, showValue } from "openarc/harness";
 import type { AnyFn, RegionSpec } from "openarc";
 
 const root = process.cwd();
@@ -29,7 +29,7 @@ for (const file of readdirSync(`${root}/src`).filter((f) => f.endsWith(".ts")).s
     else failed++;
     const tag = bad.length === 0 ? "ok     " : isPending ? "pending" : "FAIL   ";
     console.log(`${tag} ${spec.id.padEnd(28)} ${outcomes.length - bad.length}/${outcomes.length}`);
-    if (!isPending) for (const o of bad) console.log(`          ✗ ${o.name}: ${JSON.stringify(o.actual)}`);
+    if (!isPending) for (const o of bad) console.log(`          ✗ ${o.name}: ${showValue(o.actual)}`);
   }
 }
 console.log(`\n${passed} ok, ${pending} pending, ${failed} failing`);

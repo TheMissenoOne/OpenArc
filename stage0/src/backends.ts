@@ -21,8 +21,20 @@ function apiKey(b: BackendConfig, env: Record<string, string | undefined>): stri
   return key;
 }
 
-// OpenAI strict json_schema needs every property listed in `required`; imports: [] is what parseOutput defaults to anyway.
-const STRICT_OUTPUT_SCHEMA = { ...(MODEL_OUTPUT_SCHEMA as Record<string, Json>), required: ["body", "imports"] } as Json;
+type Schema = { [k: string]: Json };
+const importItem = ((MODEL_OUTPUT_SCHEMA as Schema).properties as Schema).imports as Schema;
+const withImportItem = (required: string[], defaultType: Json, extra: Schema = {}): Json => ({
+  ...(MODEL_OUTPUT_SCHEMA as Schema),
+  ...extra,
+  properties: {
+    ...((MODEL_OUTPUT_SCHEMA as Schema).properties as Schema),
+    imports: { ...importItem, items: { ...(importItem.items as Schema), required, properties: { ...((importItem.items as Schema).properties as Schema), default: defaultType } } },
+  },
+});
+/** The §8.4 schema plus an optional `default` (a default import's local name) on each imports item. */
+export const OUTPUT_SCHEMA: Json = withImportItem(["from", "names"], { type: "string" });
+// OpenAI strict json_schema needs every property listed in `required` (imports: [] and default: null mean absent).
+const STRICT_OUTPUT_SCHEMA: Json = withImportItem(["from", "names", "default"], { type: ["string", "null"] }, { required: ["body", "imports"] });
 
 /** fetch() connection failures: the server is down or restarting (e.g. Ollama OOM-killed mid-run). */
 const isConnectionError = (e: unknown) =>
@@ -42,10 +54,13 @@ export async function complete(ports: Ports, b: BackendConfig, system: string, u
 
 async function completeOnce(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined>): Promise<string> {
   const seed = b.seed ?? 1;
+  const temperature = b.temperature ?? 0;
   const maxTokens = b.outputReserveTokens ?? 2048;
   if (b.provider === "ollama") {
     const cfg = { host: hostOf(b), model: b.model, seed, numCtx: b.maxContextTokens };
-    const req = buildRequest(system, user, cfg, MODEL_OUTPUT_SCHEMA);
+    const req = buildRequest(system, user, cfg, OUTPUT_SCHEMA);
+    // The output cap: without num_predict a confused model can generate for minutes and still return truncated JSON.
+    req.options = { ...req.options, temperature, num_predict: maxTokens };
     if (b.think !== undefined) req.think = b.think;
     req.keep_alive = b.keepAlive ?? "2m";
     return call(ports.http, cfg, req);
@@ -58,7 +73,7 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
         : { type: "json_schema", json_schema: { name: "openarc_region", strict: true, schema: STRICT_OUTPUT_SCHEMA } };
       const body: Json = {
         model: b.model,
-        temperature: 0,
+        temperature,
         seed,
         max_tokens: maxTokens,
         response_format,
@@ -76,12 +91,13 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
     }
     // anthropic: structured outputs (output_config.format). Forced tool_choice is rejected by current models
     // (Opus 5.5, Sonnet 5.5), and API version 2026-10-21 rejects temperature/top_p/top_k, so no sampling fields.
+    // ponytail: so the identical-prompt retry variation (temperature/seed) doesn't reach this provider; the repair text does.
     const body: Json = {
       model: b.model,
       max_tokens: maxTokens,
       system,
       messages: [{ role: "user", content: user }],
-      output_config: { format: { type: "json_schema", schema: MODEL_OUTPUT_SCHEMA } },
+      output_config: { format: { type: "json_schema", schema: OUTPUT_SCHEMA } },
     };
     const headers: Record<string, string> = { ...b.headers, "x-api-key": key!, "anthropic-version": ANTHROPIC_VERSION };
     const res = JSON.parse(await ports.http.postJson(`${baseUrlOf(b)}/messages`, body, headers)) as { stop_reason?: string; content?: { type: string; text?: string }[] };

@@ -3,7 +3,7 @@
 // for a small model to regenerate. Regionizing the engine itself is the next self-hosting step.
 import ts from "typescript";
 import type { Json } from "openarc";
-import type { Candidate, ChildSpan, CompileRequest, Diagnostic, ManifestView, Ports, RegionState, StagedFile } from "./types.ts";
+import type { Candidate, ChildSpan, CompileRequest, Diagnostic, ImportDecl, ManifestView, Ports, RegionState, StagedFile } from "./types.ts";
 import type { BackendConfig, ContextLevel, OpenArcConfig } from "./config.ts";
 import { hostOf, parseConfig } from "./config.ts";
 import { scanMarkers, buildRegionTree } from "./markers.ts";
@@ -15,8 +15,19 @@ import { selectTargets } from "./plan.ts";
 import { PROMPT_TEMPLATE_VERSION, PROMPT_TEMPLATE, renderTemplate, parseOutput } from "./model.ts";
 import { baseUrlOf, complete } from "./backends.ts";
 import { buildArgv, readHarnessOutput } from "./sandbox.ts";
+import { readFileSync } from "node:fs";
+import { posix } from "node:path";
 
-export const COMPILER_VERSION = "0.2.0";
+const versionAt = (rel: string): string | undefined => {
+  try {
+    return (JSON.parse(readFileSync(new URL(rel, import.meta.url), "utf8")) as { version?: string }).version;
+  } catch {
+    return undefined;
+  }
+};
+/** The release version, so cache keys (fingerprints) change with every release. Source tree: core/package.json;
+ *  published package (dist/src/engine.js): the package's own package.json. */
+export const COMPILER_VERSION: string = versionAt("../core/package.json") ?? versionAt("../../package.json") ?? "0.0.0";
 const SOURCE_DIRS = ["src", "core", "tests/fakes", "tools"];
 
 // ───────────────────────────── data model ─────────────────────────────
@@ -73,6 +84,7 @@ export interface RegionInfo {
   fingerprint: string;
   scope: string[]; // blocks: "let x: T" lines in scope
   context0: string; // the initial context package (its hash is part of the fingerprint)
+  typeImports: Map<string, string>; // closure types shown in context but not in scope in the file: name -> import specifier
 }
 
 export interface Project {
@@ -326,7 +338,7 @@ export async function analyze(ports: Ports, req: CompileRequest, p: Project, dia
         id: spec.id, kind: spec.kind, file: rel, parent, root: myRoot, bodyLines, childSpans,
         indent: /^\s*/.exec(lines[node.beginLine - 1]!)![0], pending,
         hash: sha256Tagged(normalizeOwnedText(bodyLines, childSpans)),
-        spec, specHash: "", state: "pending", stale: true, fingerprint: "", scope: [], context0: "",
+        spec, specHash: "", state: "pending", stale: true, fingerprint: "", scope: [], context0: "", typeImports: new Map(),
       };
       if (spec.kind === "block") {
         region.scope = blockScope(p, checker, rel, node.beginLine);
@@ -447,10 +459,17 @@ export async function backendProblem(ports: Ports, config: OpenArcConfig, env: R
 const declOf = (sym: ts.Symbol, checker: ts.TypeChecker) =>
   (sym.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym) : sym).declarations ?? [];
 
-/** Source text of every project-local type declaration reachable from `roots` (the type closure). */
-function typeClosure(p: Project, checker: ts.TypeChecker, roots: ts.Node[]): string[] {
+interface ClosureType {
+  name: string;
+  rel: string; // project-relative file that declares it
+  exported: boolean;
+  text: string;
+}
+
+/** Every project-local type declaration reachable from `roots` (the type closure), with its source text. */
+function typeClosure(p: Project, checker: ts.TypeChecker, roots: ts.Node[]): ClosureType[] {
   const seen = new Set<ts.Node>();
-  const out: string[] = [];
+  const out: ClosureType[] = [];
   const visit = (n: ts.Node) => {
     if (ts.isTypeReferenceNode(n) || ts.isExpressionWithTypeArguments(n) || ts.isTypeQueryNode(n)) {
       const name = ts.isTypeReferenceNode(n) ? n.typeName : ts.isTypeQueryNode(n) ? n.exprName : n.expression;
@@ -461,7 +480,8 @@ function typeClosure(p: Project, checker: ts.TypeChecker, roots: ts.Node[]): str
         if (!(ts.isTypeAliasDeclaration(d) || ts.isInterfaceDeclaration(d))) continue;
         seen.add(d);
         visit(d);
-        out.push(d.getText(d.getSourceFile()).trim());
+        const exported = ts.getModifiers(d)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
+        out.push({ name: d.name.text, rel: file.slice(p.root.length + 1), exported, text: d.getText(d.getSourceFile()).trim() });
       }
     }
     n.forEachChild(visit);
@@ -470,20 +490,22 @@ function typeClosure(p: Project, checker: ts.TypeChecker, roots: ts.Node[]): str
   return out;
 }
 
-/** Exported value signatures of a local module (helpers a region may call), skipping specs. */
-function moduleSignatures(sf: ts.SourceFile, checker: ts.TypeChecker): { lines: string[]; nodes: ts.Node[] } {
+/** Value signatures of a local module (helpers a region may call), skipping specs. Other modules: exported values only.
+ *  The region's own file (`sameFile`): every top-level value, minus `skip` (the region itself and pending regions). */
+function moduleSignatures(sf: ts.SourceFile, checker: ts.TypeChecker, sameFile?: { skip: Set<string> }): { lines: string[]; nodes: ts.Node[] } {
   const lines: string[] = [];
   const nodes: ts.Node[] = [];
   for (const st of sf.statements) {
     const exported = ts.canHaveModifiers(st) && ts.getModifiers(st)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
-    if (!exported) continue;
+    if (!exported && !sameFile) continue;
     if (ts.isFunctionDeclaration(st) && st.name) {
+      if (sameFile?.skip.has(st.name.text)) continue;
       const sig = checker.getSignatureFromDeclaration(st);
       lines.push(`function ${st.name.text}${sig ? checker.signatureToString(sig, undefined, ts.TypeFormatFlags.NoTruncation) : "(…)"}`);
       nodes.push(st);
     } else if (ts.isVariableStatement(st)) {
       for (const d of st.declarationList.declarations) {
-        if (!ts.isIdentifier(d.name)) continue;
+        if (!ts.isIdentifier(d.name) || sameFile?.skip.has(d.name.text)) continue;
         if (d.initializer && ts.isCallExpression(d.initializer) && /define(Region|Block)$/.test(d.initializer.expression.getText(sf))) continue;
         const t = d.type ? d.type.getText(sf) : checker.typeToString(checker.getTypeAtLocation(d.name), undefined, ts.TypeFormatFlags.NoTruncation);
         lines.push(`const ${d.name.text}: ${t}`);
@@ -529,9 +551,11 @@ function allowedImports(p: Project, deps: string[]): string {
 }
 
 const RULES = [
-  "Only use imports listed under 'Allowed new imports' or already imported by the file.",
+  "Names the file already imports, and its same-file helpers, are in scope: call them directly, never re-import or re-implement them.",
+  "\"imports\" may name: specifiers under 'Allowed new imports', modules the file already imports, and the file of a type shown under 'Types' (marked 'not in scope').",
+  "For a default import use {\"from\": \"x\", \"names\": [], \"default\": \"x\"}.",
   "Never use: process, globalThis, eval, Function, fetch, require, dynamic import(), setTimeout, setInterval.",
-  "Date/performance need effect 'clock'; Math.random/crypto need 'random'; console needs 'log'.",
+  "Date.now()/new Date()/performance need effect 'clock' (Date.parse and new Date(value) don't); Math.random/crypto need 'random'; console needs 'log'.",
   "Deterministic output; no I/O except through parameters.",
 ].join("\n");
 
@@ -551,9 +575,17 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   }
   const typeRoots: ts.Node[] = s.typeNode ? [s.typeNode] : [];
   const helperLines: string[] = [];
+  // Every level: the file's imports and its other implemented top-level values (same-file helpers and regions).
+  const importLines = sf.statements.filter(ts.isImportDeclaration).map((d) => d.getText(sf));
+  if (importLines.length) sections.push(["Imports already in the file", importLines.join("\n")]);
+  let sameFileLines: string[] = [];
+  if (r.kind === "function") {
+    const skip = new Set([s.symbol, ...p.regions.filter((x) => x.file === r.file && x.pending && x.kind === "function").map((x) => x.spec.symbol)]);
+    const own = moduleSignatures(sf, checker, { skip });
+    sameFileLines = own.lines;
+    typeRoots.push(...own.nodes);
+  }
   if (level >= 1 || r.kind === "block") {
-    const importLines = sf.statements.filter(ts.isImportDeclaration).map((d) => d.getText(sf));
-    sections.push(["Imports already in the file", importLines.join("\n")]);
     const mods = new Set<string>();
     for (const d of sf.statements.filter(ts.isImportDeclaration)) {
       const rel = resolveLocal(p, r.file, (d.moduleSpecifier as ts.StringLiteral).text);
@@ -575,15 +607,27 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
       typeRoots.push(...scopeDecls);
     }
   }
-  const types = typeClosure(p, checker, typeRoots);
+  // A closure type the file neither declares nor imports would be TS2304 in the body: say so, and remember where it
+  // comes from so verify() adds `import type` for it when the body uses it.
+  const inScope = fileBindings(p.files.get(r.file)!);
+  for (const st of sf.statements) if ((ts.isTypeAliasDeclaration(st) || ts.isInterfaceDeclaration(st) || ts.isEnumDeclaration(st)) && st.name) inScope.add(st.name.text);
+  const types = typeClosure(p, checker, typeRoots).map((t) => {
+    if (inScope.has(t.name)) return t.text;
+    if (!t.exported) return `// ${t.name}: not in scope (not exported by ${t.rel}); don't name it\n${t.text}`;
+    let spec = posix.relative(posix.dirname(r.file), t.rel);
+    if (!spec.startsWith(".")) spec = `./${spec}`;
+    r.typeImports.set(t.name, spec);
+    return `// ${t.name}: not in scope; the compiler adds import type { ${t.name} } from "${spec}" if you use it\n${t.text}`;
+  });
   if (types.length) sections.push(["Types (verbatim)", types.join("\n\n")]);
+  if (sameFileLines.length) sections.push([`Already in ${r.file} (call these, don't re-implement them)`, sameFileLines.join("\n")]);
   if (helperLines.length) sections.push(["Helpers you may call", helperLines.join("\n\n")]);
   sections.push(["Intent", s.intent || "(none)"]);
   if (r.kind === "function") {
     sections.push(["Effects allowed", s.effects.join(", ") || "none"]);
     sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
     if (s.examples.length)
-      sections.push(["Examples (deep strict equality; {\"$fake\": name} is a test double for that parameter)", s.examples.map((e) => canonicalJson(e)).join("\n")]);
+      sections.push(["Examples (deep equality; numbers match within 1e-9 relative and -0 equals 0 unless \"exact\"; the strings \"$NaN\", \"$Infinity\", \"$-Infinity\", \"$undefined\" stand for those values; {\"$fake\": name} is a test double for that parameter)", s.examples.map((e) => canonicalJson(e)).join("\n")]);
   } else {
     sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
     sections.push(["Enclosing function (your block is at <<<HERE>>>)", enclosingSource(p, r)]);
@@ -595,7 +639,7 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   const budget = (backend.maxContextTokens - (backend.outputReserveTokens ?? 2048)) * 3.5; // ~3.5 chars/token
   const render = () => sections.map(([h, b]) => `## ${h}\n${b}`).join("\n\n");
   let text = render();
-  for (const optional of [`Full file ${r.file}`, "Helpers you may call", "Imports already in the file"]) {
+  for (const optional of [`Full file ${r.file}`, "Helpers you may call", `Already in ${r.file} (call these, don't re-implement them)`, "Imports already in the file"]) {
     if (text.length <= budget) break;
     const i = sections.findIndex(([h]) => h === optional);
     if (i >= 0) sections.splice(i, 1);
@@ -654,8 +698,32 @@ export function plan(p: Project, req: CompileRequest, diagnostics: Diagnostic[])
     const r = p.regions.find((x) => x.id === id)!;
     if (r.kind === "block" && (p.specs.get(r.root)?.examples.length ?? 0) === 0) diagnostics.push(err("OARC-W041", { id }));
     else if (r.kind === "block") diagnostics.push(err("OARC-W040", { id }));
+    else {
+      const thin = thinExamples(r.spec.examples);
+      if (thin) diagnostics.push(err("OARC-W044", { id, detail: thin }));
+    }
   }
   return targets;
+}
+
+/** Any value inside `v` that is an edge case: "", [], {}, 0, a negative number, null, or a NaN/Infinity/undefined token. */
+const hasEdge = (v: Json): boolean =>
+  v === "" || v === 0 || v === null || (typeof v === "number" && v < 0) || (typeof v === "string" && /^\$(NaN|-?Infinity|undefined)$/.test(v)) ||
+  (Array.isArray(v) ? v.length === 0 || v.some(hasEdge) : typeof v === "object" && ("$fake" in v ? false : Object.keys(v).length === 0 || Object.values(v).some(hasEdge)));
+
+/** OARC-W044 detail when a function region's examples are thin: fewer than 3 (`examples:<n>`), or none with an edge-case
+ *  argument (`no-edge-case`). ponytail: a syntactic heuristic on the args; a boundary like 5 in [1, 5] goes unnoticed. */
+export function thinExamples(examples: Json[]): string | null {
+  if (examples.length < 3) return `examples:${examples.length}`;
+  return examples.some((e) => hasEdge(((e as { args?: Json }).args ?? []) as Json)) ? null : "no-edge-case";
+}
+
+/** What graph, inspect and watch show: a compiler-owned region whose spec (or, when known, fingerprint) no longer matches
+ *  the manifest is "stale". Its body was verified against an older spec. Display only: ownership is unchanged. */
+export function displayState(p: Project, r: RegionInfo): RegionState | "stale" {
+  const m = p.manifest.regions[r.id];
+  if (r.state !== "compiler" || !m) return r.state;
+  return m.specHash !== r.specHash || (r.fingerprint !== "" && m.fingerprint !== r.fingerprint) ? "stale" : r.state;
 }
 
 // ───────────────────────────── GENERATE ─────────────────────────────
@@ -719,8 +787,13 @@ export function staticCheck(body: string, effects: string[], fileBound: Set<stri
       const parent = n.parent;
       const isPropName = (ts.isPropertyAccessExpression(parent) && parent.name === n) || (ts.isPropertyAssignment(parent) && parent.name === n);
       if (!isPropName) {
-        if (forbidden.has(n.text)) out.push({ diag: err("OARC-E073", { detail: n.text }), message: `'${n.text}' is forbidden in regions` });
-        const need = gated[n.text];
+        if (forbidden.has(n.text))
+          out.push({ diag: err("OARC-E073", { detail: n.text }), message: `'${n.text}' is forbidden in regions${n.text === "require" ? ": put the module in \"imports\" instead (names the file already imports are already in scope)" : ""}` });
+        // Date.parse/Date.UTC, new Date(value) and the Date type are pure; only the current time needs 'clock'.
+        const pureDate = n.text === "Date" && (ts.isTypeReferenceNode(parent) ||
+          (ts.isPropertyAccessExpression(parent) && parent.expression === n && ["parse", "UTC"].includes(parent.name.text)) ||
+          (ts.isNewExpression(parent) && parent.expression === n && (parent.arguments?.length ?? 0) > 0));
+        const need = pureDate ? undefined : gated[n.text];
         if (need && !effects.includes(need)) out.push({ diag: err("OARC-E074", { detail: n.text }), message: `'${n.text}' requires effect '${need}'` });
         if (n.text === "Math" && ts.isPropertyAccessExpression(parent) && parent.name.text === "random" && !effects.includes("random"))
           out.push({ diag: err("OARC-E074", { detail: "Math.random" }), message: "Math.random requires effect 'random'" });
@@ -768,7 +841,7 @@ export function guardSplice(before: string, after: string, id: string): string |
   };
   const o1 = outside(before), o2 = outside(after);
   if (!o1 || !o2) return `OARC-E097 markers of ${id} changed`;
-  const isImport = (l: string) => /^import (type )?\{[^}]*\} from "[^"]+";$/.test(l);
+  const isImport = (l: string) => /^import (type )?(\{[^}]*\}|[A-Za-z_$][\w$]*(, \{[^}]*\})?) from "[^"]+";$/.test(l);
   const remaining = [...o2];
   for (let i = 0, j = 0; j < remaining.length; ) {
     if (i < o1.length && remaining[j] === o1[i]) {
@@ -817,7 +890,7 @@ function regionBodyLines(r: RegionInfo, body: string): string[] {
   ];
 }
 
-function mergeImports(text: string, imports: { from: string; names: string[] }[], typeOnly: (from: string, name: string) => boolean): string {
+function mergeImports(text: string, imports: ImportDecl[], typeOnly: (from: string, name: string) => boolean): string {
   const sf = ts.createSourceFile("m.ts", text, ts.ScriptTarget.Latest, true);
   const have = new Set<string>();
   for (const d of sf.statements.filter(ts.isImportDeclaration)) {
@@ -829,12 +902,14 @@ function mergeImports(text: string, imports: { from: string; names: string[] }[]
   const add: string[] = [];
   for (const imp of imports) {
     const names = imp.names.filter((n) => !have.has(n));
-    if (!names.length) continue;
+    const def = imp.default && !have.has(imp.default) ? imp.default : undefined;
+    if (!names.length && !def) continue;
     const values = names.filter((n) => !typeOnly(imp.from, n));
     const types = names.filter((n) => typeOnly(imp.from, n));
-    if (values.length) add.push(`import { ${values.join(", ")} } from "${imp.from}";`);
+    if (def) add.push(`import ${def}${values.length ? `, { ${values.join(", ")} }` : ""} from "${imp.from}";`);
+    else if (values.length) add.push(`import { ${values.join(", ")} } from "${imp.from}";`);
     if (types.length) add.push(`import type { ${types.join(", ")} } from "${imp.from}";`);
-    names.forEach((n) => have.add(n));
+    [...names, ...(def ? [def] : [])].forEach((n) => have.add(n));
   }
   if (!add.length) return text;
   const imports_ = sf.statements.filter(ts.isImportDeclaration);
@@ -845,7 +920,43 @@ function mergeImports(text: string, imports: { from: string; names: string[] }[]
 }
 
 // cannot find name/property/export, or the wrong import form for a module (TS2595/TS1259/TS2497): a context problem
-const TS_MISSING_CONTEXT = new Set([2304, 2305, 2339, 2551, 2552, 2724, 2595, 1259, 2497]);
+const TS_MISSING_CONTEXT = new Set([2304, 2305, 2339, 2551, 2552, 2724, 2595, 2614, 1259, 2497]);
+
+/** model.parseOutput predates `default` on import items and rejects unknown keys: take `default` out first (null = absent). */
+function splitDefaults(raw: string): { raw: string; defaults: Map<number, string> } {
+  const defaults = new Map<number, string>();
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return { raw, defaults };
+  }
+  const imports = (v as { imports?: unknown } | null)?.imports;
+  if (!Array.isArray(imports) || !imports.some((it) => typeof it === "object" && it !== null && "default" in it)) return { raw, defaults };
+  imports.forEach((it: { default?: unknown; names?: unknown }, i) => {
+    if (typeof it !== "object" || it === null || !("default" in it)) return;
+    if (typeof it.default === "string" && it.default) defaults.set(i, it.default);
+    delete it.default;
+    it.names ??= [];
+  });
+  return { raw: JSON.stringify(v), defaults };
+}
+
+export const ATTEMPTS_KEPT = 20;
+/** Failed attempts go to .openarc/attempts/<id>/<n>.json (n counts up across runs; the last ATTEMPTS_KEPT stay). */
+async function saveAttempt(ports: Ports, id: string, record: { [k: string]: Json }): Promise<void> {
+  const dir = `.openarc/attempts/${id}`;
+  const ns = (await ports.fs.list(dir)).map((f) => Number.parseInt(f, 10)).filter(Number.isFinite).sort((a, b) => a - b);
+  const n = (ns.at(-1) ?? 0) + 1;
+  await ports.fs.write(`${dir}/${n}.json`, JSON.stringify({ n, at: ports.now(), ...record }, null, 2) + "\n");
+  for (const old of ns.slice(0, Math.max(0, ns.length + 1 - ATTEMPTS_KEPT))) await ports.fs.remove(`${dir}/${old}.json`);
+}
+
+/** Sampling on a retry whose prompt is byte-identical to the previous attempt's: a deterministic resend can only
+ *  repeat the same body, so the n-th identical repeat raises the temperature (0.4, then 0.7) and moves the seed. */
+export function retrySampling(b: BackendConfig, attempt: number, repeats: number): { temperature: number; seed: number } | null {
+  return repeats === 0 ? null : { temperature: repeats === 1 ? 0.4 : 0.7, seed: (b.seed ?? 1) + attempt - 1 };
+}
 
 export async function generate(ports: Ports, req: CompileRequest, p: Project, id: string, diagnostics: Diagnostic[]): Promise<{ candidate: Candidate | null; modelCalls: number }> {
   const r = p.regions.find((x) => x.id === id)!;
@@ -854,22 +965,31 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   let stage: 0 | 1 = 0;
   let modelCalls = 0;
   let previous: { body: string; problems: string[] } | null = null;
+  let lastPrompt: string | null = null;
+  let repeats = 0;
   const cachePath = `.openarc/cache/${r.fingerprint.replace("sha256:", "")}.json`;
   const cached = await ports.fs.read(cachePath);
+  // A compiler-owned region that fails keeps its old body, which may not satisfy the current spec: say so (display: stale).
+  const giveUp = () => {
+    if (r.state === "compiler") diagnostics.push(err("OARC-W043", { id }));
+    return { candidate: null, modelCalls };
+  };
   // The backend died mid-run (e.g. Ollama OOM-killed): after 3 consecutive E080s, stop calling it for the rest of the run.
-  if (p.e080Streak >= 3) return { candidate: null, modelCalls };
+  if (p.e080Streak >= 3) return giveUp();
   const backendDown = () => {
     if (++p.e080Streak === 3) diagnostics.push(err("OARC-E080", { detail: "stopped:3-consecutive" }));
-    return { candidate: null, modelCalls };
+    return giveUp();
   };
 
   for (let attempt = 1; attempt <= c.maxAttempts; attempt++) {
     const backend = backendFor(p, id, stage);
     const at: Attempt = { backend, level };
     let body: string;
-    let imports: { from: string; names: string[] }[];
+    let imports: ImportDecl[];
+    let sampling: { temperature: number; seed: number } | null = null;
+    let promptHash: string | null = null;
     if (attempt === 1 && cached) {
-      ({ body, imports } = JSON.parse(cached) as { body: string; imports: { from: string; names: string[] }[] });
+      ({ body, imports, sampling = null } = JSON.parse(cached) as { body: string; imports: ImportDecl[]; sampling?: { temperature: number; seed: number } });
       ports.log(`  ${id}: cache hit`);
     } else {
       const digest = await modelDigest(ports, p, backend, diagnostics);
@@ -880,13 +1000,17 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
         repair: previous ? `## Your previous attempt failed\nPrevious body:\n${previous.body}\n\nProblems:\n${previous.problems.join("\n")}\n\nFix these problems.` : "",
       });
       if (!rendered.ok) throw new Error(`prompt template is missing ${rendered.missing.join(", ")}`);
+      repeats = rendered.text === lastPrompt ? repeats + 1 : 0;
+      lastPrompt = rendered.text;
+      promptHash = sha256Tagged(rendered.text);
+      sampling = retrySampling(backend, attempt, repeats);
       const t0 = Date.now();
       let raw: string;
       try {
         raw = await complete(
           ports,
-          backend,
-          "You are a compiler backend. You output JSON only: {\"body\": string, \"imports\": [{\"from\": string, \"names\": string[]}]}. body is TypeScript statements only, with no markdown.",
+          sampling ? { ...backend, ...sampling } : backend,
+          "You are a compiler backend. You output JSON only: {\"body\": string, \"imports\": [{\"from\": string, \"names\": string[], \"default\"?: string}]}. body is TypeScript statements only, with no markdown.",
           rendered.text,
         );
       } catch (e) {
@@ -895,24 +1019,30 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       }
       p.e080Streak = 0;
       modelCalls++;
-      const parsed = parseOutput(raw);
-      ports.log(`  ${id}: attempt ${attempt} via ${backend.name} (${backend.model}), context L${level} ${context.length} chars, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+      const split = splitDefaults(raw);
+      const parsed = parseOutput(split.raw);
+      const varied = sampling ? ` (identical prompt: temperature ${sampling.temperature}, seed ${sampling.seed})` : "";
+      ports.log(`  ${id}: attempt ${attempt} via ${backend.name} (${backend.model}), context L${level} ${context.length} chars${varied}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
       if (!parsed.ok) {
-        previous = { body: raw.slice(0, 2000), problems: [`output was not valid: ${parsed.diagnostic.detail}`] };
+        const problem = `output was not valid: ${parsed.diagnostic.detail}`;
+        ports.log(`  ${id}: ✗ ${problem} (${raw.length} chars${raw.length ? `, ends ${JSON.stringify(raw.slice(-40))}` : ""})`);
+        previous = { body: raw.slice(0, 2000), problems: [problem] };
+        await saveAttempt(ports, id, { attempt, backend: backend.name, model: backend.model, contextLevel: level, promptHash, sampling, raw, problems: [problem] });
         continue;
       }
       body = parsed.body;
-      imports = parsed.imports;
+      imports = parsed.imports.map((im, i) => (split.defaults.has(i) ? { ...im, default: split.defaults.get(i)! } : im));
     }
     body = unwrapBody(body, r.kind);
     const result = await verify(ports, req, p, r, body, imports);
     if (result.ok) {
-      if (!(attempt === 1 && cached)) await ports.fs.write(cachePath, JSON.stringify({ body, imports }));
-      p.provenance.set(id, { source: "generated", backend: at.backend.name, model: at.backend.model, contextLevel: at.level, attempts: attempt, verifiedBy: result.verifiedBy });
+      if (!(attempt === 1 && cached)) await ports.fs.write(cachePath, JSON.stringify({ body, imports, ...(sampling ? { sampling } : {}) }));
+      p.provenance.set(id, { source: "generated", backend: at.backend.name, model: at.backend.model, contextLevel: at.level, attempts: attempt, verifiedBy: result.verifiedBy, ...(sampling ? { sampling } : {}) });
       ports.log(`  ${id}: ✓ ${result.verifiedBy.join(", ")}`);
       return { candidate: { id, body, imports, verifiedBy: result.verifiedBy }, modelCalls };
     }
     ports.log(`  ${id}: ✗ ${result.problems[0]?.slice(0, 160)}`);
+    await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, contextLevel: level, promptHash, sampling, body, imports: imports as unknown as Json, problems: result.problems });
     previous = { body, problems: result.problems };
     // Escalation by failure type: a missing name means a context problem, so expand; otherwise repair at the same level.
     // The last attempt switches to the fallback backend when one is configured.
@@ -920,7 +1050,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     if (attempt === c.maxAttempts - 1 && c.fallbackBackend) stage = 1;
   }
   diagnostics.push(err("OARC-E082", { id, detail: previous?.problems[0]?.slice(0, 200) }));
-  return { candidate: null, modelCalls };
+  return giveUp();
 }
 
 interface Verified {
@@ -930,13 +1060,23 @@ interface Verified {
   missingContext: boolean;
 }
 
-async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionInfo, body: string, imports: { from: string; names: string[] }[]): Promise<Verified> {
+/** Specifiers a file imports from. */
+const importedSpecifiers = (text: string) =>
+  new Set(ts.createSourceFile("i.ts", text, ts.ScriptTarget.Latest, true).statements.filter(ts.isImportDeclaration).map((d) => (d.moduleSpecifier as ts.StringLiteral).text));
+
+async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionInfo, body: string, imports: ImportDecl[]): Promise<Verified> {
   const fail = (problems: string[], missingContext = false): Verified => ({ ok: false, problems, verifiedBy: [], missingContext });
-  // static
-  const allowed = new Set([...r.spec.deps, "openarc"]);
-  const bad = imports.filter((i) => !allowed.has(i.from));
-  if (bad.length) return fail(bad.map((i) => `OARC-E071 import "${i.from}" is not in deps (allowed: ${[...allowed].join(", ")})`));
-  const st = staticCheck(body, r.spec.effects, fileBindings(p.accepted.get(r.file) ?? p.files.get(r.file)!));
+  const base = p.accepted.get(r.file) ?? p.files.get(r.file)!;
+  // static. Allowed (§7.2, matching RULES): deps, openarc, modules the file already imports, and type-only imports of
+  // closure types the context showed as "not in scope" (from their own file).
+  const allowed = new Set([...r.spec.deps, "openarc", ...importedSpecifiers(base)]);
+  const shownType = (i: ImportDecl) => !i.default && i.names.length > 0 && i.names.every((n) => r.typeImports.get(n) === i.from);
+  const bad = imports.filter((i) => !allowed.has(i.from) && !shownType(i));
+  if (bad.length) return fail(bad.map((i) => `OARC-E071 import "${i.from}" is not allowed (allowed: ${[...allowed].join(", ")}, or a type shown as not in scope from its own file)`));
+  // Closure types the body names but the file doesn't import: the compiler adds the type-only import (§8.8).
+  const autoTypes = [...r.typeImports].filter(([name]) => new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}(?![\\w$])`).test(body));
+  imports = [...imports, ...autoTypes.map(([name, from]) => ({ from, names: [name] }))];
+  const st = staticCheck(body, r.spec.effects, fileBindings(base));
   if (st.length) return fail(st.map((s) => `${s.diag.code} ${s.message}`));
   if (r.kind === "block") {
     const rs = checkRestrictions(body, p.specs.get(r.root)?.isAsync ?? false, []);
@@ -945,8 +1085,8 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   const escape = guardBody(body);
   if (escape) return fail([escape]);
   // splice into the in-memory copy (with this run's accepted candidates) and type-check
-  const base = p.accepted.get(r.file) ?? p.files.get(r.file)!;
   const typeOnly = (from: string, name: string) => {
+    if (r.typeImports.get(name) === from) return true;
     const rel = resolveLocal(p, r.file, from);
     const t = rel ? p.files.get(rel) ?? "" : "";
     return new RegExp(`export\\s+(type|interface)\\s+${name}\\b`).test(t);
@@ -977,13 +1117,17 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
     const real = res.failed.filter((o) => !pendingSiblings(o));
     if (res.error) return fail([res.error]);
     if (real.length || (!res.complete && r.kind === "function"))
-      return fail(real.map((o) => `OARC-E090 example "${o.name}" failed: got ${JSON.stringify(o.actual)}; expected ${JSON.stringify(exampleExpected(rootSpec, o.name))}`).concat(res.complete ? [] : ["OARC-E090 harness output incomplete (process exited early?)"]));
+      return fail(real.map((o) => `OARC-E090 example "${o.name}" failed: got ${showValue(o.actual)}; expected ${showValue(exampleExpected(rootSpec, o.name))}`).concat(res.complete ? [] : ["OARC-E090 harness output incomplete (process exited early?)"]));
     verifiedBy.push(`examples:${res.passed}/${rootSpec.examples.length}${res.failed.length ? ` (${res.failed.length} inconclusive: sibling blocks pending)` : ""}`);
     if (r.kind === "block") verifiedBy.push(`via:${r.root}`);
   }
   p.accepted.set(r.file, text);
   return { ok: true, problems: [], verifiedBy, missingContext: false };
 }
+
+/** A harness value or example literal as text, tokens unquoted: [-0,1,NaN] (core/harness.ts showValue). */
+const showValue = (v: Json | undefined): string =>
+  v === undefined ? "undefined" : JSON.stringify(v).replace(/"\$(-0|NaN|-?Infinity|undefined)"/g, "$1");
 
 function exampleExpected(spec: SpecInfo, name: string): Json {
   const exs = spec.examples as { name?: string; expected?: Json; fakesAfter?: Json }[];
@@ -994,7 +1138,7 @@ function exampleExpected(spec: SpecInfo, name: string): Json {
 
 // ───────────────────────────── sandbox ─────────────────────────────
 
-async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId: string, overlay: Map<string, string>): Promise<{ complete: boolean; passed: number; failed: { name: string; actual?: Json }[]; error?: string }> {
+async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId: string, overlay: Map<string, string>, oracle?: { module: string; export: string; inputs: Json[][] }): Promise<{ complete: boolean; passed: number; failed: { name: string; actual?: Json }[]; error?: string }> {
   const dir = p.sandboxDir ?? (p.sandboxDir = `.openarc/sandbox/${Date.now().toString(36)}`);
   if ((await ports.fs.read(`${dir}/package.json`)) === null) {
     for (const f of ["package.json", "tsconfig.json", ".openarc/harness.mjs", ...SOURCE_DIRS.map((d) => `${d}/package.json`)]) {
@@ -1007,7 +1151,8 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
   for (const [rel, text] of overlay) await ports.fs.write(`${dir}/${rel}`, text);
   const spec = p.specs.get(rootId)!;
   // Examples are passed from the compiler's STATIC extraction: a body that mutates spec.examples at runtime cannot weaken its own tests.
-  await ports.fs.write(`${dir}/.openarc/harness-plan.json`, JSON.stringify({ [rootId]: { module: spec.file, symbol: spec.symbol, specExport: spec.exportName, examples: spec.examples } }));
+  const tolerance = typeof spec.literal.tolerance === "number" ? { tolerance: spec.literal.tolerance } : {};
+  await ports.fs.write(`${dir}/.openarc/harness-plan.json`, JSON.stringify({ [rootId]: { module: spec.file, symbol: spec.symbol, specExport: spec.exportName, examples: spec.examples, ...tolerance, ...(oracle ? { oracle } : {}) } }));
   const sb = p.config.sandbox ?? {};
   const argv = buildArgv({
     stageDir: `${p.root}/${dir}`, nodeBin: req.sandbox.nodeBin, nodePrefix: req.sandbox.nodePrefix,
@@ -1292,3 +1437,110 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
   res.files = [{ target: rel, text: out }, { target: ".openarc/manifest.json", text: JSON.stringify(manifest, null, 2) + "\n" }];
   return res;
 }
+
+// ───────────────────────────── CHECK --oracle ─────────────────────────────
+// `openarc check <id> --oracle <module>#<export>`: differential testing against an existing implementation (the
+// "port" use case). Inputs are the region's example args plus deterministic variations of them; both functions run on
+// each input in the sandbox (core/harness.ts runOracle) and every disagreement is reported.
+
+/** mulberry32: a tiny deterministic PRNG, so a check is reproducible from its seed. */
+function prng(seed: number): () => number {
+  let x = seed >>> 0;
+  return () => {
+    x = (x + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(x ^ (x >>> 15), x | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Only numbers, strings, booleans and arrays/objects of those can be varied (no null, no fakes). */
+const variable = (v: Json): boolean =>
+  v !== null && (typeof v !== "object" || (Array.isArray(v) ? v.every(variable) : !("$fake" in v) && Object.values(v).every(variable)));
+
+/** The examples' argument lists (those with only supported values) followed by seeded variations, deduplicated, at most `count`.
+ *  ponytail: shape-preserving mutation, no type-directed generation. A top-level array arg changes length only when the
+ *  examples show different lengths there (so tuples like [x, y] stay tuples); strings are sometimes swapped for another
+ *  example's string at the same position (enum-like values), otherwise edited. */
+export function oracleInputs(examples: Json[], count = 60, seed = 1): Json[][] {
+  const rand = prng(seed);
+  const pick = <T>(xs: T[]): T => xs[Math.floor(rand() * xs.length)]!;
+  const bases = examples.map((e) => (e as { args?: Json[] }).args ?? []).filter((a) => Array.isArray(a) && a.every(variable));
+  if (!bases.length) return [];
+  const strings = (i: number) => bases.map((a) => a[i]).filter((v): v is string => typeof v === "string");
+  const lengths = (i: number) => new Set(bases.map((a) => a[i]).filter(Array.isArray).map((a) => a.length));
+  const mutate = (v: Json, pool: string[], resize: boolean): Json => {
+    if (typeof v === "boolean") return rand() < 0.5 ? !v : v;
+    if (typeof v === "number") {
+      const int = Number.isInteger(v);
+      const r = (rand() * 2 - 1) * Math.max(10, Math.abs(v) * 2);
+      return pick([0, -v, v + (int ? pick([-1, 1]) : rand() - 0.5), int ? Math.round(r) : r, v]);
+    }
+    if (typeof v === "string") {
+      if (v.startsWith("$")) return v; // a value token
+      if (pool.length > 1 && rand() < 0.4) return pick(pool);
+      const i = Math.floor(rand() * (v.length + 1));
+      const ch = pick([...new Set([...v, "a", "Z", " ", "0", "-", "é", "/"])]);
+      return pick([v.slice(0, i) + ch + v.slice(i), v.slice(0, i) + v.slice(i + 1), "", v.toUpperCase(), v + v]);
+    }
+    if (Array.isArray(v)) {
+      let out = v.map((x) => (rand() < 0.5 ? mutate(x, [], false) : x));
+      if (resize && out.length && rand() < 0.3) out.splice(Math.floor(rand() * out.length), 1);
+      if (resize && v.length && rand() < 0.3) out.push(mutate(pick(v), [], false));
+      if (resize && rand() < 0.05) out = [];
+      return out;
+    }
+    if (v === null) return v;
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, rand() < 0.5 ? mutate(x, [], false) : x]));
+  };
+  const seen = new Set<string>();
+  const out: Json[][] = [];
+  const add = (a: Json[]) => {
+    const key = canonicalJson(a);
+    if (!seen.has(key) && out.length < count) seen.add(key), out.push(a);
+  };
+  bases.forEach(add);
+  for (let i = 0; out.length < count && i < count * 20; i++) {
+    const base = bases[i % bases.length]!;
+    add(base.map((v, k) => (rand() < 0.6 ? mutate(v, strings(k), lengths(k).size > 1) : v)));
+  }
+  return out;
+}
+
+export interface OracleReport {
+  inputs: number;
+  agreed: number;
+  disagreements: { name: string; actual?: Json }[]; // actual: {args, got, oracle}
+  error?: string;
+}
+
+/** Run region `id` and `<module>#<export>` on the same inputs in the sandbox. `p` must be analyzed (offline is enough). */
+export async function oracleCheck(ports: Ports, req: CompileRequest, p: Project, id: string, oracle: string, opts: { count?: number; seed?: number } = {}): Promise<OracleReport> {
+  const fail = (error: string): OracleReport => ({ inputs: 0, agreed: 0, disagreements: [], error });
+  const r = p.regions.find((x) => x.id === id);
+  if (!r || r.kind !== "function") return fail(`no function region ${id}`);
+  if (r.pending) return fail(`${id} is not implemented yet (compile it first)`);
+  const m = /^(.+)#([A-Za-z_$][\w$]*)$/.exec(oracle);
+  if (!m) return fail(`--oracle must be <module>#<export>, e.g. legacy/core.js#fitLine`);
+  const module = posix.normalize(m[1]!);
+  if (module.startsWith("/") || module.startsWith("..")) return fail(`the oracle module must be inside the project (the sandbox only sees the project): ${m[1]}`);
+  const text = await ports.fs.read(module);
+  if (text === null) return fail(`cannot read ${module}`);
+  const inputs = oracleInputs(r.spec.examples, opts.count ?? 60, opts.seed ?? 1);
+  if (!inputs.length) return fail("no example has only number/string/boolean/array/object arguments to vary");
+  const overlay = new Map(p.files).set(module, text);
+  try {
+    const res = await runSandbox(ports, req, p, id, overlay, { module, export: m[2]!, inputs });
+    if (res.error) return fail(res.error);
+    if (!res.complete) return { inputs: inputs.length, agreed: res.passed, disagreements: res.failed, error: "harness output incomplete (process exited early?)" };
+    return { inputs: inputs.length, agreed: res.passed, disagreements: res.failed };
+  } finally {
+    if (p.sandboxDir) await ports.fs.remove(p.sandboxDir);
+  }
+}
+
+/** One line per disagreement, values printed faithfully. */
+export const showDisagreement = (d: { name: string; actual?: Json }): string => {
+  const a = (d.actual ?? {}) as { args?: Json; got?: Json; oracle?: Json };
+  return `${d.name} args ${showValue(a.args)}: got ${showValue(a.got)}; oracle ${showValue(a.oracle)}`;
+};
