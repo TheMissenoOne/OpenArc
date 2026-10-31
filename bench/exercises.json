@@ -1,0 +1,86 @@
+{
+  "_note": "Signatures for ts-bench v1 exercises. Exercism stubs mostly say `unknown` or have no parameters, so a stub-derived F is useless as a contract. Each `type` below was written by hand from the call sites in the exercise's test file (argument and expectation shapes only, never a solution). OpenArc (A/B/C) and the baseline (D) get exactly the same typed signatures. `types` holds extra project-local types the signature needs.",
+  "functions": {
+    "acronym": {
+      "fns": {
+        "parse": "(phrase: string) => string"
+      }
+    },
+    "binary-search": {
+      "fns": {
+        "find": "(haystack: number[], needle: number) => number"
+      }
+    },
+    "diamond": {
+      "fns": {
+        "makeDiamond": "(character: string) => string"
+      }
+    },
+    "flatten-array": {
+      "types": "export interface Nested extends Array<number | null | undefined | Nested> {}",
+      "fns": {
+        "flatten": "(input: Nested) => number[]"
+      },
+      "_note": "interface form on purpose: the equivalent `type Nested = Array<number | null | undefined | Nested>` makes open-arc 0.6.3's Example<F> fail with TS2589 on the spec itself (pilot run used it; see results/2026-10-31-untuned-ollama-pilot/summary.md)"
+    },
+    "food-chain": {
+      "fns": {
+        "verse": "(n: number) => string",
+        "verses": "(start: number, end: number) => string"
+      }
+    },
+    "house": {
+      "fns": {
+        "verse": "(n: number) => string[]",
+        "verses": "(start: number, end: number) => string[]"
+      }
+    },
+    "rectangles": {
+      "fns": {
+        "count": "(rows: string[]) => number"
+      }
+    },
+    "relative-distance": {
+      "types": "export type FamilyTree = Record<string, string[]>;",
+      "fns": {
+        "degreesOfSeparation": "(familyTree: FamilyTree, personA: string, personB: string) => number"
+      }
+    },
+    "spiral-matrix": {
+      "fns": {
+        "ofSize": "(size: number) => number[][]"
+      }
+    },
+    "transpose": {
+      "fns": {
+        "transpose": "(rows: string[]) => string[]"
+      }
+    },
+    "variable-length-quantity": {
+      "fns": {
+        "encode": "(numbers: number[]) => number[]",
+        "decode": "(bytes: number[]) => number[]"
+      }
+    },
+    "wordy": {
+      "fns": {
+        "answer": "(question: string) => number"
+      }
+    }
+  },
+  "skipped": {
+    "anagram": "class Anagram(input).matches(...words): constructor state + method; mappable only through a hand-written wrapper class, which the baseline would not get",
+    "bank-account": "stateful class (open/close/deposit/withdraw/balance) with a custom error type; no function region fits",
+    "binary-search-tree": "recursive mutable class with getters; no function region fits",
+    "bowling": "stateful class (roll/score) whose behaviour depends on call history; examples are single calls with JSON args",
+    "complex-numbers": "value class with getters and methods returning new instances; examples cannot construct class instances",
+    "connect": "class Board(board).winner(); mappable only through a wrapper class",
+    "crypto-square": "class Crypto(text).ciphertext getter; mappable only through a wrapper class",
+    "dnd-character": "static methods, one uses randomness (effect 'random'); tests are statistical",
+    "pascals-triangle": "class Triangle(n) with rows/lastRow getters; mappable only through a wrapper class",
+    "rational-numbers": "value class; tests chain methods on instances",
+    "react": "reactive closures (createInput/createComputed/createCallback) with shared module state; examples cannot express subscriptions",
+    "robot-name": "stateful class with global name registry and randomness; tests use beforeEach/afterEach",
+    "two-bucket": "class with constructor parameters and getters; mappable only through a wrapper class"
+  }
+}
