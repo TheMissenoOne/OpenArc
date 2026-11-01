@@ -36,8 +36,10 @@ arc.test(Peer, "forwards once, with one hop less", async (P, expect, fakes) => {
   const net = fakes.of<Transport>();
   const a = new P("a", ["d", "b", "c"], net);
   expect(await a.receive(null, { id: "g1", origin: "a", ttl: 2, body: "hi" })).toBe(true);
+  expect(a.delivered).toEqual(["hi"]);
   expect(await a.receive("b", { id: "g1", origin: "a", ttl: 2, body: "hi" })).toBe(false);
-  expect(fakes.snapshot(net)).toEqual({ sent: [["a", "b", "g1", 1], ["a", "c", "g1", 1]] });
+  expect(a.delivered).toEqual(["hi"]);
+  expect(fakes.snapshot(net)).toEqual({ sent: [["a", "b", "g1", 1, "hi"], ["a", "c", "g1", 1, "hi"]] });
 });
 
 arc.test(Peer, "a last hop is delivered, not forwarded", async (P, expect, fakes) => {

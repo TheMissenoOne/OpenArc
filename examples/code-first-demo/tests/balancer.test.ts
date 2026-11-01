@@ -34,6 +34,7 @@ arc.test(LeastConnections, "picks the minimum, then counts it", (LC, expect) => 
 
 arc.test(ConsistentHash, "a key sticks to its backend; removing one moves only its keys", (CH, expect) => {
   const before = new CH(three);
+  expect(["user-0", "user-4", "user-10"].map((k) => before.pick(k))).toEqual(["b", "a", "c"]);
   const after = new CH(three);
   after.markDown("b");
   for (let i = 0; i < 100; i++) {

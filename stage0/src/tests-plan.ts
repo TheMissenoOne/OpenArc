@@ -25,6 +25,7 @@ export interface TestInfo {
   source: string; // the statement as written
   assertions: Assertion[];
   fakes: string[]; // the tests/fakes/ name of each `fakes.of<T>()` call, in walk order
+  named: string[]; // the tests/fakes/ names `fakes.named("<name>")` calls use (preloaded with the others)
   consts: string[]; // module-level const statements of its file that it reads (shown with it)
 }
 export interface ConfigureInfo {
@@ -47,9 +48,11 @@ const testCall = (st: ts.Statement, sf: ts.SourceFile): { call: ts.CallExpressio
   const k = KINDS[st.expression.expression.getText(sf)];
   return k ? { call: st.expression, k } : null;
 };
-/** Files that may hold tests: src/ and tests/ (not fixtures or fakes). */
-export const testFile = (rel: string) => /\.tsx?$/.test(rel) && (rel.startsWith("src/") || (rel.startsWith("tests/") && !rel.startsWith("tests/fakes/") && !rel.startsWith("tests/fixtures/")));
+/** Files that may hold tests: src/ and tests/ (not fixtures, fakes, or tests/advisory/: model-written tests are never
+ *  authoritative, SPEC §9). */
+export const testFile = (rel: string) => /\.tsx?$/.test(rel) && (rel.startsWith("src/") || (rel.startsWith("tests/") && !/^tests\/(fakes|fixtures|advisory)\//.test(rel)));
 
+const isObject = (v: Json | undefined) => typeof v === "object" && v !== null && !Array.isArray(v);
 function staticJson(n: ts.Expression): Json | undefined {
   if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) return n.text;
   if (ts.isNumericLiteral(n)) return Number(n.text);
@@ -82,14 +85,16 @@ export function declOf(checker: ts.TypeChecker, e: ts.Expression): ts.Node | und
 }
 
 /** Walk a test body in a fixed order: each `expect(…)` call (the body's 2nd parameter) and each `fakes.of<T>(…)` call
- *  (its 3rd). The reader and the stage's rewriter both use it, so their indexes agree. */
-function walkBody({ call, k }: { call: ts.CallExpression; k: { kind: string } }, sf: ts.SourceFile, onExpect: (n: ts.CallExpression) => void, onFake: (n: ts.CallExpression) => void) {
+ *  (its 3rd; `fakes.named(…)` calls go to onNamed). The reader and the stage's rewriter both use it, so their indexes agree. */
+function walkBody({ call, k }: { call: ts.CallExpression; k: { kind: string } }, sf: ts.SourceFile, onExpect: (n: ts.CallExpression) => void, onFake: (n: ts.CallExpression) => void, onNamed?: (n: ts.CallExpression) => void) {
   const body = call.arguments[2] as ts.ArrowFunction | ts.FunctionExpression;
   const expectName = body.parameters[1]?.name.getText(sf);
   const fakesName = k.kind === "test" ? body.parameters[2]?.name.getText(sf) : undefined;
   const walk = (n: ts.Node): void => {
     if (ts.isCallExpression(n) && expectName && ts.isIdentifier(n.expression) && n.expression.text === expectName && n.arguments.length === 1) onExpect(n);
-    if (ts.isCallExpression(n) && fakesName && ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression) && n.expression.expression.text === fakesName && n.expression.name.text === "of") onFake(n);
+    if (ts.isCallExpression(n) && fakesName && ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression) && n.expression.expression.text === fakesName)
+      if (n.expression.name.text === "of") onFake(n);
+      else if (n.expression.name.text === "named") onNamed?.(n);
     n.forEachChild(walk);
   };
   walk(body.body);
@@ -116,6 +121,13 @@ export function readStatements(p: { root: string; files: Map<string, string>; pr
   for (const [rel, text] of [...p.files].filter(([f]) => testFile(f)).sort(([a], [b]) => (a < b ? -1 : 1))) {
     if (!/\barc\.(test|law|configure)\b/.test(text)) continue;
     const sf = p.program!.getSourceFile(`${p.root}/${rel}`)!;
+    // a test call anywhere but a top-level statement would register at run time without being planned
+    const nested = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && KINDS[n.expression.getText(sf)] && !(ts.isExpressionStatement(n.parent) && n.parent.parent === sf))
+        diagnostics.push(err("OARC-E010", { file: rel, line: sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1, detail: "test:not-top-level" }));
+      n.forEachChild(nested);
+    };
+    nested(sf);
     for (const st of sf.statements) {
       const line = sf.getLineAndCharacterOfPosition(st.getStart(sf)).line + 1;
       if (ts.isExpressionStatement(st) && ts.isCallExpression(st.expression) && st.expression.expression.getText(sf) === "arc.configure") {
@@ -129,14 +141,14 @@ export function readStatements(p: { root: string; files: Map<string, string>; pr
       if (!c) continue;
       const [target, name, body, opts] = c.call.arguments;
       const what = !target ? "target" : !name || !ts.isStringLiteral(name) ? "name" : !body || !(ts.isArrowFunction(body) || ts.isFunctionExpression(body)) ? "body"
-        : !(ts.isIdentifier(target) || ts.isPropertyAccessExpression(target)) ? "target" : opts && (c.k.kind !== "law" || staticJson(opts) === undefined) ? "options" : null;
+        : !(ts.isIdentifier(target) || ts.isPropertyAccessExpression(target)) ? "target" : opts && (c.k.kind !== "law" || !isObject(staticJson(opts))) ? "options" : null;
       if (what) {
         diagnostics.push(err("OARC-E010", { file: rel, line, detail: `test:${what}` }));
         continue;
       }
       const t: TestInfo = {
         file: rel, kind: c.k.kind, hidden: c.k.hidden, name: (name as ts.StringLiteral).text, target: target!.getText(sf), targetNode: target!,
-        regions: [], narrow: ts.isPropertyAccessExpression(target!) && /\.prototype\./.test(target!.getText(sf)), source: st.getText(sf), assertions: [], fakes: [], consts: [],
+        regions: [], narrow: ts.isPropertyAccessExpression(target!) && /\.prototype\./.test(target!.getText(sf)), source: st.getText(sf), assertions: [], fakes: [], named: [], consts: [],
       };
       walkBody(c, sf, (n) => {
         const chain = n.parent;
@@ -157,6 +169,11 @@ export function readStatements(p: { root: string; files: Map<string, string>; pr
         const hits = fakes.filter(([x]) => x === ty);
         if (hits.length !== 1) diagnostics.push(err("OARC-E010", { file: rel, line, detail: `fake:${checker.typeToString(ty)}${hits.length ? ":ambiguous" : ""}` }));
         else t.fakes.push(hits[0]![1]);
+      }, (n) => {
+        const name = n.arguments[0];
+        if (!name || !ts.isStringLiteral(name)) return void diagnostics.push(err("OARC-E010", { file: rel, line, detail: "fake:named-not-static" }));
+        if (!p.files.has(`tests/fakes/${name.text}.ts`)) return void diagnostics.push(err("OARC-E010", { file: rel, line, detail: `fake:named:${name.text}` }));
+        t.named.push(name.text);
       });
       // the test-file consts it reads, shown with it (`const three: Backend[] = …`)
       const consts = new Set<ts.Node>();
@@ -173,6 +190,22 @@ export function readStatements(p: { root: string; files: Map<string, string>; pr
     }
   }
   return { tests, configures };
+}
+
+/** tsc errors inside the statements of tests that run for a region, as OARC-E070 (detail `test:TS<code>`), one per test:
+ *  reported at ANALYZE, before any model call. The sandbox strips types, so a mistyped test would otherwise run. */
+export function testTypeErrors(program: ts.Program, tests: TestInfo[]): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  const bySf = new Map<ts.SourceFile, readonly ts.Diagnostic[]>();
+  for (const t of tests) {
+    if (!t.regions.length) continue;
+    const st = t.targetNode.parent.parent; // target → call → statement
+    const sf = st.getSourceFile(); // the program's own (readStatements read it from p.program)
+    if (!bySf.has(sf)) bySf.set(sf, [...program.getSyntacticDiagnostics(sf), ...program.getSemanticDiagnostics(sf)].filter((d) => d.category === ts.DiagnosticCategory.Error));
+    const d = bySf.get(sf)!.find((x) => x.start !== undefined && x.start >= st.getStart(sf) && x.start < st.end);
+    if (d) out.push(err("OARC-E070", { id: t.regions[0], file: t.file, line: sf.getLineAndCharacterOfPosition(d.start!).line + 1, detail: `test:TS${d.code}` }));
+  }
+  return out;
 }
 
 /** Which regions each test runs for (SPEC §8.10): the target is the region's function, its class, or a class its class
@@ -201,7 +234,7 @@ export function mapTests(tests: TestInfo[], specs: SpecInfo[], checker: ts.TypeC
 export function harnessTests(all: TestInfo[], ids: string[]): TestPlan | null {
   const run = all.flatMap((t, i) => (t.regions.some((r) => ids.includes(r)) ? [i] : []));
   if (!run.length) return null;
-  const fakes = [...new Set(run.flatMap((i) => all[i]!.fakes))];
+  const fakes = [...new Set(run.flatMap((i) => [...all[i]!.fakes, ...all[i]!.named]))];
   return { all: all.map((t) => ({ file: t.file, kind: t.kind, hidden: t.hidden, name: t.name })), run, ...(fakes.length ? { fakes } : {}) };
 }
 

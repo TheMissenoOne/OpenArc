@@ -166,14 +166,29 @@ export async function parse(ports: Ports, req: CompileRequest, diagnostics: Diag
       project.files.set(rel, project.crlf.has(rel) ? text.replaceAll("\r\n", "\n") : text);
     }
   // code-first: test files under tests/ (src/ is read already); never written, staged for the sandbox
-  for (const rel of await listTs(ports, "tests")) {
-    if (project.files.has(rel) || !testsPlan.testFile(rel)) continue;
-    const text = (await ports.fs.read(rel)) ?? "";
-    if (!/\barc\.(test|law|configure)\b/.test(text)) continue;
+  const load = (rel: string, text: string) => {
     project.disk.set(rel, text);
     if (isCrlf(text)) project.crlf.add(rel);
     project.files.set(rel, project.crlf.has(rel) ? text.replaceAll("\r\n", "\n") : text);
+  };
+  const testsDir = await listTs(ports, "tests");
+  for (const rel of testsDir) {
+    if (project.files.has(rel) || !testsPlan.testFile(rel)) continue;
+    const text = (await ports.fs.read(rel)) ?? "";
+    if (/\barc\.(test|law|configure)\b/.test(text)) load(rel, text);
   }
+  // ...and the tests/ modules they import, transitively (helpers without tests of their own), so the stage has them
+  const inTests = new Set(testsDir);
+  const queue = [...project.files].filter(([, t]) => /\barc\.(test|law)\b/.test(t)).map(([rel]) => rel);
+  for (let rel = queue.pop(); rel !== undefined; rel = queue.pop())
+    for (const { fileName } of ts.preProcessFile(project.files.get(rel)!, true, true).importedFiles) {
+      if (!fileName.startsWith(".")) continue;
+      const to = posix.normalize(posix.join(posix.dirname(rel), fileName));
+      const hit = [to, to.replace(/\.js$/, ".ts"), to.replace(/\.jsx$/, ".tsx"), `${to}.ts`, `${to}.tsx`, `${to}/index.ts`].find((f) => inTests.has(f));
+      if (!hit || project.files.has(hit)) continue;
+      load(hit, (await ports.fs.read(hit)) ?? "");
+      queue.push(hit);
+    }
   const ids: { id: string; file: string }[] = [];
   for (const [rel, text] of srcFiles(project)) {
     const { markers, diagnostics: d1 } = scanMarkers(text);
@@ -416,6 +431,7 @@ export async function analyze(ports: Ports, req: CompileRequest, p: Project, dia
   const checker = p.program.getTypeChecker();
   implicit.discover(p, checker, diagnostics); // code-first: specs, tests, arc.configure, layers
   diagnostics.push(...sketch.sketchTypeErrors(p.program, p.root, p.specs.values())); // palette: a sketch must type-check before any model call (§3.7)
+  diagnostics.push(...testsPlan.testTypeErrors(p.program, p.tests ?? [])); // code-first: so must a test that runs for a region
 
   for (const [rel, text] of srcFiles(p)) {
     const lines = linesOf(text);
@@ -795,7 +811,12 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
     sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
     sections.push(["Enclosing function (your block is at <<<HERE>>>)", enclosingSource(p, r)]);
   }
-  if (level >= 2 && !opts.stable) sections.push([`Full file ${r.file}`, p.files.get(r.file)!]); // ponytail: holds sibling bodies, so not in the fingerprint
+  if (level >= 2 && !opts.stable) { // ponytail: holds sibling bodies, so not in the fingerprint
+    // a hidden test in the region's own file stays out of the package here too (SPEC §8.5)
+    let full = p.files.get(r.file)!;
+    for (const t of p.tests ?? []) if (t.hidden && t.file === r.file) full = full.replace(t.source, "// (a hidden test, not shown)");
+    sections.push([`Full file ${r.file}`, full]);
+  }
   sections.push(["Rules", backend.outputFormat === "code" ? codeRules(RULES) : RULES]);
 
   // Budget: drop optional sections (from the end of the optional list) until the package fits.
@@ -935,7 +956,7 @@ export function unwrapBody(body: string, kind: "function" | "block", tsx = false
 }
 
 /** Names bound at module level in a file (imports and top-level declarations; only imports with `importsOnly`). */
-function fileBindings(text: string, importsOnly = false): Set<string> {
+export function fileBindings(text: string, importsOnly = false): Set<string> {
   const sf = ts.createSourceFile("f.ts", text, ts.ScriptTarget.Latest, true);
   const out = new Set<string>();
   for (const st of sf.statements) {
@@ -1449,6 +1470,8 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
     });
     return fail(msgs, tsDiags.some((d) => TS_MISSING_CONTEXT.has(d.code)));
   }
+  // a body that is itself pending would read as an inconclusive outcome (a pending sibling), never as a failure
+  if (pendingInBody(prog, sf, text, r.id)) return fail(["OARC-E033 the body calls arc.todo() (or throws OpenArcTodoError): implement the region instead of leaving it pending"]);
   const verifiedBy = ["tsc", "static"];
   // examples in the sandbox: the region's own (function) or its enclosing function's (block)
   const rootSpec = p.specs.get(r.root)!;
@@ -1483,6 +1506,29 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   }
   p.accepted.set(r.file, text);
   return { ok: true, problems: [], verifiedBy, missingContext: false };
+}
+
+/** Whether region `id`'s body in `sf` calls open-arc's `todo` or constructs its OpenArcTodoError (through any import name). */
+function pendingInBody(prog: ts.Program, sf: ts.SourceFile, text: string, id: string): boolean {
+  const ls = linesOf(text);
+  const b = ls.findIndex((l) => l.trim() === `// @openarc:begin ${id}`);
+  const e = ls.findIndex((l, i) => i > b && l.trim() === `// @openarc:end ${id}`);
+  if (b < 0 || e < 0) return false;
+  const from = sf.getPositionOfLineAndCharacter(b, 0), to = sf.getPositionOfLineAndCharacter(e, 0);
+  const checker = prog.getTypeChecker();
+  const isCore = (n: ts.Expression, name: string) => {
+    let sym = checker.getSymbolAtLocation(ts.isPropertyAccessExpression(n) ? n.name : n);
+    if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+    return sym?.name === name && !!sym.declarations?.some((d) => /\bclass OpenArcTodoError\b/.test(d.getSourceFile().text));
+  };
+  let hit = false;
+  const walk = (n: ts.Node): void => {
+    if (hit || n.end < from || n.pos > to) return;
+    if (n.pos >= from && n.end <= to && ((ts.isCallExpression(n) && isCore(n.expression, "todo")) || (ts.isNewExpression(n) && isCore(n.expression, "OpenArcTodoError")))) hit = true;
+    n.forEachChild(walk);
+  };
+  walk(sf);
+  return hit;
 }
 
 /** An outcome that failed only because a region it reached is still pending (inconclusive, not a failure). */
@@ -1919,6 +1965,11 @@ export async function extract(ports: Ports, req: CompileRequest, p: Project, rel
       const open = block ? lineOf(block.getStart(sf)) : -1, close = block ? lineOf(block.end - 1) : -1;
       if (!block || open === close || lines[open]!.slice(sf.getLineAndCharacterOfPosition(block.getStart(sf)).character + 1).trim() || lines[close]!.slice(0, sf.getLineAndCharacterOfPosition(block.end - 1).character).trim()) {
         refuse(name, "the body must be a block whose braces end and start their own lines (or use --style region)");
+        continue;
+      }
+      // the signature is the contract: without a return type (on the function or its const) a regenerated body would set it
+      if (!fnNode.type && !(ts.isVariableStatement(st) && st.declarationList.declarations[0]!.type)) {
+        refuse(name, "no explicit return type: the signature is the region's contract, so annotate it (or the const's type) first");
         continue;
       }
       const id = opts.id ?? implicit.derivedId(rel, text, { name });

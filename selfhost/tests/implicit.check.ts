@@ -256,6 +256,14 @@ ${extra}`;
   assert.notEqual(await h(SRC(""), TEST.replace("toBe(2)", "toBe(2.0)")), base, "test source");
   assert.equal(await h(SRC("export function sibling(): number {\n  return 1;\n}\n")), base, "an unrelated declaration");
 }
+// ── 4b. review fixes: ids in src/index.ts, const only, single-quoted arc.todo ids, configure lists of strings
+{
+  const ix = await analyzed({ "src/index.ts": 'import * as arc from "open-arc";\nexport class Foo {\n  bar(): number {\n    return arc.todo();\n  }\n}\nexport function src(): number {\n  return arc.todo();\n}\nexport let later = (): number => arc.todo();\nexport function q(): number {\n  return arc.todo(\'m.quoted\');\n}\narc.configure(src, { deps: "node:fs", calls: [1] });\n' });
+  assert.deepStrictEqual(ix.ids, ["foo.bar", "src", "m.quoted"], "no leading dot; a `let` is not a region");
+  assert.ok(ix.p.regions.every((r) => r.state === "pending" && r.pending), "arc.todo('id') is pending, like arc.todo(\"id\")");
+  assert.deepStrictEqual(codes(ix.ds), ["OARC-E010 src deps must be an array of strings", "OARC-E010 src calls must be an array of strings"]);
+  assert.deepStrictEqual([ix.spec("src").deps, ix.spec("src").calls], [[], []]);
+}
 // ── 5. extract --style code and migrate (phase 2)
 {
   const SRC = '/** Slug of a title. */\nexport function slug(t: string): string {\n  return t.toLowerCase();\n}\n\nexport const head = <T>(xs: T[]): T | undefined => {\n  return xs[0];\n};\n\nexport function one(): number { return 1; }\n';
@@ -264,6 +272,9 @@ ${extra}`;
   const res = await engine.extract(fake.instance as Ports, req, p, "src/text/utils.ts", { style: "code" });
   assert.deepStrictEqual(res.extracted, ["text.utils.slug", "text.utils.head"], "generics are fine in code-first form");
   assert.match(res.refused[0]!.reason, /^the body must be a block whose braces/);
+  const inferred = fakePorts({ files: { "src/u.ts": "export function f(x: number) {\n  return x;\n}\n\nexport const g: (x: number) => number = (x) => {\n  return x;\n};\n" } });
+  const inf = await engine.extract(inferred.instance as Ports, req, await engine.parse(inferred.instance as Ports, req, []), "src/u.ts", { style: "code" });
+  assert.deepStrictEqual([inf.extracted, inf.refused.map((x) => x.reason.slice(0, 26))], [["u.g"], ["no explicit return type: t"]], "an inferred return type is refused; a typed const is fine");
   assert.equal(res.files[0]!.text, '/**\n * Slug of a title.\n * @arc id text.utils.slug\n */\nexport function slug(t: string): string {\n  // @openarc:begin text.utils.slug\n  return t.toLowerCase();\n  // @openarc:end text.utils.slug\n}\n\n/** @arc id text.utils.head */\nexport const head = <T>(xs: T[]): T | undefined => {\n  // @openarc:begin text.utils.head\n  return xs[0];\n  // @openarc:end text.utils.head\n};\n\nexport function one(): number { return 1; }\n');
   const m = JSON.parse(res.files[1]!.text).regions;
   assert.deepStrictEqual([m["text.utils.slug"].ownership, m["text.utils.slug"].declaration], ["developer", "slug"]);
@@ -285,5 +296,21 @@ ${extra}`;
   const blockParent = 'import * as arc from "open-arc";\ntype F = (x: number) => number;\nexport const fSpec = arc.defineRegion<F>({ id: "m.f", intent: "x" });\nexport const gSpec = arc.defineBlock({ id: "m.f.g", intent: "y" });\n// @openarc:begin m.f\nexport const f: F = (x) => {\n  let y = 0;\n  // @openarc:begin m.f.g\n  y = x;\n  // @openarc:end m.f.g\n  return y;\n};\n// @openarc:end m.f\n';
   const bp = fakePorts({ files: { "src/m.ts": blockParent } });
   assert.match((await migrate(bp.instance as Ports, req, await engine.parse(bp.instance as Ports, req, []), "m.f")).refused!, /has block regions/);
+  // migrate keeps default initializers, rest parameters and multiline template literals as written; a `$` in a name is
+  // matched literally; arc.configure gets an open-arc namespace binding (the file's own, else one is added)
+  const FMT = (imp: string) => `${imp}\ntype Fmt = (x: number, sep?: string, ...rest: number[]) => string;\n\nexport const fmt$Spec = defineRegion<Fmt>({\n  id: "m.fmt",\n  symbol: "fmt$",\n  intent: "x and rest, joined.",\n  examples: [{ args: [1], expected: "1" }],\n});\n\n// @openarc:begin m.fmt\nexport const fmt$: Fmt = (x, sep = ",", ...rest) => {\n    const note = \`none\n  keeps  its\n      indent\`;\n    return [x, ...rest].join(sep) || note;\n};\n// @openarc:end m.fmt\n`;
+  const mig2 = async (files: Record<string, string>) => {
+    const f = fakePorts({ files });
+    return migrate(f.instance as Ports, req, await engine.parse(f.instance as Ports, req, []), "m.fmt");
+  };
+  const named = await mig2({ "src/m.ts": FMT('import { defineRegion } from "open-arc";') });
+  assert.equal(named.refused, undefined);
+  assert.equal(named.files[0]!.text, 'import { defineRegion } from "open-arc";\nimport * as arc from "open-arc";\ntype Fmt = (x: number, sep?: string, ...rest: number[]) => string;\n\n/**\n * x and rest, joined.\n * @arc id m.fmt\n */\nexport function fmt$(x: number, sep: string | undefined = ",", ...rest: number[]): string {\n  // @openarc:begin m.fmt\n  const note = `none\n  keeps  its\n      indent`;\n  return [x, ...rest].join(sep) || note;\n  // @openarc:end m.fmt\n}\n\narc.configure(fmt$, {"examples":[{"args":[1],"expected":"1"}]});\n');
+  const named2 = await analyzed({ "src/m.ts": named.files[0]!.text });
+  assert.deepStrictEqual([codes(named2.ds), named2.p.regions.map((r) => [r.id, !!r.spec.codeFirst, r.spec.examples.length])], [[], [["m.fmt", true, 1]]]);
+  const own = await mig2({ "src/m.ts": FMT('import * as oa from "open-arc";').replace("= defineRegion", "= oa.defineRegion") });
+  assert.match(own.files[0]!.text, /^import \* as oa from "open-arc";\ntype Fmt[\s\S]*\noa\.configure\(fmt\$, /, "the file's own namespace import is reused");
+  assert.match((await mig2({ "src/m.ts": FMT('import { defineRegion } from "open-arc";\nconst arc = 1;') })).refused!, /binds `arc`/);
+  assert.match((await mig2({ "src/m.ts": FMT('import { defineRegion } from "open-arc";'), "src/use.ts": 'import { fmt$Spec } from "./m.ts";\nexport const x = fmt$Spec;\n' })).refused!, /fmt\$Spec is used outside/);
 }
-console.log("implicit: discovery (functions, methods, getters, arrows, generics), ids, E022/E011, markers inside the body, joint class verification (W042/W045), identity after a rename, E064, layers (E013/E020/backend), spec hash, W023, extract --style code, migrate ok");
+console.log("implicit: discovery (functions, methods, getters, arrows, generics), ids, E022/E011, markers inside the body, joint class verification (W042/W045), identity after a rename, E064, layers (E013/E020/backend), spec hash, W023, extract --style code, migrate (defaults, rest, templates, arc binding, $ names) ok");

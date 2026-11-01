@@ -187,12 +187,12 @@ export const markDownSpec = arc.defineRegion<(id: string) => void>({ id: "lb.rou
 
 `openarc migrate <id>` converts one classic function region in one transaction:
 
-1. `export const s: F = (a, b) => { … }` becomes `export function s(a: A, b: B): R { … }`, with the markers inside the body.
+1. `export const s: F = (a, b) => { … }` becomes `export function s(a: A, b: B): R { … }`, with the markers inside the body. Default values and rest parameters are kept, and so is the text of a multiline template literal.
 2. The intent becomes the JSDoc, with `@arc id <id>`.
-3. `examples`, `calls`, `effects`, `deps` and `tolerance` move to `arc.configure(s, { … })` unchanged; the `defineRegion` statement goes (its type alias stays).
-4. The id, ownership and provenance are kept, and the new body's hash and spec hash are recorded, so the move is neither a hand edit nor a spec change.
+3. `examples`, `calls`, `effects`, `deps` and `tolerance` move to `arc.configure(s, { … })` unchanged, through the file's `open-arc` namespace import (`import * as arc from "open-arc"` is added when there is none); the `defineRegion` statement goes (its type alias stays).
+4. The id, ownership and provenance are kept, and the new body's hash and spec hash are recorded, so the move is neither a hand edit nor a spec change. The fingerprint is not recomputed (migrate works offline), so a compiler-owned region may be regenerated, and verified, on the next compile.
 
-It refuses regions with block children, sketches, UI structures, concept variants, conflicted regions and a spec export used from another file. It never runs implicitly.
+It refuses regions with block children, sketches, UI structures, concept variants, conflicted regions, a spec export used from another file, and a file where `arc` is bound to something other than an `open-arc` namespace import. It never runs implicitly.
 
 ## Not yet
 

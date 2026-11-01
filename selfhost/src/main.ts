@@ -48,6 +48,7 @@ const MESSAGES: Record<string, string> = {
   "OARC-E062": "region markers removed (openarc resolve <id> --unlink)",
   "OARC-E063": "region moved to a different parent",
   "OARC-E064": "@arc id disagrees with the region's markers (the markers are its identity after the first commit)",
+  "OARC-E070": "type error (detail test:TS<code>: in a test that runs for the region; sketch:TS<code>: in a sketch)",
   "OARC-E080": "model backend unavailable",
   "OARC-E082": "repair attempts exhausted",
   "OARC-E090": "example failed",
@@ -545,10 +546,10 @@ async function main(argv: string[]): Promise<number> {
         },
       });
       clearStaleLock(root, (l) => console.error(`[watch] ${l}`));
-      // src/ and tests/fakes/ one directory at a time (dirwatch.ts: a recursive fs.watch goes blind to a file replaced by
-      // rename, which is how commits write), plus the root, non-recursively, for the config. Not the whole tree: that
-      // would watch node_modules. ponytail: a src/ created after start needs a restart.
-      const dirs = ["src", "tests/fakes"].filter((d) => existsSync(`${root}/${d}`));
+      // src/ and tests/ (fakes, and code-first tests) one directory at a time (dirwatch.ts: a recursive fs.watch goes
+      // blind to a file replaced by rename, which is how commits write), plus the root, non-recursively, for the config.
+      // Not the whole tree: that would watch node_modules. ponytail: a src/ created after start needs a restart.
+      const dirs = ["src", "tests"].filter((d) => existsSync(`${root}/${d}`));
       const dirWatch = watchDirs(root, dirs, (p) => w.onChange(p));
       const rootWatch = watch(root, (_e, f) => f && w.onChange(f));
       console.log(`[watch] watching ${[...dirs.map((d) => `${d}/`), "openarc.config.json"].join(", ")} (debounce ${cmd.debounceMs} ms, Ctrl+C to stop)`);

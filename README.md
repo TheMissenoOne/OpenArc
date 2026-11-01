@@ -4,7 +4,7 @@
 
 **Compile TypeScript with holes into verified TypeScript, using small local models.**
 
-You write ordinary TypeScript: interfaces, classes, the members you know how to write, and tests. Where you want the compiler to write a body, you leave `return arc.todo();`. OpenArc gives a model only the context that one body needs (the class shell, the types it reaches, the tests that exercise it), then verifies the returned body with tsc, static rules and your tests in a sandbox. Only then does it write the body in. Hand edits are never overwritten, and the model can't touch anything outside the body.
+You write ordinary TypeScript: interfaces, classes, the members you know how to write, and tests. Where you want the compiler to write a body, you leave `return arc.todo();`. OpenArc gives a model only the context that one body needs (the class shell, the types it reaches, the tests that exercise it), then verifies the returned body with tsc, static rules and your tests in a sandbox. Only then does it write the body in. Hand edits are never overwritten, and the model can't touch anything outside the body, except to add an import line it is allowed to use.
 
 ```ts
 // src/lb/balancer.ts
@@ -75,7 +75,7 @@ npx openarc compile          # or keep it running: npx openarc watch
 
 **Deprecated:** the bundled palette (`open-arc/palette/*`, `examples/palette-demo`) and the built-in `open-arc/ui` vocabulary (`Form`, `Field`, `ErrorText`, `Submit`) are frozen since 0.9.0: they keep working unchanged, and the mechanisms they use stay supported.
 
-**Safety, enforced in code rather than in the prompt:** the model returns a body and never writes files; everything outside the body must stay byte-identical (`OARC-E097`); a `calls` allowlist limits what a body may call (`OARC-E098`); a body counts as verified only if a passing test or example actually runs it (`OARC-W045`); tests and examples run in a sandbox whose strength depends on the OS (below). See [Safety Model](docs/wiki/Safety-Model.md).
+**Safety, enforced in code rather than in the prompt:** the model returns a body and never writes files; everything outside the body must stay byte-identical, except for added import lines the region may use (`OARC-E097`); a `calls` allowlist limits what a body may call (`OARC-E098`); a body counts as verified only if a passing test or example actually runs it (`OARC-W045`); tests and examples run in a sandbox whose strength depends on the OS (below). See [Safety Model](docs/wiki/Safety-Model.md).
 
 ## More ways to write regions
 

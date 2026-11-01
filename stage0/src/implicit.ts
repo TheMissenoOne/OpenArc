@@ -71,7 +71,7 @@ export function declarations(sf: ts.SourceFile): Decl[] {
     const exported = hasMod(st, ts.SyntaxKind.ExportKeyword);
     if (ts.isFunctionDeclaration(st) && st.name && st.body)
       out.push({ decl: st as Decl["decl"], name: st.name.text, kind: "function", docNode: st, headStart: st.getStart(sf), typed: !!st.type, exported });
-    else if (ts.isVariableStatement(st))
+    else if (ts.isVariableStatement(st) && st.declarationList.flags & ts.NodeFlags.Const) // a `let` could be reassigned
       for (const d of st.declarationList.declarations) {
         const f = fnInit(d.initializer);
         if (f && ts.isIdentifier(d.name)) out.push({ decl: f, name: d.name.text, kind: "arrow", docNode: st, headStart: st.getStart(sf), typed: !!(f.type || d.type), exported });
@@ -104,7 +104,7 @@ export function pendingCall(body: ts.ConciseBody): ts.CallExpression | null {
   return isTodo(e) ? e : null;
 }
 /** The owned text of a pending code-first region (what analyze sees between its markers). */
-export const isPendingText = (owned: string) => /^(return\s+)?arc\.todo\(\s*("[^"]*")?\s*\);?$/.test(owned.trim());
+export const isPendingText = (owned: string) => /^(return\s+)?arc\.todo\(\s*("[^"]*"|'[^']*')?\s*\);?$/.test(owned.trim());
 
 // ── JSDoc ──
 export interface Doc {
@@ -154,7 +154,8 @@ export function moduleId(rel: string, text: string): string {
 export function derivedId(rel: string, text: string, d: Pick<Decl, "name" | "cls">): string {
   const base = lc(rel.replace(/\.tsx?$/, "").replace(/\/index$/, "").split("/").at(-1)!);
   const owner = d.cls?.name?.text;
-  return [moduleId(rel, text), ...(owner && lc(owner) !== base ? [idSegment(owner)] : []), ...(!owner && lc(d.name) === base ? [] : [idSegment(d.name)])].join(".");
+  const mod = moduleId(rel, text); // "" for src/index.ts: no leading dot, and the member name is kept
+  return [mod, ...(owner && lc(owner) !== base ? [idSegment(owner)] : []), ...(!owner && mod && lc(d.name) === base ? [] : [idSegment(d.name)])].filter(Boolean).join(".");
 }
 
 // ── phase A: markers inside pending bodies, in memory ──
@@ -330,9 +331,17 @@ export function discover(p: CodeFirstProject, checker: ts.TypeChecker, diagnosti
     else if (examples.length && !d.exported) once(err("OARC-E010", { id: spec.id, file: spec.file, detail: "examples:not-exported" }));
     if (typeof merged.backend === "string" && !(merged.backend in p.config.backends)) once(err("OARC-E010", { id: spec.id, file: spec.file, detail: `backend:${merged.backend}` }));
     spec.examples = examples;
-    spec.deps = (merged.deps as string[] | undefined) ?? [];
-    spec.effects = (merged.effects as string[] | undefined) ?? [];
-    if (Array.isArray(merged.calls)) spec.calls = merged.calls as string[];
+    const strings = (k: "deps" | "effects" | "calls") => {
+      const v = merged[k];
+      if (v === undefined) return undefined;
+      if (Array.isArray(v) && v.every((x) => typeof x === "string")) return v as string[];
+      once(err("OARC-E010", { id: spec.id, file: spec.file, detail: `${k} must be an array of strings` }));
+      return [];
+    };
+    spec.deps = strings("deps") ?? [];
+    spec.effects = strings("effects") ?? [];
+    const calls = strings("calls");
+    if (calls) spec.calls = calls;
     if (typeof merged.backend === "string") spec.backend = merged.backend;
     if (merged.outputFormat === "json" || merged.outputFormat === "code") spec.outputFormat = merged.outputFormat;
     // The spec hash (SPEC §8.4): the head and JSDoc, the merged configuration (not backend/outputFormat: machine-local),

@@ -135,22 +135,28 @@ export async function runTests(root: string, plan: TestPlan): Promise<Outcome[]>
     };
     const scope = { hits: new Set<string>(), open: true };
     let pending: string | null = null, error: string | null = null, law: string | null = null;
+    let cur: { run: number; runs: number; seed: number; draws: Json[] } | null = null; // a law's current run: a throw reports it too
+    const where = (c: NonNullable<typeof cur>) => `at run ${c.run + 1}/${c.runs} (seed ${c.seed}); draws ${showValue(c.draws)}`;
     try {
       if (t.kind === "law") {
         const runs = r.runs ?? 50, seed = r.seed ?? 1;
         for (let run = 0; run < runs; run++) {
           const draws: Json[] = [];
           const before = failures.length;
+          cur = { run, runs, seed, draws };
           await attribution.run(scope, () => r.body(r.target as never, expect, makeGen(seed * 1000 + run, draws) as never));
           if (failures.length > before) {
-            law = `failed at run ${run + 1}/${runs} (seed ${seed}); draws ${showValue(draws)}`;
+            law = `failed ${where(cur)}`;
             break;
           }
         }
       } else await attribution.run(scope, () => r.body(r.target as never, expect, fakes as never));
     } catch (e) {
       if (e instanceof OpenArcTodoError) pending = e.id;
-      else error = messageOf(e);
+      else {
+        error = messageOf(e);
+        if (cur) law = `threw ${where(cur)}`;
+      }
     } finally {
       scope.open = false;
     }

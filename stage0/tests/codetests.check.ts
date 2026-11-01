@@ -57,7 +57,7 @@ const codes = (ds: Diagnostic[]) => ds.map((d) => `${d.code}${d.id ? ` ${d.id}` 
   assert.deepStrictEqual([hp.all.length, hp.run, hp.fakes], [9, [7, 8], ["net.memory"]]);
   // the staged copy: assertion indexes and fake names, nothing else
   const staged = testsPlan.instrument(FIXTURE["tests/p2p.test.ts"]!, "tests/p2p.test.ts", tests);
-  assert.ok(staged.includes('const net = fakes.of<Transport>("net.memory");') && staged.includes("expect(fakes.snapshot(net), 2).toEqual"), staged);
+  assert.ok(staged.includes('const net = fakes.of<Transport>("net.memory");') && staged.includes("expect(fakes.snapshot(net), 4).toEqual"), staged);
   assert.equal(staged.replace(/, \d+\)/g, ")").replaceAll('"net.memory"', ""), FIXTURE["tests/p2p.test.ts"]);
   // the package: shown source and the consts it reads, the hidden test counted but never shown
   const r = p.regions.find((x) => x.id === "lb.roundRobin.pick")!;
@@ -66,13 +66,28 @@ const codes = (ds: Diagnostic[]) => ds.map((d) => `${d.code}${d.id ? ` ${d.id}` 
   assert.match(ctx, /\/\/ plus 1 hidden test\(s\), not shown/);
   assert.ok(!ctx.includes("fair over 300") && !ctx.includes("counts["), "a hidden test's name and source stay out of the package");
   assert.match(ctx, /arc\.law\(RoundRobin, "never picks an unhealthy backend"/);
+  // level 2 adds the full file: a hidden test written in the region's own file is cut from it
+  const inSrc = await analyzed({ ...FIXTURE, "src/lb/balancer.ts": `${FIXTURE["src/lb/balancer.ts"]}\narc.test.hidden(hash32, "secret sauce", (h, expect) => expect(h("q")).toBe(424242));\n` });
+  const l2 = engine.buildContext(inSrc.p, inSrc.p.regions.find((x) => x.id === "lb.ringHash")!, 2, inSrc.p.config.backends.local!);
+  assert.ok(l2.includes("## Full file src/lb/balancer.ts") && l2.includes("// (a hidden test, not shown)"), l2);
+  assert.ok(!l2.includes("secret sauce") && !l2.includes("424242"), "a hidden test's name and source stay out of the level-2 package");
   // under budget pressure the summary replaces the source before anything else goes
   const tiny = engine.buildContext(p, r, 0, { ...p.config.backends.local!, maxContextTokens: 2100, outputReserveTokens: 1000 });
   assert.match(tiny, /## Tests your body must pass \(summary: the test source did not fit\)\nrr\.pick\("x"\) → "a"/);
   assert.match(tiny, /new RR\(three\)\.markDown\("z"\) throws "unknown backend z"\n\/\/ plus \d+ assertion\(s\) not shown/);
   // shapes the compiler can't read, and fakes it can't resolve
   const bad = await analyzed({ ...FIXTURE, "tests/bad.test.ts": 'import * as arc from "open-arc";\nimport { Peer, type Transport } from "../src/p2p/peer.ts";\nconst n = "x";\narc.test(Peer, n, () => {});\narc.test(Peer, "ok", (P, expect, fakes) => {\n  expect(fakes.of<Transport>()).toBe(null);\n  expect(fakes.of<string>()).toBe("");\n});\n' });
-  assert.deepStrictEqual(codes(bad.ds), ["OARC-E010 test:name", "OARC-E010 fake:string"]);
+  assert.deepStrictEqual(codes(bad.ds), ["OARC-E010 test:name", "OARC-E010 fake:string", "OARC-E070 p2p.peer.receive test:TS2345"], "toBe(null) on a Transport is a type error too");
+  // a test call that is not a top-level statement, law options that are not an object, fakes.named without a literal
+  // or a fake file; tests/advisory/ is never authoritative (not planned at all)
+  const shapes = await analyzed({ ...FIXTURE, "tests/advisory/x.test.ts": 'import * as arc from "open-arc";\nimport { Peer } from "../../src/p2p/peer.ts";\narc.test(Peer, "advisory", (P, expect) => expect(1).toBe(2));\n',
+    "tests/shapes.test.ts": 'import * as arc from "open-arc";\nimport { Peer } from "../src/p2p/peer.ts";\nif (Peer) arc.test(Peer, "nested", () => {});\narc.law(Peer, "null options", () => {}, null);\nconst k = "net.memory";\narc.test(Peer, "named", (P, expect, fakes) => {\n  fakes.named(k);\n  fakes.named("nope");\n  fakes.named("net.memory");\n});\n' });
+  assert.deepStrictEqual(codes(shapes.ds), ["OARC-E010 test:not-top-level", "OARC-E010 test:options", "OARC-E010 fake:named-not-static", "OARC-E010 fake:named:nope"]);
+  assert.deepStrictEqual([shapes.ds[0]!.line, shapes.p.tests!.some((t) => t.file.startsWith("tests/advisory/")), shapes.p.tests!.find((t) => t.name === "named")!.named], [3, false, ["net.memory"]]);
+  assert.deepStrictEqual(testsPlan.harnessTests(shapes.p.tests!.map((t) => ({ ...t, regions: t.name === "named" ? ["x"] : [] })), ["x"])!.fakes, ["net.memory"], "fakes.named names are preloaded");
+  // a test that does not type-check is E070 at analysis (the sandbox strips types, so it would run anyway)
+  const mistyped = await analyzed({ ...FIXTURE, "tests/p2p.test.ts": FIXTURE["tests/p2p.test.ts"]!.replace('new P("b", ["a", "c"], net)', 'new P("b", "a", net)') });
+  assert.deepStrictEqual(codes(mistyped.ds), ["OARC-E070 p2p.peer.receive test:TS2345"]);
   const two = await analyzed({ ...FIXTURE, "tests/fakes/net.other.ts": FIXTURE["tests/fakes/net.memory.ts"]! });
   assert.deepStrictEqual(codes(two.ds), ["OARC-E010 fake:Transport:ambiguous", "OARC-E010 fake:Transport:ambiguous"], "one per call site");
 }
@@ -120,7 +135,16 @@ arc.test(twice, "throws", (f) => {
   f(1);
   throw new Error("kaput");
 });
+
+arc.law(twice, "a throw keeps its run", (f, expect, gen) => {
+  if (gen.int(0, 9) > 4) throw new Error("big");
+}, { runs: 20, seed: 2 });
+
+arc.test(twice, "named fake", (f, expect, fakes) => {
+  expect(fakes.named<{ n: number }>("box", 3).n).toBe(3);
+});
 `,
+    "tests/fakes/box.ts": 'import { defineFake } from "open-arc";\nexport default defineFake<{ n: number }>((init) => ({ instance: { n: Number(init ?? 0) }, snapshot: () => null }));\n',
   };
   for (const [rel, text] of Object.entries(files)) {
     mkdirSync(join(dir, rel, ".."), { recursive: true });
@@ -129,7 +153,7 @@ arc.test(twice, "throws", (f) => {
   const { p, ds } = await analyzed(files, dir);
   assert.deepStrictEqual(codes(ds), []);
   // twice isn't a region: run every test of the file
-  const plan = { all: p.tests!.map((t) => ({ file: t.file, kind: t.kind, hidden: t.hidden, name: t.name })), run: [0, 1, 2, 3] };
+  const plan = { all: p.tests!.map((t) => ({ file: t.file, kind: t.kind, hidden: t.hidden, name: t.name })), run: [0, 1, 2, 3, 4, 5], fakes: p.tests![5]!.named };
   writeFileSync(join(dir, "tests/m.test.ts"), testsPlan.instrument(files["tests/m.test.ts"]!, "tests/m.test.ts", p.tests!));
   const out = await runTests(dir, plan);
   assert.deepStrictEqual(out[0], { name: 'test "matchers that pass"', ok: true });
@@ -143,6 +167,9 @@ arc.test(twice, "throws", (f) => {
   const law = out[2]!.actual as { failures: { i: number }[]; law: string };
   assert.match(law.law, /^failed at run \d+\/40 \(seed 3\); draws \[3\]$/, "a failing law prints its run, seed and draws");
   assert.deepStrictEqual(out[3], { name: 'test "throws"', ok: false, actual: { checks: 0, failures: [], threw: "kaput" } });
+  const thrown = out[4]!.actual as { threw: string; law: string };
+  assert.deepStrictEqual([thrown.threw, /^threw at run \d+\/20 \(seed 2\); draws \[\d\]$/.test(thrown.law)], ["big", true], `a law that throws prints its run, seed and draws: ${thrown.law}`);
+  assert.deepStrictEqual([p.tests![5]!.named, out[5]], [["box"], { name: 'test "named fake"', ok: true }], "fakes.named is planned and preloaded");
   const t1 = p.tests![1]!;
   assert.equal(testsPlan.failureText(t1, out[1]!.name, out[1]!.actual).split("\n").slice(0, 3).join("\n"), 'OARC-E090 test "soft assertions" failed:\n  line 19: expect(f(2)).toBe(5)\n    got 4; expected 5');
   assert.equal(testsPlan.failureText({ ...t1, hidden: true }, out[1]!.name, { hidden: true }), 'OARC-E090 hidden test failed: "soft assertions"', "a hidden test: by name only");
@@ -234,6 +261,21 @@ try {
   const again = await cli(proj, "compile");
   assert.match(again.out, /done: exit 0 · 0 model call\(s\)/, again.out);
 
+  // a body that is itself pending (arc.todo) is refused, not taken for an inconclusive outcome
+  reset("json");
+  replies = { hash32: ["return arc.todo();"] };
+  const todo = await cli(proj, "compile", "lb.ringHash");
+  assert.equal(todo.code, 0, todo.out);
+  assert.match(prompts.find((x) => x.includes("Your previous attempt failed")) ?? "", /OARC-E033 the body calls arc\.todo\(\)/, todo.out);
+  assert.deepStrictEqual(manifest()["lb.ringHash"]!.provenance.verifiedBy, ["tsc", "static", "examples:1/1", "tests:1/1"], todo.out);
+  // a test that imports a local helper (no tests of its own): the helper is staged into the sandbox with it
+  const p2pTest = FIXTURE["tests/p2p.test.ts"]!.replace('from "../src/p2p/peer.ts";', 'from "../src/p2p/peer.ts";\nimport { gossip } from "./helpers/msg.ts";').replace('{ id: "g2", origin: "a", ttl: 0, body: "yo" }', 'gossip("g2", 0, "yo")');
+  assert.ok(p2pTest.includes("gossip(") && p2pTest.includes("helpers/msg.ts"));
+  reset("json", { "tests/p2p.test.ts": p2pTest, "tests/helpers/msg.ts": 'import type { Gossip } from "../../src/p2p/peer.ts";\nexport const gossip = (id: string, ttl: number, body: string): Gossip => ({ id, origin: "a", ttl, body });\n' });
+  const helped = await cli(proj, "compile", "p2p.peer.receive");
+  assert.equal(helped.code, 0, helped.out);
+  assert.deepStrictEqual(manifest()["p2p.peer.receive"]!.provenance.verifiedBy, ["tsc", "static", "tests:2/2"], helped.out);
+
   // a hidden test fails: the repair prompt names it, and nothing else about it
   reset("json");
   replies = { "RoundRobin.pick": [UNFAIR] };
@@ -244,9 +286,9 @@ try {
   assert.match(repair, /Problems:\nOARC-E090 hidden test failed: "fair over 300 picks"\n/);
   assert.ok(!repair.includes("counts") && !repair.includes("100"), "no values or source of a hidden test reach the model");
 
-  // a test registered outside the static plan (in a loop) is refused before anything runs. (A file with no planned test
-  // is never imported, so what it would register never runs.)
-  reset("json", { "tests/balancer.test.ts": `${FIXTURE["tests/balancer.test.ts"]}\nfor (const s of ["a"]) arc.test(hash32, s, (h, expect) => expect(h(s)).toBe(0));\n` });
+  // a test registered outside the static plan (through an alias; a nested arc.test call is E010 test:not-top-level) is
+  // refused before anything runs. (A file with no planned test is never imported, so what it would register never runs.)
+  reset("json", { "tests/balancer.test.ts": `${FIXTURE["tests/balancer.test.ts"]}\nconst t = arc.test;\nt(hash32, "a", (h, expect) => expect(h("a")).toBe(0));\n` });
   c = await cli(proj, "compile", "lb.ringHash");
   assert.equal(c.code, 1, c.out);
   assert.match(c.out, /OARC-E090 lb\.ringHash .*\[test-registry:tests\/balancer\.test\.ts: planned \[.*\], registered \[.*test "known values", test "a"\]\]/, c.out);

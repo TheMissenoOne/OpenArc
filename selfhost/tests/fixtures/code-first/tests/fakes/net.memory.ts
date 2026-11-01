@@ -1,12 +1,12 @@
 import { defineFake } from "open-arc";
 import type { Gossip, Transport } from "../../src/p2p/peer.ts";
 
-/** Records every send as [from, to, id, ttl]. */
+/** Records every send as [from, to, id, ttl, body]. */
 export default defineFake<Transport>(() => {
-  const sent: [string, string, string, number][] = [];
+  const sent: [string, string, string, number, string][] = [];
   const instance: Transport = {
     async send(from: string, to: string, msg: Gossip) {
-      sent.push([from, to, msg.id, msg.ttl]);
+      sent.push([from, to, msg.id, msg.ttl, msg.body]);
     },
   };
   return { instance, snapshot: () => ({ sent }) };

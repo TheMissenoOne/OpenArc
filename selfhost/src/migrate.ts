@@ -26,7 +26,8 @@ export async function migrate(ports: Ports, req: CompileRequest, p: engine.Proje
   const checker = p.program!.getTypeChecker();
   const text = p.disk.get(r.file)!.replace(/\r\n/g, "\n");
   if ((p.files.get(r.file) ?? "") !== text) return no(`${r.file} has pending regions scaffolded in memory: run openarc scaffold first`);
-  const elsewhere = [...p.files].some(([rel, t]) => rel !== r.file && new RegExp(`\\b${s.exportName}\\b`).test(t));
+  const named = new RegExp(`(?<![\\w$])${s.exportName.replace(/\$/g, "\\$")}(?![\\w$])`); // identifiers may hold `$`
+  const elsewhere = [...p.files].some(([rel, t]) => rel !== r.file && named.test(t));
   if (elsewhere) return no(`${s.exportName} is used outside ${r.file}`);
 
   // the declaration between the markers: `export const s: F = (…) => …`
@@ -39,16 +40,28 @@ export async function migrate(ports: Ports, req: CompileRequest, p: engine.Proje
   const show = (t: ts.Type) => checker.typeToString(t, undefined, ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseFullyQualifiedType);
   const params = fn.parameters.map((x, i) => {
     const ps = sig.getParameters()[i];
-    return `${x.name.getText(sf)}${x.questionToken ? "?" : ""}: ${ps ? show(checker.getTypeOfSymbol(ps)) : "unknown"}`;
+    return `${x.dotDotDotToken ? "..." : ""}${x.name.getText(sf)}${x.questionToken ? "?" : ""}: ${ps ? show(checker.getTypeOfSymbol(ps)) : "unknown"}${x.initializer ? ` = ${x.initializer.getText(sf)}` : ""}`;
   });
   const isAsync = !!fn.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword);
   const exported = !!(st as ts.VariableStatement).modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
   const ind = r.indent;
   const body = ts.isBlock(fn.body)
     ? (() => {
-        const lines = sf.text.slice(fn.body.getStart(sf) + 1, fn.body.end - 1).split("\n").filter((l, i, a) => l.trim() || (i > 0 && i < a.length - 1));
-        const strip = Math.min(...lines.filter((l) => l.trim()).map((l) => /^\s*/.exec(l)![0].length));
-        return lines.map((l) => (l.trim() ? `${ind}  ${l.slice(strip)}` : ""));
+        // a line that starts inside a multiline template literal is its text: kept byte for byte, never re-indented
+        const tpl: [number, number][] = [];
+        const walk = (n: ts.Node): void => {
+          if (ts.isTemplateExpression(n) || ts.isNoSubstitutionTemplateLiteral(n)) tpl.push([n.getStart(sf), n.end]);
+          n.forEachChild(walk);
+        };
+        walk(fn.body);
+        let at = fn.body.getStart(sf) + 1;
+        const lines = sf.text.slice(at, fn.body.end - 1).split("\n").map((l) => {
+          const keep = tpl.some(([a, b]) => at > a && at < b);
+          at += l.length + 1;
+          return { l, keep };
+        }).filter((x, i, a) => x.keep || x.l.trim() || (i > 0 && i < a.length - 1));
+        const strip = Math.min(...lines.filter((x) => !x.keep && x.l.trim()).map((x) => /^\s*/.exec(x.l)![0].length));
+        return lines.map((x) => (x.keep ? x.l : x.l.trim() ? `${ind}  ${x.l.slice(strip)}` : ""));
       })()
     : [`${ind}  return ${fn.body.getText(sf)};`];
   const intent = s.intent.split(/(?<=\.)\s+/).filter(Boolean);
@@ -68,11 +81,22 @@ export async function migrate(ports: Ports, req: CompileRequest, p: engine.Proje
     const begin = lines.findIndex((l) => l.trim() === `// @openarc:begin ${id}`);
     return { begin, end: lines.findIndex((l, i) => i > begin && l.trim() === `// @openarc:end ${id}`) };
   })();
-  const configure = Object.keys(cfg).length ? ["", `${ind}arc.configure(${s.symbol}, ${JSON.stringify(cfg)});`] : [];
+  // arc.configure needs an `open-arc` namespace binding: the file's own (whatever its name), else `import * as arc` is added
+  const imports = file.statements.filter(ts.isImportDeclaration);
+  const nsImport = imports.find((d) => (d.moduleSpecifier as ts.StringLiteral).text === "open-arc" && !d.importClause?.isTypeOnly && !!d.importClause?.namedBindings && ts.isNamespaceImport(d.importClause.namedBindings));
+  const ns = nsImport ? (nsImport.importClause!.namedBindings as ts.NamespaceImport).name.text : "arc";
+  const needsImport = Object.keys(cfg).length > 0 && !nsImport;
+  if (needsImport && engine.fileBindings(text).has("arc")) return no(`${r.file} binds \`arc\` to something other than an open-arc namespace import: arc.configure would not resolve`);
+  const configure = Object.keys(cfg).length ? ["", `${ind}${ns}.configure(${s.symbol}, ${JSON.stringify(cfg)});`] : [];
   lines.splice(node.begin, node.end - node.begin + 1, ...decl, ...configure);
   const s0 = file.getLineAndCharacterOfPosition(specSt.getStart(file, true)).line, s1 = file.getLineAndCharacterOfPosition(specSt.end).line;
   if (s1 >= node.begin) return no(`${id}: its defineRegion statement must come before its markers`);
   lines.splice(s0, s1 - s0 + 1 + (lines[s1 + 1]?.trim() === "" ? 1 : 0));
+  if (needsImport) {
+    const at = imports.length ? file.getLineAndCharacterOfPosition(imports.at(-1)!.end).line + 1 : 0;
+    if (at > s0) return no(`${r.file}: its imports must come before the defineRegion statement`);
+    lines.splice(at, 0, 'import * as arc from "open-arc";');
+  }
   const out = lines.join("\n");
 
   // the result must type-check no worse than before and analyze as the same region, code-first

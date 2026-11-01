@@ -9,7 +9,7 @@ export interface Decoder {
   pending(): number[];
 }
 
-/** A framing: how messages become bytes and back. Every framing obeys the laws in tests/framing.test.ts. */
+/** A framing: how messages become bytes and back. Every framing obeys the laws in tests/p2p.test.ts. */
 export interface Framing {
   encode(message: string): number[];
   decoder(): Decoder;

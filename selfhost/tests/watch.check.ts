@@ -99,10 +99,13 @@ const history = (files: Map<string, string>) => (files.get(HISTORY) ?? "").split
   await h.w.start();
   await h.settle();
   const before = h.analyses();
-  for (const p of [".openarc/manifest.json", ".openarc/txn/tx1/stage/0", "node_modules/x/index.ts", "src/readme.md", "build/dist/a.ts"]) h.w.onChange(p);
+  for (const p of [".openarc/manifest.json", ".openarc/txn/tx1/stage/0", "node_modules/x/index.ts", "src/readme.md", "build/dist/a.ts", "tests/fixtures/a.ts", "tests/advisory/a.test.ts", "tests/node_modules/x.ts"]) h.w.onChange(p);
   await h.settle();
   assert.equal(h.analyses(), before, "no analysis for ignored paths");
   assert.deepStrictEqual(h.compiled, []);
+  h.w.onChange("tests/a.test.ts"); // code-first: tests are part of their regions' specs
+  await h.settle();
+  assert.equal(h.analyses(), before + 1, "a test file is analysed like source");
 }
 
 // ── 4. a failed region stays pending and is not re-queued until its spec changes (or the config/fakes change)

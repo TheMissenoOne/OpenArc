@@ -45,7 +45,7 @@ Errors are `OARC-Exxx` and warnings `OARC-Wxxx`. The full table is in `SPEC-phas
 | E022 | a code-first region (`return arc.todo();`) has no explicit return type: `arc.todo()` would infer `never` |
 | E064 | `@arc id` disagrees with the markers inside the body (after the first commit the markers are the id) |
 | W023 | a code-first region has no intent: no JSDoc of its own or inherited (printed at PLAN) |
-| E070 | type error in the generated body (shown with the line); detail `sketch:TS<code>` for an error in a sketch, reported before any model call |
+| E070 | type error in the generated body (shown with the line); detail `sketch:TS<code>` for an error in a sketch, `test:TS<code>` for one in a code-first test that runs for the region, both reported before any model call |
 | E082 | attempts exhausted for a region |
 | E090 | an example or a test failed. For tests the repair prompt lists each failing assertion with its line; a hidden test by name only. Details: `joint:<tests>` (a class's members failed together), `test-registry:…` (the sandbox registered tests the static plan doesn't have: the run stops) |
 | E096 | a file changed on disk while the compile ran; nothing was written, run it again (watch re-queues it by itself) |
@@ -61,7 +61,7 @@ Errors are `OARC-Exxx` and warnings `OARC-Wxxx`. The full table is in `SPEC-phas
 | W042 | a generated block was held back until its sibling blocks exist; it's cached for the next run |
 | W043 | a compiler-owned region's recompile failed, so it keeps a body that does not satisfy its current spec; `compile` exits 1 and `graph` shows it as `stale` |
 | W044 | thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); consider `openarc check --oracle` |
-| W045 | a generated block, a code-first region (detail `unreached:<id>`), or a sketch hole (detail `hole:<id>#<n>`), is unverified: no passing example reaches it. It isn't cached as verified or committed; add an example that runs through it |
+| W045 | a generated block, a code-first region (detail `unreached:<id>`), or a sketch hole (detail `hole:<id>#<n>`), is unverified: no passing example or test reaches it. It isn't cached as verified or committed; add one that runs through it |
 | E091 | the sandbox timed out (wall clock) or hit a resource limit |
 | E092 | the configured sandbox tier isn't available on this machine (detail: `bwrap-unavailable`, `sandbox-exec-unavailable`, `no-podman-or-docker`); nothing runs. For a UI region: no DOM (`dom:not-configured`, `dom:jsdom-missing`, `dom:react-missing`, `dom:react-dom-missing`) |
 | W046 | weaker isolation: Node permission model only, no OS sandbox (the `node` tier: Windows, or Linux without a usable `bwrap`). Printed once per command. Detail `node-<version>:network-not-blocked` on Node < 25 |
