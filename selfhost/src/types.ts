@@ -175,6 +175,7 @@ export interface CompileRequest {
   root: string; // absolute project path; used ONLY to build sandbox bind paths
   ids: string[];
   keepGoing?: boolean; // commit the targets that passed; failed ones stay pending
+  timings?: boolean; // --timings: log each attempt's stage times (issue #19 latency)
   model: ModelConfig;
   sandbox: Omit<SandboxConfig, "stageDir" | "regionId" | "extraReadPaths"> & {
     isolation?: SandboxTier; // absent: bwrap (sandbox.buildArgv)

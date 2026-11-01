@@ -12,7 +12,9 @@ export type Isolation = "auto" | SandboxTier;
 export const ISOLATIONS: readonly Isolation[] = ["auto", "bwrap", "sandbox-exec", "node", "container", "unsafe-none"];
 
 /** `.openarc/harness.mjs` in the stage. The stage root is argv[3]; bwrap and container mount it at /work and pass none. */
-export const HARNESS_ENTRY = 'import { main } from "open-arc/harness";\nawait main(process.argv[3] ?? "/work", process.argv[2]);\n';
+// The first line is the start time (engine.runSandbox splits sandbox startup from the tests by it); the harness is
+// imported after it, so module loading counts as tests.
+export const HARNESS_ENTRY = 'process.stdout.write(JSON.stringify({ openarcStart: Date.now() }) + "\\n");\nconst { main } = await import("open-arc/harness");\nawait main(process.argv[3] ?? "/work", process.argv[2]);\n';
 
 export interface Tools {
   bwrap: boolean; // bwrap and prlimit present AND an unprivileged user namespace works (Ubuntu 24.04 can restrict it)

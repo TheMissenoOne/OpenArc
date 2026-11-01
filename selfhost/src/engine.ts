@@ -104,6 +104,7 @@ export interface RegionInfo {
   scope: string[]; // blocks: "let x: T" lines in scope
   context0: string; // the initial context package (its hash is part of the fingerprint)
   kept?: string | null; // analyze: the current body to re-verify before any model call (keptBody), when the backend that made it is this one
+  contextMs?: number; // time to build context0 (attempt 1's "context" timing)
   typeImports: Map<string, string>; // closure types shown in context but not in scope in the file: name -> import specifier
 }
 
@@ -122,6 +123,7 @@ export interface Project {
   crlf: Set<string>; // files that are CRLF on disk: held as LF in `files` (hashes match on every OS), written back as CRLF
   provenance: Map<string, { [k: string]: Json }>;
   e080Streak: number; // consecutive OARC-E080s in this run; generate stops calling the backend at 3
+  timings?: Timings; // the current attempt's stage times (ms), reset per attempt (issue #19 latency)
   concepts?: Map<string, concepts.ConceptInfo>; // palette: defineConcept statements, by id
   tests?: testsPlan.TestInfo[]; // code-first: every arc.test/arc.law statement, in file then source order
   scaffolds?: implicit.Scaffolded[]; // code-first: markers inserted in memory inside pending bodies
@@ -497,7 +499,9 @@ export async function analyze(ports: Ports, req: CompileRequest, p: Project, dia
     const backend = backendFor(p, r.id, 0);
     const digest = await modelDigest(ports, p, backend, diagnostics);
     if (digest === null) return;
+    const tc = performance.now();
     r.context0 = buildContext(p, r, initialLevel(p, r), backend);
+    r.contextMs = Math.round(performance.now() - tc);
     const parentSpecHash = r.kind === "block" ? (p.regions.find((x) => x.id === r.root)?.specHash ?? null) : null;
     // The fingerprint hashes the STABLE view of the context (§4.3): sibling regions by signature whether pending or not,
     // never their bodies. Otherwise committing one region would re-queue its siblings.
@@ -1353,6 +1357,12 @@ function splitDefaults(raw: string): { raw: string; defaults: Map<number, string
 
 export const ATTEMPTS_KEPT = 20;
 /** Failed attempts go to .openarc/attempts/<id>/<n>.json (n counts up across runs; the last ATTEMPTS_KEPT stay). */
+/** Per-attempt latency by stage, in ms: context, model, static, tsc, sandboxStage (writes and links), sandboxStart
+ *  (spawn to the harness's first line), tests (harness to exit). Recorded in the attempt file and logged with --timings. */
+export type Timings = Record<string, number>;
+const lap = (p: Project, stage: string, t0: number): void => { const t = (p.timings ??= {}); t[stage] = Math.round((t[stage] ?? 0) + performance.now() - t0); };
+export const timingsLine = (t: Timings): string => Object.entries(t).map(([k, v]) => `${k} ${v}`).join(" · ");
+
 async function saveAttempt(ports: Ports, id: string, record: { [k: string]: Json }): Promise<void> {
   const dir = `.openarc/attempts/${id}`;
   const ns = (await ports.fs.list(dir)).map((f) => Number.parseInt(f, 10)).filter(Number.isFinite).sort((a, b) => a - b);
@@ -1420,7 +1430,9 @@ async function batchReply(ports: Ports, p: Project, r: RegionInfo, backend: Back
     p.batched!.delete(r.id);
     return mine;
   }
-  if (p.config.compilation.batch === "off" || !batchable(r) || !p.targets) return null;
+  const tb0 = performance.now(); // the lookahead and batch context are "context" time, on every path (generate excludes it from "model")
+  const none = (): null => (lap(p, "context", tb0), null);
+  if (p.config.compilation.batch === "off" || !batchable(r) || !p.targets) return none();
   let group = [r];
   for (const id of p.targets.slice(p.targets.indexOf(r.id) + 1)) {
     const x = p.regions.find((y) => y.id === id)!;
@@ -1431,7 +1443,7 @@ async function batchReply(ports: Ports, p: Project, r: RegionInfo, backend: Back
     if (group.length === 4) break; // ponytail: bounded lookahead, so an over-budget file never rescans every sibling
   }
   group = group.filter((x) => !group.some((y) => y !== x && (x.spec.calls ?? []).includes(y.spec.symbol)));
-  if (group.length < 2 || group[0] !== r) return null;
+  if (group.length < 2 || group[0] !== r) return none();
   const ids = group.map((x) => x.id);
   const code = backend.outputFormat === "code";
   const context = batchContext(p, group, backend);
@@ -1441,7 +1453,8 @@ async function batchReply(ports: Ports, p: Project, r: RegionInfo, backend: Back
   if (!rendered.ok) throw new Error(`batch prompt template is missing ${rendered.missing.join(", ")}`);
   const system = code ? BATCH_CODE_SYSTEM : BATCH_JSON_SYSTEM;
   // the whole request (prompt and system text) must leave the output reserve free, else one request per region
-  if (rendered.text.length + system.length > (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5) return null;
+  if (rendered.text.length + system.length > (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5) return none();
+  lap(p, "context", tb0);
   const t0 = Date.now();
   // a failed request throws: generate reports it as this region's E080, like its own request's
   const { text: raw, tokens } = await completeWithUsage(ports, { ...backend, ...(code ? {} : { outputSchema: batchSchema(ids) }) }, system, rendered.text);
@@ -1473,6 +1486,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   let modelCalls = 0;
   let previous: { body: string; problems: string[] } | null = null;
   const seen = new Set<string>(); // repeatKey of every body (or invalid reply) this run produced for the region
+  const logTimings = () => { if (req.timings) ports.log(`  ${id}: timings ${timingsLine(p.timings ?? {})}`); };
   let spent: Tokens | null = null; // every model call for this region in this run (provenance.tokens)
   let cachedTokens: Tokens | null = null; // a cache hit carries the tokens that produced its body
   for (const [law, why] of concepts.waivers(r.spec)) ports.log(`  ${id}: law "${law}" waived: ${why}`); // palette
@@ -1522,6 +1536,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   };
 
   for (let attempt = 1; attempt <= c.maxAttempts; attempt++) {
+    p.timings = attempt === 1 && r.contextMs !== undefined ? { context: r.contextMs } : {};
     // the last attempt is the fallback's however the previous one ended (invalid output, repeat or failed verify)
     if (attempt === c.maxAttempts && attempt > 1 && c.fallbackBackend) stage = 1;
     const backend = backendFor(p, id, stage);
@@ -1541,21 +1556,27 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       const digest = await modelDigest(ports, p, backend, diagnostics);
       if (digest === null) return backendDown();
       const t0 = Date.now();
+      let tm = performance.now(); // "model": the request(s) and parsing the reply; a context built here is "context"
       let raw: string;
       let contextChars: number;
       let shared: BatchShare | null;
+      const cx0 = p.timings?.context ?? 0;
       try {
         shared = attempt === 1 ? await batchReply(ports, p, r, backend) : null;
       } catch (e) {
         diagnostics.push(err("OARC-E080", { id, detail: (e as Error).message.slice(0, 120) }));
         return backendDown();
       }
+      tm += (p.timings?.context ?? 0) - cx0; // batchReply's pre-request work was lapped as "context"
       if (shared) {
         ({ raw, tokens, promptHash, ids: batch, contextChars } = shared);
         spent = addTokens(spent, tokens);
         modelCalls += shared.calls;
       } else {
+        const tcx = performance.now();
         const context = attempt === 1 && level === initialLevel(p, r) ? r.context0 : buildContext(p, r, level, backend);
+        lap(p, "context", tcx);
+        tm += performance.now() - tcx;
         contextChars = context.length;
         // palette: a sketch region uses the fills protocol; in "code" format the model returns the whole filled sketch as
         // one code block and verify's containment check (E099) recovers the fills
@@ -1580,12 +1601,14 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       }
       const split = code ? { raw, defaults: new Map<number, string>() } : splitDefaults(raw);
       const parsed = code ? parseCodeOutput(raw) : r.spec.sketch ? sketch.parseFills(split.raw, r.spec.sketch) : parseOutput(split.raw); // palette: fills
+      lap(p, "model", tm);
       const varied = sampling ? ` (retry sampling: temperature ${sampling.temperature}, seed ${sampling.seed})` : "";
       ports.log(`  ${id}: attempt ${attempt} via ${backend.name} (${backend.model}), context L${level} ${contextChars} chars${varied}${batch ? `, batched with ${batch.length - 1} other region${batch.length === 2 ? "" : "s"}` : ""}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
       if (!parsed.ok) {
         const problem = `output was not valid: ${parsed.diagnostic.detail}`;
         ports.log(`  ${id}: ✗ ${problem} (${raw.length} chars${raw.length ? `, ends ${JSON.stringify(raw.slice(-40))}` : ""})`);
-        await saveAttempt(ports, id, { attempt, backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, ...(batch ? { batch } : {}), raw, problems: [problem] });
+        logTimings();
+        await saveAttempt(ports, id, { attempt, backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, ...(batch ? { batch } : {}), raw, problems: [problem], timings: p.timings });
         if (repeated(raw)) {
           const stop = afterRepeat();
           if (stop) return stop;
@@ -1605,12 +1628,14 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     }
     const replyKey = body + (imports.length ? `\n${JSON.stringify(imports)}` : "");
     if (repeated(replyKey)) { // the same reply again: same verdict
-      await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, body, imports: imports as unknown as Json, problems: ["repeat of an earlier attempt (not verified again)"] });
+      await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, body, imports: imports as unknown as Json, problems: ["repeat of an earlier attempt (not verified again)"], timings: p.timings });
+      logTimings();
       const stop = afterRepeat();
       if (stop) return stop;
       continue;
     }
     const result = await verify(ports, req, p, r, body, imports);
+    logTimings();
     if (!result.ok && result.problems[0]?.startsWith("OARC-E091")) seen.delete(repeatKey(replyKey)); // a timeout is no verdict: an identical retry runs again
     if (result.ok) {
       if (attempt === 1 && cached) spent = cachedTokens;
@@ -1634,7 +1659,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       return { candidate: { id, body, imports, verifiedBy: result.verifiedBy }, modelCalls };
     }
     ports.log(`  ${id}: ✗ ${result.problems[0]?.slice(0, 160)}`);
-    await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, ...(batch ? { batch } : {}), body, imports: imports as unknown as Json, problems: result.problems });
+    await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, ...(batch ? { batch } : {}), body, imports: imports as unknown as Json, problems: result.problems, timings: p.timings });
     previous = { body, problems: result.problems };
     if (result.stop) { // palette: OARC-E100, no fill can fix it
       diagnostics.push(result.stop);
@@ -1663,7 +1688,10 @@ const importedSpecifiers = (text: string) =>
   new Set(ts.createSourceFile("i.ts", text, ts.ScriptTarget.Latest, true).statements.filter(ts.isImportDeclaration).map((d) => (d.moduleSpecifier as ts.StringLiteral).text));
 
 async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionInfo, body: string, imports: ImportDecl[]): Promise<Verified> {
-  const fail = (problems: string[], missingContext = false): Verified => ({ ok: false, problems, verifiedBy: [], missingContext });
+  const ts0 = performance.now();
+  let staticDone = false;
+  const endStatic = () => { if (!staticDone) lap(p, "static", ts0); staticDone = true; };
+  const fail = (problems: string[], missingContext = false): Verified => (endStatic(), { ok: false, problems, verifiedBy: [], missingContext });
   const base = p.accepted.get(r.file) ?? p.files.get(r.file)!;
   // static. Allowed (§7.2, matching RULES): deps, openarc, modules the file already imports, and type-only imports of
   // closure types the context showed as "not in scope" (from their own file).
@@ -1702,9 +1730,12 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   const overlay = new Map(p.files);
   for (const [k, v] of p.accepted) overlay.set(k, v);
   overlay.set(r.file, text);
+  endStatic();
+  const tt0 = performance.now();
   const prog = makeProgram(p, overlay, p.program);
   const sf = prog.getSourceFile(abs(p, r.file))!;
   const tsDiags = [...prog.getSyntacticDiagnostics(sf), ...prog.getSemanticDiagnostics(sf)].filter((d) => d.category === ts.DiagnosticCategory.Error);
+  lap(p, "tsc", tt0);
   if (tsDiags.length) {
     const msgs = tsDiags.slice(0, 6).map((d) => {
       const line = d.start !== undefined ? sf.getLineAndCharacterOfPosition(d.start).line : 0;
@@ -1830,6 +1861,7 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
   if (req.sandbox.unavailable) return { complete: false, passed: 0, failed: [], hits: none, error: `OARC-E092 sandbox unavailable: ${req.sandbox.unavailable}` };
   const tier = req.sandbox.isolation ?? "bwrap";
   const dir = p.sandboxDir ?? (p.sandboxDir = `.openarc/sandbox/${Date.now().toString(36)}`);
+  const tg0 = performance.now();
   if ((await ports.fs.read(`${dir}/package.json`)) === null) {
     for (const f of ["package.json", "tsconfig.json", ...SOURCE_DIRS.map((d) => `${d}/package.json`)]) {
       const t = await ports.fs.read(f);
@@ -1842,7 +1874,7 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
     // project, and isolation.readPaths grants exactly that directory. The container tier mounts it at /work/node_modules.
     if (tier === "bwrap") {
       const cp = await ports.proc.run(["cp", "-al", `${p.root}/node_modules`, `${p.root}/${dir}/node_modules`], 60_000);
-      if (cp.code !== 0) return { complete: false, passed: 0, failed: [], hits: none, error: `OARC-E092 could not stage node_modules: ${cp.stdout}` };
+      if (cp.code !== 0) return lap(p, "sandboxStage", tg0), { complete: false, passed: 0, failed: [], hits: none, error: `OARC-E092 could not stage node_modules: ${cp.stdout}` };
     } else if (tier === "container") await ports.fs.write(`${dir}/node_modules/.mountpoint`, "");
   }
   const tests = testsPlan.harnessTests(p.tests ?? [], testIds); // code-first: the planned tests, and staged copies that index them
@@ -1861,7 +1893,16 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
   const argv = tier === "bwrap"
     ? buildArgv({ ...limits, stageDir: `${p.root}/${dir}`, addressSpaceBytes: sb.addressSpaceBytes ?? req.sandbox.addressSpaceBytes, extraReadPaths: bwrapReadPaths(p.root, `${p.root}/${dir}`) })
     : tierArgv(tier, { ...limits, root: p.root, stageDir: join(p.root, dir), containerImage: req.sandbox.containerImage });
-  const res = await ports.proc.run(argv, ((sb.cpuSeconds ?? req.sandbox.cpuSeconds) + 20) * 1000);
+  lap(p, "sandboxStage", tg0);
+  const spawned = Date.now(), tr0 = performance.now();
+  const ran = await ports.proc.run(argv, ((sb.cpuSeconds ?? req.sandbox.cpuSeconds) + 20) * 1000);
+  // the harness entry's first line is its start time: spawn to it is sandbox startup, the rest is the tests.
+  // ponytail: wall clocks of two processes; a clock step during startup shifts time between the two (clamped to total, so the sum stays right)
+  const mark = /^\{"openarcStart":(\d+)\}\n/.exec(ran.stdout);
+  const res = mark ? { ...ran, stdout: ran.stdout.slice(mark[0].length) } : ran;
+  const total = performance.now() - tr0, start = mark ? Math.min(total, Math.max(0, Number(mark[1]) - spawned)) : 0;
+  (p.timings ??= {}).sandboxStart = Math.round((p.timings.sandboxStart ?? 0) + start);
+  p.timings.tests = Math.round((p.timings.tests ?? 0) + total - start);
   if (res.timedOut) return { complete: false, passed: 0, failed: [], hits: none, error: "OARC-E091 sandbox timed out" };
   const summary = { ...readHarnessOutput(res.stdout), hits: harnessHits(res.stdout), stdout: res.stdout };
   // no outcome line at all (only stderr: a crash before the first example): one diagnostic, not one failure per line

@@ -155,3 +155,17 @@ async function compile(maxAttempts: number, bodies: string[]) {
 }
 
 console.log("efficiency: ok");
+
+// ── latency: --timings logs each attempt's stage times, and the commit's
+{
+  const logs: string[] = [];
+  const fake = fakePorts({ files: project(1), http: [TAGS, chat("return n + 1;")] });
+  const res = await run({ ...(fake.instance as Ports), log: (l: string) => logs.push(l) }, { ...req, timings: true });
+  assert.equal(res.exit, 0, JSON.stringify(res.diagnostics));
+  assert.ok(logs.some((l) => /^  ef\.inc: timings context \d+ · model \d+ · static \d+ · tsc \d+$/.test(l)), logs.join("\n"));
+  assert.ok(logs.some((l) => /^timings commit \d+$/.test(l)), logs.join("\n"));
+  const quiet: string[] = [];
+  await run({ ...(fakePorts({ files: project(1), http: [TAGS, chat("return n + 1;")] }).instance as Ports), log: (l: string) => quiet.push(l) }, req);
+  assert.ok(!quiet.some((l) => l.includes("timings")), "no timings without the flag");
+  console.log("efficiency: timings ok");
+}

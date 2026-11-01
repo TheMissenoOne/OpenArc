@@ -255,7 +255,7 @@ async function analyzeOffline(ports: Ports, root: string, diagnostics: Diagnosti
   return project;
 }
 
-const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> [--model <id>] [--base-url <url>]] | backends [test [name]] | scaffold | compile [--keep-going] [ids...] | watch [--debounce <ms>] | graph | inspect <id>
+const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> [--model <id>] [--base-url <url>]] | backends [test [name]] | scaffold | compile [--keep-going] [--timings] [ids...] | watch [--debounce <ms>] | graph | inspect <id>
        openarc freeze|release <id> | resolve <id> --keep|--regen|--unlink
        openarc extract <file> [--function <name>] [--id <id>] [--style code|region]
        openarc migrate <id>
@@ -472,7 +472,8 @@ async function main(argv: string[]): Promise<number> {
       if (!isolationNotice(project.config)) return 1;
       const t0 = Date.now();
       const keepGoing = cmd.ids.includes("--keep-going");
-      const res = await run(ports, { ...request(root, project, cmd.ids.filter((a) => !a.startsWith("--"))), keepGoing });
+      const timings = cmd.ids.includes("--timings");
+      const res = await run(ports, { ...request(root, project, cmd.ids.filter((a) => !a.startsWith("--"))), keepGoing, ...(timings ? { timings } : {}) });
       res.diagnostics.forEach((d) => console.error(fmt(d)));
       const stale = res.diagnostics.filter((d) => d.code === "OARC-W043").map((d) => d.id);
       if (stale.length) console.error(`stale: ${stale.join(", ")} keep${stale.length === 1 ? "s" : ""} a body that does not satisfy the current spec`);
