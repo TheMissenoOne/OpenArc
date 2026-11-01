@@ -51,7 +51,7 @@ for (const k of arms) {
   md += `| ${k} | ${rs.length} | ${Object.values(M).map((m) => ci(boot(stat(perEx(rs, m.fn), m)), fmt(m))).join(" | ")} |\n`;
 }
 
-const PAIRS = [["A@0.9.2", "A@0.9.1"], ["A@0.9.2", "D@0.9.2"], ["A@0.9.2", "D@0.9.1"], ["E-resample@0.9.2", "E-resample@0.9.1"], ["E-resample@0.9.2", "D@0.9.2"], ["D@0.9.2", "D@0.9.1"], ["A@0.9.1", "A@0.8.0"], ["A@0.9.1", "D@0.9.1"], ["A@0.9.1", "D@0.8.0"], ["E-resample@0.9.1", "E-resample@0.8.0"], ["E-resample@0.9.1", "D-resample@0.9.1"], ["A@0.8.0", "D@0.8.0"], ["D@0.9.1", "D@0.8.0"]];
+const PAIRS = [["A@0.9.3", "A@0.9.2"], ["A@0.9.3", "D@0.9.2"], ["E-resample@0.9.3", "E-resample@0.9.2"], ["E-resample@0.9.3", "D@0.9.2"], ["A@0.9.2", "A@0.9.1"], ["A@0.9.2", "D@0.9.2"], ["A@0.9.2", "D@0.9.1"], ["E-resample@0.9.2", "E-resample@0.9.1"], ["E-resample@0.9.2", "D@0.9.2"], ["D@0.9.2", "D@0.9.1"], ["A@0.9.1", "A@0.8.0"], ["A@0.9.1", "D@0.9.1"], ["A@0.9.1", "D@0.8.0"], ["E-resample@0.9.1", "E-resample@0.8.0"], ["E-resample@0.9.1", "D-resample@0.9.1"], ["A@0.8.0", "D@0.8.0"], ["D@0.9.1", "D@0.8.0"]];
 const sign = (f) => (x) => `${x >= 0 ? "+" : ""}${f(x)}`;
 md += `\n## Paired differences (first arm minus second; 95% bootstrap CI over exercises)\n\n| pair | ${Object.keys(M).join(" | ")} |\n|---|${Object.keys(M).map(() => "---").join("|")}|\n`;
 for (const [a, b] of PAIRS) {
