@@ -58,8 +58,8 @@ async function compile(maxAttempts: number, bodies: string[]) {
 
 // ── 2. repeat-stop
 {
-  // the same body three times (whitespace differs): one verification, one varied retry, then stop with 2 of 5 calls left
-  const { res, sent, attempt, logs } = await compile(5, ['return "x";', '  return   "x";\n', 'return "x";']);
+  // the same body three times (surrounding whitespace aside): one verification, one varied retry, then stop with 2 of 5 calls left
+  const { res, sent, attempt, logs } = await compile(5, ['return "x";', '  return "x";\n', 'return "x";']);
   assert.equal(res.exit, 1);
   assert.equal(sent.length, 3, "a second repeat stops the region before the budget of 5 is spent");
   assert.match(attempt(1)!.problems[0]!, /^OARC-E070 TS2322/);
@@ -68,6 +68,13 @@ async function compile(maxAttempts: number, bodies: string[]) {
   const e082 = res.diagnostics.find((d) => d.code === "OARC-E082")!;
   assert.match(e082.detail!, /^repeat: OARC-E070 TS2322/, "reported with the last real verdict");
   assert.ok(logs.some((l) => /repeats an earlier attempt; not verified again/.test(l)) && logs.some((l) => /repeats an earlier attempt; stopping/.test(l)));
+  // exact text: spacing inside a literal is a different reply (CodeRabbit #20)
+  assert.notEqual(engine.repeatKey('return "a  b";'), engine.repeatKey('return "a b";'));
+  // with a fallback backend, a second repeat on the penultimate attempt still leaves the last attempt to the fallback
+  const fb = fakePorts({ files: { ...project(4), "openarc.config.json": JSON.stringify({ version: 1, backends: { local: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, seed: 1 }, big: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, seed: 9 } }, compilation: { defaultBackend: "local", maxAttempts: 4, fallbackBackend: "big" } }) }, http: [TAGS, ...['return "x";', 'return "x";', 'return "x";', "return n + 1;"].map(chat)] });
+  const fbRes = await run(fb.instance as Ports, { ...req, keepGoing: true });
+  assert.equal(fbRes.exit, 0, JSON.stringify(fbRes.diagnostics));
+  assert.equal(chats(fb.snapshot() as Snap).length, 4, "the fallback's attempt ran");
   // one repeat, then a different body that passes: compiled on attempt 3 with the varied sampling recorded
   const ok = await compile(3, ['return "x";', 'return "x";', "return n + 1;"]);
   assert.equal(ok.res.exit, 0, JSON.stringify(ok.res.diagnostics));
@@ -97,7 +104,7 @@ async function compile(maxAttempts: number, bodies: string[]) {
     for (const r of [one, fence(one)]) assert.equal(engine.unwrapBody(r, "function", false, self), "return 1;", r);
   // left alone: another name, other parameters, a body that already returns, two declarations, a block region
   for (const r of [`${helper}\nconst other = (n: number) => 1;`, `${helper}\nconst verse = (k: number) => 1;`, `${helper}\nconst verse = (n: number, m: number) => 1;`,
-    `const verse = (n: number) => 1;\nreturn verse(n);`, `${helper}\nfunction verse(n: number) { return 1; }\nfunction verse(n: number) { return 2; }`])
+    `const verse = (n: number) => 1;\nreturn verse(n);`, `const verse = (n: number) => 1;\nif (n > 0) return verse(n);`, `${helper}\nfunction verse(n: number) { return 1; }\nfunction verse(n: number) { return 2; }`])
     assert.equal(engine.unwrapBody(r, "function", false, self), r, r);
   assert.equal(engine.unwrapBody(`${helper}\nconst verse = (n: number) => 1;`, "block", false, self), `${helper}\nconst verse = (n: number) => 1;`);
   // end to end: helpers + the whole function compiles on attempt 1 (was TS2322 "(n: number) => void")

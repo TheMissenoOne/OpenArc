@@ -981,7 +981,9 @@ function unwrapOwn(sf: ts.SourceFile, self: { name: string; params: string[] }):
   const norm = (s: string) => s.replace(/\s+/g, "");
   if (!fn.body || fn.parameters.length !== self.params.length || fn.parameters.some((x, i) => norm(x.name.getText(sf)) !== norm(self.params[i]!))) return null;
   const rest = sf.statements.filter((st) => st !== own[0] && !ts.isExportAssignment(st) && !ts.isExportDeclaration(st)); // `export default f;`, `export { f };`
-  if (rest.some(ts.isReturnStatement)) return null;
+  // a return anywhere in the rest (an `if (…) return verse(n);` too), not counting nested functions' own returns
+  const returns = (n: ts.Node): boolean => ts.isReturnStatement(n) || (!ts.isFunctionLike(n) && !!ts.forEachChild(n, (c) => returns(c) || undefined));
+  if (rest.some(returns)) return null;
   return [...rest.map((st) => st.getText(sf).replace(/^export\s+(default\s+)?/, "")), bodyText(fn, sf)].join("\n");
 }
 
@@ -1332,7 +1334,8 @@ export function retrySampling(b: BackendConfig, attempt: number): { temperature:
 
 /** A body compared for repeats: whitespace runs collapsed (ponytail: also inside string literals; a repeat that only
  *  differs in a string's spacing is rare enough). */
-export const repeatKey = (body: string): string => body.replace(/\s+/g, " ").trim();
+// Exact text (trimmed): collapsing whitespace would also merge replies that differ only inside a string literal.
+export const repeatKey = (body: string): string => body.trim();
 
 export async function generate(ports: Ports, req: CompileRequest, p: Project, id: string, diagnostics: Diagnostic[]): Promise<{ candidate: Candidate | null; modelCalls: number }> {
   const r = p.regions.find((x) => x.id === id)!;
@@ -1364,7 +1367,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     if (++p.e080Streak === 3) diagnostics.push(err("OARC-E080", { detail: "stopped:3-consecutive" }));
     return giveUp();
   };
-  // Repeat-stop: a reply equal (whitespace aside) to an earlier one of this run is not verified again; the next attempt
+  // Repeat-stop: a reply identical to an earlier one of this run is not verified again; the next attempt
   // samples differently (retrySampling), and a second repeat ends the region's attempts (E082 repeat:).
   const repeated = (text: string): boolean => {
     const key = repeatKey(text);
@@ -1445,13 +1448,15 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       ports.log(`  ${id}: stripped ${clean.stripped} comment${clean.stripped === 1 ? "" : "s"} mentioning @openarc: (markers belong to the compiler)`);
       body = clean.body;
     }
-    if (repeated(body + (imports.length ? `\n${JSON.stringify(imports)}` : ""))) { // the same reply again: same verdict
+    const replyKey = body + (imports.length ? `\n${JSON.stringify(imports)}` : "");
+    if (repeated(replyKey)) { // the same reply again: same verdict
       await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, body, imports: imports as unknown as Json, problems: ["repeat of an earlier attempt (not verified again)"] });
-      if (repeats >= 2) return stopRepeating();
-      if (attempt === c.maxAttempts - 1 && c.fallbackBackend) stage = 1;
+      if (attempt === c.maxAttempts - 1 && c.fallbackBackend) stage = 1; // the last attempt is the fallback's, repeat or not
+      else if (repeats >= 2) return stopRepeating();
       continue;
     }
     const result = await verify(ports, req, p, r, body, imports);
+    if (!result.ok && result.problems[0]?.startsWith("OARC-E091")) seen.delete(repeatKey(replyKey)); // a timeout is no verdict: an identical retry runs again
     if (result.ok) {
       if (attempt === 1 && cached) spent = cachedTokens;
       if (result.holes?.length) { // palette: a hole no passing example reaches is unverified (W045): not cached, not committed
