@@ -148,3 +148,22 @@ const count = (s: string, sub: string) => s.split(sub).length - 1;
 }
 
 console.log("batch: request shape, partial failure, write scope, code format, off, resample ok");
+
+// ── 6. a sibling added (spec unchanged, context changed): the existing body is re-verified, not regenerated (#19 evolution run)
+{
+  const config = { version: 1, backends: { local: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, seed: 1 } }, compilation: { defaultBackend: "local", maxAttempts: 1 } };
+  const first = fakePorts({ files: { "src/bt.ts": SRC, [M]: '{"schema":1,"regions":{}}', "openarc.config.json": JSON.stringify(config) }, http: [TAGS, both("return n + 1;", "return n * 2;")] });
+  assert.equal((await run(first.instance as Ports, req)).exit, 0);
+  const files = Object.fromEntries(Object.entries((first.snapshot() as Snap).files).filter(([f]) => !f.startsWith(".openarc/cache/"))); // no cache: the kept body has to carry it
+  files["src/bt.ts"] += 'type Neg = (n: number) => number;\nexport const negSpec = arc.defineRegion<Neg>({ id: "bt.neg", intent: "negate" });\n';
+  const second = fakePorts({ files, http: [TAGS, one("return -n;")] });
+  const res = await run(second.instance as Ports, req);
+  assert.equal(res.exit, 0, JSON.stringify(res.diagnostics));
+  assert.equal(res.modelCalls, 1, "only the new region calls the model");
+  const snap = second.snapshot() as Snap;
+  const prompts = snap.requests.filter((q) => q.url.endsWith("/api/chat")).map((q) => (q.body as unknown as Chat).messages[1]!.content);
+  assert.ok(prompts.length === 1 && prompts[0]!.startsWith("Implement exactly one OpenArc region") && prompts[0]!.includes("negate"), "the new region alone, not batched with the kept ones");
+  const out = snap.files["src/bt.ts"]!;
+  assert.ok(out.includes("  return n + 1;") && out.includes("  return n * 2;") && out.includes("  return -n;"), out);
+}
+console.log("batch.check: kept bodies ok");
