@@ -176,7 +176,10 @@ export async function run(ports: Ports, req: CompileRequest): Promise<CompileRes
     // @openarc:begin compile.run.stage
     if (project !== null) staged = await engine.stage(ports, req, project, candidates, txid, diagnostics);
     // @openarc:end compile.run.stage
-    if (staged.length === 0) return done(1);
+    if (staged.length === 0) {
+      if (req.timings) ports.log(`timings stage ${Math.round(performance.now() - tc0)} (nothing written)`);
+      return done(1);
+    }
 
     // @openarc:begin compile.run.commit
     await commit(ports.fs, planJournal(txid, staged.map((f, i) => ({ target: f.target, staged: `.openarc/txn/${txid}/stage/${i}` }))));

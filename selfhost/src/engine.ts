@@ -1430,7 +1430,9 @@ async function batchReply(ports: Ports, p: Project, r: RegionInfo, backend: Back
     p.batched!.delete(r.id);
     return mine;
   }
-  if (p.config.compilation.batch === "off" || !batchable(r) || !p.targets) return null;
+  const tb0 = performance.now(); // the lookahead and batch context are "context" time, on every path (generate excludes it from "model")
+  const none = (): null => (lap(p, "context", tb0), null);
+  if (p.config.compilation.batch === "off" || !batchable(r) || !p.targets) return none();
   let group = [r];
   for (const id of p.targets.slice(p.targets.indexOf(r.id) + 1)) {
     const x = p.regions.find((y) => y.id === id)!;
@@ -1441,7 +1443,7 @@ async function batchReply(ports: Ports, p: Project, r: RegionInfo, backend: Back
     if (group.length === 4) break; // ponytail: bounded lookahead, so an over-budget file never rescans every sibling
   }
   group = group.filter((x) => !group.some((y) => y !== x && (x.spec.calls ?? []).includes(y.spec.symbol)));
-  if (group.length < 2 || group[0] !== r) return null;
+  if (group.length < 2 || group[0] !== r) return none();
   const ids = group.map((x) => x.id);
   const code = backend.outputFormat === "code";
   const context = batchContext(p, group, backend);
@@ -1451,7 +1453,8 @@ async function batchReply(ports: Ports, p: Project, r: RegionInfo, backend: Back
   if (!rendered.ok) throw new Error(`batch prompt template is missing ${rendered.missing.join(", ")}`);
   const system = code ? BATCH_CODE_SYSTEM : BATCH_JSON_SYSTEM;
   // the whole request (prompt and system text) must leave the output reserve free, else one request per region
-  if (rendered.text.length + system.length > (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5) return null;
+  if (rendered.text.length + system.length > (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5) return none();
+  lap(p, "context", tb0);
   const t0 = Date.now();
   // a failed request throws: generate reports it as this region's E080, like its own request's
   const { text: raw, tokens } = await completeWithUsage(ports, { ...backend, ...(code ? {} : { outputSchema: batchSchema(ids) }) }, system, rendered.text);
@@ -1483,6 +1486,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   let modelCalls = 0;
   let previous: { body: string; problems: string[] } | null = null;
   const seen = new Set<string>(); // repeatKey of every body (or invalid reply) this run produced for the region
+  const logTimings = () => { if (req.timings) ports.log(`  ${id}: timings ${timingsLine(p.timings ?? {})}`); };
   let spent: Tokens | null = null; // every model call for this region in this run (provenance.tokens)
   let cachedTokens: Tokens | null = null; // a cache hit carries the tokens that produced its body
   for (const [law, why] of concepts.waivers(r.spec)) ports.log(`  ${id}: law "${law}" waived: ${why}`); // palette
@@ -1556,12 +1560,14 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       let raw: string;
       let contextChars: number;
       let shared: BatchShare | null;
+      const cx0 = p.timings?.context ?? 0;
       try {
         shared = attempt === 1 ? await batchReply(ports, p, r, backend) : null;
       } catch (e) {
         diagnostics.push(err("OARC-E080", { id, detail: (e as Error).message.slice(0, 120) }));
         return backendDown();
       }
+      tm += (p.timings?.context ?? 0) - cx0; // batchReply's pre-request work was lapped as "context"
       if (shared) {
         ({ raw, tokens, promptHash, ids: batch, contextChars } = shared);
         spent = addTokens(spent, tokens);
@@ -1601,7 +1607,8 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       if (!parsed.ok) {
         const problem = `output was not valid: ${parsed.diagnostic.detail}`;
         ports.log(`  ${id}: ✗ ${problem} (${raw.length} chars${raw.length ? `, ends ${JSON.stringify(raw.slice(-40))}` : ""})`);
-        await saveAttempt(ports, id, { attempt, backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, ...(batch ? { batch } : {}), raw, problems: [problem] });
+        logTimings();
+        await saveAttempt(ports, id, { attempt, backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, ...(batch ? { batch } : {}), raw, problems: [problem], timings: p.timings });
         if (repeated(raw)) {
           const stop = afterRepeat();
           if (stop) return stop;
@@ -1621,13 +1628,14 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     }
     const replyKey = body + (imports.length ? `\n${JSON.stringify(imports)}` : "");
     if (repeated(replyKey)) { // the same reply again: same verdict
-      await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, body, imports: imports as unknown as Json, problems: ["repeat of an earlier attempt (not verified again)"] });
+      await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, body, imports: imports as unknown as Json, problems: ["repeat of an earlier attempt (not verified again)"], timings: p.timings });
+      logTimings();
       const stop = afterRepeat();
       if (stop) return stop;
       continue;
     }
     const result = await verify(ports, req, p, r, body, imports);
-    if (req.timings) ports.log(`  ${id}: timings ${timingsLine(p.timings)}`);
+    logTimings();
     if (!result.ok && result.problems[0]?.startsWith("OARC-E091")) seen.delete(repeatKey(replyKey)); // a timeout is no verdict: an identical retry runs again
     if (result.ok) {
       if (attempt === 1 && cached) spent = cachedTokens;
@@ -1681,7 +1689,9 @@ const importedSpecifiers = (text: string) =>
 
 async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionInfo, body: string, imports: ImportDecl[]): Promise<Verified> {
   const ts0 = performance.now();
-  const fail = (problems: string[], missingContext = false): Verified => ({ ok: false, problems, verifiedBy: [], missingContext });
+  let staticDone = false;
+  const endStatic = () => { if (!staticDone) lap(p, "static", ts0); staticDone = true; };
+  const fail = (problems: string[], missingContext = false): Verified => (endStatic(), { ok: false, problems, verifiedBy: [], missingContext });
   const base = p.accepted.get(r.file) ?? p.files.get(r.file)!;
   // static. Allowed (§7.2, matching RULES): deps, openarc, modules the file already imports, and type-only imports of
   // closure types the context showed as "not in scope" (from their own file).
@@ -1720,7 +1730,7 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   const overlay = new Map(p.files);
   for (const [k, v] of p.accepted) overlay.set(k, v);
   overlay.set(r.file, text);
-  lap(p, "static", ts0);
+  endStatic();
   const tt0 = performance.now();
   const prog = makeProgram(p, overlay, p.program);
   const sf = prog.getSourceFile(abs(p, r.file))!;
@@ -1864,7 +1874,7 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
     // project, and isolation.readPaths grants exactly that directory. The container tier mounts it at /work/node_modules.
     if (tier === "bwrap") {
       const cp = await ports.proc.run(["cp", "-al", `${p.root}/node_modules`, `${p.root}/${dir}/node_modules`], 60_000);
-      if (cp.code !== 0) return { complete: false, passed: 0, failed: [], hits: none, error: `OARC-E092 could not stage node_modules: ${cp.stdout}` };
+      if (cp.code !== 0) return lap(p, "sandboxStage", tg0), { complete: false, passed: 0, failed: [], hits: none, error: `OARC-E092 could not stage node_modules: ${cp.stdout}` };
     } else if (tier === "container") await ports.fs.write(`${dir}/node_modules/.mountpoint`, "");
   }
   const tests = testsPlan.harnessTests(p.tests ?? [], testIds); // code-first: the planned tests, and staged copies that index them
@@ -1886,7 +1896,8 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
   lap(p, "sandboxStage", tg0);
   const spawned = Date.now(), tr0 = performance.now();
   const ran = await ports.proc.run(argv, ((sb.cpuSeconds ?? req.sandbox.cpuSeconds) + 20) * 1000);
-  // the harness entry's first line is its start time: spawn to it is sandbox startup, the rest is the tests
+  // the harness entry's first line is its start time: spawn to it is sandbox startup, the rest is the tests.
+  // ponytail: wall clocks of two processes; a clock step during startup shifts time between the two (clamped to total, so the sum stays right)
   const mark = /^\{"openarcStart":(\d+)\}\n/.exec(ran.stdout);
   const res = mark ? { ...ran, stdout: ran.stdout.slice(mark[0].length) } : ran;
   const total = performance.now() - tr0, start = mark ? Math.min(total, Math.max(0, Number(mark[1]) - spawned)) : 0;
