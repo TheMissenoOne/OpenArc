@@ -2,6 +2,8 @@
 // `/** @jsxImportSource open-arc/ui */` type-checks its `ui` against these. The compiler reads `ui` as syntax and never
 // runs it; these functions only build the tree the type checker sees. Each word's meaning, and the DOM check that
 // verifies it, live in the compiler (src/ui.ts) and the harness (core/ui-harness.ts).
+// Deprecated and frozen since 0.9.0: these four words keep working unchanged; the mechanism (static reader, DOM harness,
+// ui.dom) stays supported, and project-defined vocabularies come with code-first phase 5.
 import type { UiNode } from "./index.ts";
 
 type Kids = UiNode | string | (UiNode | string)[];
@@ -11,19 +13,27 @@ const node = (tag: string, props: { children?: Kids } & Record<string, unknown>)
 };
 
 /** A <form> with a heading `title`. On submit it calls onSubmit with { <field name>: value } for every Field; a result
- *  with ok: false shows its `error` in ErrorText; ok: true calls onSuccess with the result. */
+ *  with ok: false shows its `error` in ErrorText; ok: true calls onSuccess with the result.
+ * @deprecated The built-in open-arc/ui vocabulary is deprecated and frozen since 0.9.0. The TSX UI spec mechanism stays supported; project-defined vocabularies come with code-first phase 5 (see Palette wiki: Building your own palette).
+ */
 export function Form(p: { title: string; onSubmit: (values: never) => unknown; onSuccess?: (result: never) => unknown; children?: Kids }): UiNode {
   return node("Form", p);
 }
-/** A labelled <input>: the label is its accessible name. `secret` means type="password". */
+/** A labelled <input>: the label is its accessible name. `secret` means type="password".
+ * @deprecated The built-in open-arc/ui vocabulary is deprecated and frozen since 0.9.0. The TSX UI spec mechanism stays supported; project-defined vocabularies come with code-first phase 5 (see Palette wiki: Building your own palette).
+ */
 export function Field(p: { name: string; label: string; type?: "text" | "email" | "number" | "tel" | "url"; secret?: boolean; required?: boolean; autoComplete?: string }): UiNode {
   return node("Field", p);
 }
-/** role="alert": the last failure message, empty when there is none. */
+/** role="alert": the last failure message, empty when there is none.
+ * @deprecated The built-in open-arc/ui vocabulary is deprecated and frozen since 0.9.0. The TSX UI spec mechanism stays supported; project-defined vocabularies come with code-first phase 5 (see Palette wiki: Building your own palette).
+ */
 export function ErrorText(p: { children?: never }): UiNode {
   return node("ErrorText", p);
 }
-/** A submit button named by its text; disabled and showing busyText while onSubmit is pending. */
+/** A submit button named by its text; disabled and showing busyText while onSubmit is pending.
+ * @deprecated The built-in open-arc/ui vocabulary is deprecated and frozen since 0.9.0. The TSX UI spec mechanism stays supported; project-defined vocabularies come with code-first phase 5 (see Palette wiki: Building your own palette).
+ */
 export function Submit(p: { children: string; busyText?: string }): UiNode {
   return node("Submit", p);
 }

@@ -2,68 +2,145 @@
 
 [![npm](https://img.shields.io/npm/v/open-arc)](https://www.npmjs.com/package/open-arc)
 
-**Compile typed specs into verified TypeScript with small local models.**
+**Compile TypeScript with holes into verified TypeScript, using small local models.**
 
-You write the contract: a function type, examples, and as much structure as you know (prose, a sketch with typed holes, a concept's laws, a TSX component outline). OpenArc gives a local model only the context that one function needs, the way a unit test isolates code. It verifies the returned body with tsc, static rules (including an optional `calls` allowlist of the functions it may call) and your examples in a sandbox, where a block only counts as verified if an example actually runs it. Only then does it splice the body in. Hand edits are never overwritten, and the model can't touch anything outside its own region.
+You write ordinary TypeScript: interfaces, classes, the members you know how to write, and tests. Where you want the compiler to write a body, you leave `return arc.todo();`. OpenArc gives a model only the context that one body needs (the class shell, the types it reaches, the tests that exercise it), then verifies the returned body with tsc, static rules and your tests in a sandbox. Only then does it write the body in. Hand edits are never overwritten, and the model can't touch anything outside the body, except to add an import line it is allowed to use.
 
 ```ts
+// src/lb/balancer.ts
 import * as arc from "open-arc";
 
-type NormalizeTitle = (title: string) => string;
+export interface Backend { id: string; healthy: boolean }
 
-export const normalizeTitleSpec = arc.defineRegion<NormalizeTitle>({
-  id: "tasks.normalizeTitle",
-  intent: "Trim, collapse internal whitespace to one space, capitalize the first letter.",
-  examples: [
-    { args: ["  buy   milk "], expected: "Buy milk" },
-    { args: ["   "], expected: "" },
-  ],
+/** Routes requests to backends. */
+export interface Balancer {
+  /** The backend id for one request, or null when no backend is healthy. */
+  pick(key: string): string | null;
+}
+
+export class RoundRobin implements Balancer {
+  readonly backends: Backend[];
+  next = 0;
+  constructor(backends: Backend[]) {
+    this.backends = backends;
+  }
+  /** The next healthy backend in list order, wrapping around. Keys are ignored. */
+  pick(key: string): string | null {
+    return arc.todo(); // region lb.balancer.roundRobin.pick: the compiler writes this body
+  }
+}
+```
+
+```ts
+// tests/balancer.test.ts
+import * as arc from "open-arc";
+import { RoundRobin } from "../src/lb/balancer.ts";
+
+arc.test(RoundRobin, "rotates and skips unhealthy backends", (RR, expect) => {
+  const rr = new RR([{ id: "a", healthy: true }, { id: "b", healthy: false }, { id: "c", healthy: true }]);
+  expect(["1", "2", "3"].map((k) => rr.pick(k))).toEqual(["a", "c", "a"]);
+  expect(new RR([]).pick("k")).toBe(null);
 });
 ```
 
-What you can write instead of prose (since 0.8.0):
-
-- **Sketches:** the body as typed TypeScript with `arc.hole<T>("…")` gaps. The model fills only the holes; the compiler checks the rest is unchanged (`OARC-E099`), that every hole is reached by an example, and stops early when an example contradicts the sketch itself.
-- **Concepts:** `arc.defineConcept({ id, intent, laws })` and variants that name it. Laws are example templates every variant must pass, with its own fixtures.
-- **TSX UI specs:** `ui: (props) => <Form …><Field …/><Submit>…</Submit></Form>` in a `*.spec.tsx` file. The React component is checked in a real DOM inside the sandbox: structure, accessible names, wiring and interaction scripts.
-- **The palette:** reusable concepts that ship with OpenArc: authentication (password, API key, magic link), a load balancer (round-robin, least-connections, weighted, consistent-hash, health checks, failover), a p2p protocol (framing, handshake, gossip over a fake network) and a login page. Import them (`open-arc/palette/auth`) or copy them into your project. See [Palette](docs/wiki/Palette.md).
-
-Install from npm: [`open-arc`](https://www.npmjs.com/package/open-arc) (the command is `openarc`).
+The signature is the contract, the JSDoc is the intent, and the test is TypeScript that tsc checks against the real class. Members of one class are verified together, `arc.test.hidden` keeps a test out of the model's sight, and `arc.law` checks a property on seeded random inputs.
 
 ```bash
-npm i -D open-arc && npx openarc init
-npx openarc scaffold && npx openarc compile
-npx openarc watch    # or keep it running: recompiles regions as you save, one at a time
+npm i -D open-arc && npm pkg set type=module
+npx openarc init --example   # config, tsconfig, .openarc/, and a code-first starter (src/hello.ts + its test)
+npx tsc -p .                 # your code and tests type-check as written, pending bodies included
+npx openarc compile          # or keep it running: npx openarc watch
 ```
 
-**Documentation:** [Wiki](https://github.com/TheMissenoOne/OpenArc/wiki) (source in [`docs/wiki/`](docs/wiki)) · [Specification](SPEC-phase0.md)
+**Documentation:** [Wiki](https://github.com/TheMissenoOne/OpenArc/wiki) (source in [`docs/wiki/`](docs/wiki)) · [Specification](SPEC-phase0.md) · [Code-first example](examples/code-first-demo)
+
+## Features
+
+| Feature | What it does | Docs |
+|---|---|---|
+| **Code-first specs** | A pending body (`return arc.todo()`) in a function, method, getter or arrow is a region; tests are `arc.test`, `arc.test.hidden`, `arc.law` | [Code First](docs/wiki/Code-First.md) |
+| `defineRegion` and blocks | A function type plus intent and JSON examples; block regions inside a hand-written function | [Writing Specs](docs/wiki/Writing-Specs.md#more-ways-to-write-regions) |
+| Sketches | The body as typed code with `arc.hole<T>("…")` gaps; only the holes are generated | [Writing Specs](docs/wiki/Writing-Specs.md#sketches-structure-as-code) |
+| Concepts | One contract with laws, many variants that must pass them | [Writing Specs](docs/wiki/Writing-Specs.md#concepts-one-contract-many-variants) |
+| TSX UI specs | A component's rough structure in TSX, checked in a real DOM inside the sandbox | [Writing Specs](docs/wiki/Writing-Specs.md#ui-specs-tsx-structure) |
+| **Your own palette** | Concepts with laws, sketches, code-first classes: reusable building blocks you write, in your project or your own package | [Your own palette](docs/wiki/Palette.md) |
+| Watch mode | `openarc watch` recompiles regions as you save, one at a time | [Watch Mode](docs/wiki/Watch-Mode.md) |
+| `extract` | Adopt functions you already have as regions (bodies kept); code-first by default, `--style region` for specs | [Adopting Existing Code](docs/wiki/Adopting-Existing-Code.md) |
+| `migrate` | Turn one `defineRegion` region into code-first form, keeping its id, ownership and provenance | [Code First](docs/wiki/Code-First.md#migrating-a-defineregion-region) |
+| `check --oracle` | Compare a compiled region with a reference implementation on seeded inputs | [CLI Reference](docs/wiki/CLI-Reference.md) |
+| `doctor` | Show the sandbox tier on this machine and prove it with one sandboxed example | [Safety Model](docs/wiki/Safety-Model.md) |
+| Providers | Ollama by default; `init --backend openrouter\|openai\|anthropic\|local`; `backends test` sends one request | [Configuration](docs/wiki/Configuration.md) |
+| Output formats | `outputFormat: "json"` (a JSON body) or `"code"` (a fenced code block) per backend or region | [Configuration](docs/wiki/Configuration.md) |
+| Throws examples, token accounting | `{ throws: "message" }` examples; prompt and completion tokens per region in the manifest | [Writing Specs](docs/wiki/Writing-Specs.md#examples-that-throw) |
+
+**Deprecated:** the bundled palette (`open-arc/palette/*`, `examples/palette-demo`) and the built-in `open-arc/ui` vocabulary (`Form`, `Field`, `ErrorText`, `Submit`) are frozen since 0.9.0: they keep working unchanged, and the mechanisms they use stay supported.
+
+**Safety, enforced in code rather than in the prompt:** the model returns a body and never writes files; everything outside the body must stay byte-identical, except for added import lines the region may use (`OARC-E097`); a `calls` allowlist limits what a body may call (`OARC-E098`); a body counts as verified only if a passing test or example actually runs it (`OARC-W045`); tests and examples run in a sandbox whose strength depends on the OS (below). See [Safety Model](docs/wiki/Safety-Model.md).
+
+## More ways to write regions
+
+Code-first is the main way, and every earlier form stays fully supported. They mix freely, also in one file.
+
+| Form | Looks like | When |
+|---|---|---|
+| `defineRegion` | `arc.defineRegion<F>({ id, intent, examples })` and `export const f: F` between markers | you think in contracts and JSON examples, or the function type exists already |
+| Blocks | `arc.defineBlock({ id, intent })` around statements of a hand-written function | you want to write the control flow and leave steps to the model |
+| Sketches | `defineRegion({ sketch: (a) => { … arc.hole<T>("…") … } })` | you know the structure, not every expression |
+| Concepts | `defineConcept({ id, laws })` and variants with `concept:` | several implementations of one contract |
+| UI specs | `ui: (props) => <Form …/>` in a `*.spec.tsx` | React components checked in a DOM |
+| Customization | `@arc calls ...` JSDoc tags, `arc.configure(fn, { examples })`, a `defineRegion` with a code-first region's id | extra settings for a code-first region |
+
+## Status
+
+| | |
+|---|---|
+| Release | [`open-arc` on npm](https://www.npmjs.com/package/open-arc): 0.7.1 published; 0.8.0 (palette) and 0.9.0 (code-first) are in review |
+| CI | Linux (bwrap), macOS (sandbox-exec), Windows (Node permission model) on Node 25, plus Linux on Node 23 |
+| Benchmark | The untuned pilot solved 0/5 tasks with OpenArc against 2/5 for a plain prompt. A rerun on a tuned backend is in progress: preliminary results are about 2/8 against 3/8, and the code output format didn't help. OpenArc doesn't beat a plain prompt yet. See draft PR [#5](https://github.com/TheMissenoOne/OpenArc/pull/5) and issue [#10](https://github.com/TheMissenoOne/OpenArc/issues/10) |
+| Self-hosting | Part of OpenArc is compiled by OpenArc (`selfhost/`); finishing it is issue [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) |
+
+Alpha: the compiler's guarantees (write scope, sandbox, ownership) are tested on every commit; how often small models produce a passing body is what the benchmark is measuring.
+
+## Roadmap
+
+- [#13](https://github.com/TheMissenoOne/OpenArc/issues/13) Code-first specs: phases 1 and 2 are in 0.9.0; next are laws over every implementation of an interface, in-place sketches, and atomic-design TSX
+- [#10](https://github.com/TheMissenoOne/OpenArc/issues/10) Benchmark rerun on a tuned backend: JSON vs code output vs plain prompt
+- [#11](https://github.com/TheMissenoOne/OpenArc/issues/11) Local LLM setup: the best engine and model for a given machine
+- [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) Self-hosting: stage 1 and stage 2
+- [#15](https://github.com/TheMissenoOne/OpenArc/issues/15) Known limitations from the benchmark and reviews
+- [#7](https://github.com/TheMissenoOne/OpenArc/issues/7) VS Code extension
+- [#12](https://github.com/TheMissenoOne/OpenArc/issues/12) Palette (done in 0.8.0; the bundled palette is deprecated and frozen since 0.9.0)
 
 ## Repository layout
 
 | Path | What |
 |---|---|
-| `SPEC-phase0.md` | normative specification (v0.3) |
-| `selfhost/` | **OpenArc written as an OpenArc project.** It's the source of truth; regions are compiled by OpenArc itself |
-| `stage0/` | the bootstrap compiler: `selfhost/` with every region written by hand; builds the `open-arc` npm package |
-| `examples/demo/` | the smallest real project |
-| `examples/palette-demo/` | the palette in use: a login flow, a load-balanced service, a 3-peer gossip network |
-| `docs/wiki/` | wiki pages |
+| `SPEC-phase0.md` | the normative specification |
+| `stage0/` | the bootstrap compiler, written by hand; builds the `open-arc` npm package |
+| `selfhost/` | OpenArc as an OpenArc project: the same hand-written files, with regions compiled by OpenArc itself |
+| `examples/code-first-demo/` | code-first: load balancer classes, a p2p framing and gossip peer, a login adapter, with tests, a hidden test and laws |
+| `examples/demo/` | the smallest `defineRegion` project |
+| `examples/palette-demo/` | the bundled palette in use (deprecated, frozen): a login flow and page, a load-balanced service, a 3-peer gossip network |
+| `bench/` | the benchmark harness (on the draft PR [#5](https://github.com/TheMissenoOne/OpenArc/pull/5) branch) |
+| `vscode-extension/` | a VS Code extension: regions, states and commands in the editor ([#7](https://github.com/TheMissenoOne/OpenArc/issues/7)) |
+| `docs/wiki/` | the wiki's source |
+| `docs/design/` | design proposals (structured specs, code-first specs) |
 
 ## Develop
 
 ```bash
-cd stage0 && npm i && npx tsc -p . && node tools/run-examples.ts --strict   # 43/43 regions (24 compiler + 19 palette)
+cd stage0 && npm i && npx tsc -p . && node tools/run-examples.ts --strict   # 43/43 classic regions (24 compiler + 19 palette)
 (cd tests/fixtures/ui && npm i)                                              # optional: jsdom + react, so ui.check runs the DOM
-for f in tests/*.check.ts; do node $f; done                                   # no model; sandbox.check runs the real sandbox
-node tools/build.ts && (cd build && npm pack)                                # openarc-x.y.z.tgz
+for f in tests/*.check.ts; do node $f; done                                   # 20 checks, no model; several run the real sandbox
+node tools/build.ts && (cd build && npm pack)                                # build/open-arc-x.y.z.tgz
 cd ../selfhost && npm i && npx openarc compile --keep-going                  # OpenArc compiling OpenArc
 ```
 
 ## Requirements
 
-Linux, macOS or Windows, Node ≥ 23.6 (25+ recommended), and a model: local via [Ollama](https://ollama.com), or any API (OpenAI-compatible such as OpenAI, OpenRouter, Groq and vLLM, or Anthropic). Keys are read from environment variables named in `openarc.config.json`; see [Configuration](docs/wiki/Configuration.md).
+Linux, macOS or Windows, Node 23.6 or later (25+ recommended), and a model: local via [Ollama](https://ollama.com), or any API (OpenAI-compatible such as OpenAI, OpenRouter, Groq and vLLM, or Anthropic). Keys are read from environment variables named in `openarc.config.json`; see [Configuration](docs/wiki/Configuration.md).
 
-Examples always run sandboxed; how strongly depends on the OS (`sandbox.isolation`, default `"auto"`):
+Tests and examples always run sandboxed; how strongly depends on the OS (`sandbox.isolation`, default `"auto"`):
 
 | OS | Sandbox | Isolation |
 |---|---|---|
@@ -72,7 +149,7 @@ Examples always run sandboxed; how strongly depends on the OS (`sandbox.isolatio
 | Windows, or Linux without a usable `bwrap` | `node` | Node's permission model only, with warning `OARC-W046`: no writes, child processes, workers or addons; network blocked only on Node 25+ |
 | any, opt-in | `container` | `podman`/`docker --network=none`, read-only mount |
 
-`npx openarc doctor` shows the tier this machine uses and proves it with one sandboxed example. Running without a sandbox takes an explicit `"isolation": "unsafe-none"`. See [Safety Model](docs/wiki/Safety-Model.md).
+`npx openarc doctor` shows the tier this machine uses and proves it with one sandboxed example. Running without a sandbox takes an explicit `"isolation": "unsafe-none"`.
 
 ## License
 

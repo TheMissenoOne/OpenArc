@@ -5,18 +5,23 @@
 // through an upstream port.
 import * as arc from "open-arc";
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export interface Backend {
   id: string;
   healthy: boolean;
   weight: number; // >= 1; only `weighted` uses it
   connections: number; // open connections now; only `leastConnections` uses it
 }
-/** The concept's interface: route `keys` (one per request, in order) to backend ids; null when nothing is healthy. */
+/** The concept's interface: route `keys` (one per request, in order) to backend ids; null when nothing is healthy.
+ * @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette).
+ */
 export type Strategy = (backends: Backend[], keys: string[]) => (string | null)[];
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export interface Clock {
   now(): number;
 }
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const strategyConcept = arc.defineConcept({
   id: "lbStrategy",
   interface: "Strategy",
@@ -46,6 +51,7 @@ export const strategyConcept = arc.defineConcept({
 });
 
 // ── lb.roundRobin ─────────────────────────────────────────────── variant
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const roundRobinSpec = arc.defineRegion<Strategy>({
   id: "lb.roundRobin",
   concept: "lbStrategy",
@@ -64,6 +70,7 @@ export const roundRobinSpec = arc.defineRegion<Strategy>({
   ],
 });
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.roundRobin
 export const roundRobin: Strategy = (backends, keys) => {
   const healthy = backends.filter((b) => b.healthy);
@@ -72,6 +79,7 @@ export const roundRobin: Strategy = (backends, keys) => {
 // @openarc:end lb.roundRobin
 
 // ── lb.leastConnections ───────────────────────────────────────── variant
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const leastConnectionsSpec = arc.defineRegion<Strategy>({
   id: "lb.leastConnections",
   concept: "lbStrategy",
@@ -90,6 +98,7 @@ export const leastConnectionsSpec = arc.defineRegion<Strategy>({
   ],
 });
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.leastConnections
 export const leastConnections: Strategy = (backends, keys) => {
   const open = new Map(backends.filter((b) => b.healthy).map((b) => [b.id, b.connections]));
@@ -103,6 +112,7 @@ export const leastConnections: Strategy = (backends, keys) => {
 // @openarc:end lb.leastConnections
 
 // ── lb.weighted ───────────────────────────────────────────────── variant
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const weightedSpec = arc.defineRegion<Strategy>({
   id: "lb.weighted",
   concept: "lbStrategy",
@@ -124,6 +134,7 @@ export const weightedSpec = arc.defineRegion<Strategy>({
   ],
 });
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.weighted
 export const weighted: Strategy = (backends, keys) => {
   const healthy = backends.filter((b) => b.healthy);
@@ -145,6 +156,7 @@ export const weighted: Strategy = (backends, keys) => {
 // ── lb.hash32 ─────────────────────────────────────────────────── the hash consistentHash places keys with
 type Hash32 = (text: string) => number;
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const hash32Spec = arc.defineRegion<Hash32>({
   id: "lb.hash32",
   intent: [
@@ -158,6 +170,7 @@ export const hash32Spec = arc.defineRegion<Hash32>({
   ],
 });
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.hash32
 export const hash32: Hash32 = (text) => {
   let h = 2166136261;
@@ -172,9 +185,12 @@ export const hash32: Hash32 = (text) => {
 // @openarc:end lb.hash32
 
 // ── lb.consistentHash ─────────────────────────────────────────── variant, written as a sketch
-/** Virtual nodes per backend on the hash ring. */
+/** Virtual nodes per backend on the hash ring.
+ * @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette).
+ */
 export const REPLICAS = 64;
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const consistentHashSpec = arc.defineRegion<Strategy>({
   id: "lb.consistentHash",
   concept: "lbStrategy",
@@ -204,6 +220,7 @@ export const consistentHashSpec = arc.defineRegion<Strategy>({
   },
 });
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.consistentHash
 export const consistentHash: Strategy = (backends, keys) => {
   const ring = backends
@@ -218,6 +235,7 @@ export const consistentHash: Strategy = (backends, keys) => {
 // @openarc:end lb.consistentHash
 
 // ── lb.healthCheck ────────────────────────────────────────────── passive health checks, time from a clock port
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export interface HealthState {
   id: string;
   healthy: boolean;
@@ -225,10 +243,12 @@ export interface HealthState {
   successes: number; // consecutive passed probes
   downSince: number | null; // when it went unhealthy (clock ms)
 }
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export interface Probe {
   id: string;
   ok: boolean;
 }
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export interface HealthPolicy {
   unhealthyAfter: number; // consecutive failures that take a backend out
   healthyAfter: number; // consecutive successes that bring it back...
@@ -236,6 +256,7 @@ export interface HealthPolicy {
 }
 type HealthCheck = (states: HealthState[], probes: Probe[], clock: Clock, policy: HealthPolicy) => HealthState[];
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const healthCheckSpec = arc.defineRegion<HealthCheck>({
   id: "lb.healthCheck",
   intent: [
@@ -274,6 +295,7 @@ export const healthCheckSpec = arc.defineRegion<HealthCheck>({
   ],
 });
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.healthCheck
 export const healthCheck: HealthCheck = (states, probes, clock, policy) =>
   states.map((s) => {
@@ -289,14 +311,18 @@ export const healthCheck: HealthCheck = (states, probes, clock, policy) =>
 // @openarc:end lb.healthCheck
 
 // ── lb.failover ───────────────────────────────────────────────── try backends in order until one answers
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export type UpstreamReply = { ok: true; body: string } | { ok: false; error: string };
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export interface Upstream {
   /** Send one request to one backend. May reject (connection refused, timeout). */
   send(backend: string, request: string): Promise<UpstreamReply>;
 }
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export type FailoverResult = { ok: true; backend: string; body: string; attempts: number } | { ok: false; error: string; attempts: number };
 type Failover = (order: string[], request: string, upstream: Upstream, maxAttempts: number) => Promise<FailoverResult>;
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const failoverSpec = arc.defineRegion<Failover>({
   id: "lb.failover",
   intent: "Send the request to the backends in `order` (a strategy's choice first, then the fallbacks), one at a time, until one answers ok or maxAttempts sends were made.",
@@ -320,6 +346,7 @@ export const failoverSpec = arc.defineRegion<Failover>({
   },
 });
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.failover
 export const failover: Failover = async (order, request, upstream, maxAttempts) => {
   let attempts = 0;

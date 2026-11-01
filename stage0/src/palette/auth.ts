@@ -4,18 +4,21 @@
 // secret, and every attempt pays for exactly one constant-time compare (also when the user doesn't exist).
 import * as arc from "open-arc";
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export interface User {
   id: string;
   email: string; // stored lower-case
   passwordHash: string;
   lockedUntil: number | null; // ms since epoch
 }
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export interface ApiKeyRecord {
   keyId: string;
   userId: string;
   secretHash: string;
   revoked: boolean;
 }
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export interface MagicLinkRecord {
   tokenId: string;
   userId: string;
@@ -23,6 +26,7 @@ export interface MagicLinkRecord {
   expiresAt: number; // ms since epoch
   used: boolean;
 }
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export interface UserStore {
   findByEmail(email: string): Promise<User | null>;
   findApiKey(keyId: string): Promise<ApiKeyRecord | null>;
@@ -31,6 +35,7 @@ export interface UserStore {
   consumeMagicLink(tokenId: string): Promise<boolean>;
   recordFailure(userId: string): Promise<void>;
 }
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export interface Hasher {
   /** A valid stored hash in this adapter's own format (algorithm, salt, cost) whose secret nobody knows: what an attempt
    *  hashes and compares against when there is no stored hash, so an unknown user costs the same as a wrong secret. */
@@ -40,21 +45,30 @@ export interface Hasher {
   /** Constant-time string comparison (node:crypto timingSafeEqual on equal-length buffers). */
   equal(a: string, b: string): boolean;
 }
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export interface Clock {
   now(): number;
 }
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export interface AuthPorts {
   users: UserStore;
   hasher: Hasher;
   clock: Clock;
 }
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export type AuthResult = { ok: true; userId: string } | { ok: false; reason: "invalid" | "locked" | "expired" };
-/** The concept's interface: every variant is a Strategy of its own credential type. */
+/** The concept's interface: every variant is a Strategy of its own credential type.
+ * @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette).
+ */
 export type Strategy<C> = (cred: C, ports: AuthPorts) => Promise<AuthResult>;
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export type PasswordCred = { email: string; password: string };
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export type ApiKeyCred = { apiKey: string }; // "<keyId>.<secret>"
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export type MagicLinkCred = { token: string }; // "<tokenId>.<secret>"
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const authConcept = arc.defineConcept({
   id: "auth",
   interface: "Strategy",
@@ -75,6 +89,7 @@ export const authConcept = arc.defineConcept({
 // ── auth.splitToken ───────────────────────────────────────────── a helper the token variants share
 type SplitToken = (token: string) => [string, string] | null;
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const splitTokenSpec = arc.defineRegion<SplitToken>({
   id: "auth.splitToken",
   intent: "Split '<id>.<secret>' at the FIRST dot. Null when there is no dot, or the id or the secret is empty.",
@@ -88,6 +103,7 @@ export const splitTokenSpec = arc.defineRegion<SplitToken>({
   ],
 });
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin auth.splitToken
 export const splitToken: SplitToken = (token) => {
   const i = token.indexOf(".");
@@ -97,6 +113,7 @@ export const splitToken: SplitToken = (token) => {
 // @openarc:end auth.splitToken
 
 // ── auth.password ─────────────────────────────────────────────── variant, written as a sketch
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const passwordSpec = arc.defineRegion<Strategy<PasswordCred>>({
   id: "auth.password",
   concept: "auth",
@@ -134,6 +151,7 @@ export const passwordSpec = arc.defineRegion<Strategy<PasswordCred>>({
   },
 });
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin auth.password
 export const password: Strategy<PasswordCred> = async (cred, ports) => {
   const email = (cred.email.trim().toLowerCase());
@@ -150,6 +168,7 @@ export const password: Strategy<PasswordCred> = async (cred, ports) => {
 // @openarc:end auth.password
 
 // ── auth.apiKey ───────────────────────────────────────────────── variant, written as prose
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const apiKeySpec = arc.defineRegion<Strategy<ApiKeyCred>>({
   id: "auth.apiKey",
   concept: "auth",
@@ -177,6 +196,7 @@ export const apiKeySpec = arc.defineRegion<Strategy<ApiKeyCred>>({
   ],
 });
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin auth.apiKey
 export const apiKey: Strategy<ApiKeyCred> = async (cred, ports) => {
   const parts = splitToken(cred.apiKey);
@@ -194,6 +214,7 @@ export const apiKey: Strategy<ApiKeyCred> = async (cred, ports) => {
 // @openarc:end auth.apiKey
 
 // ── auth.magicLink ────────────────────────────────────────────── variant, written as a sketch
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export const magicLinkSpec = arc.defineRegion<Strategy<MagicLinkCred>>({
   id: "auth.magicLink",
   concept: "auth",
@@ -235,6 +256,7 @@ export const magicLinkSpec = arc.defineRegion<Strategy<MagicLinkCred>>({
   },
 });
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin auth.magicLink
 export const magicLink: Strategy<MagicLinkCred> = async (cred, ports) => {
   const [tokenId, secret] = splitToken(cred.token) ?? ["", ""];

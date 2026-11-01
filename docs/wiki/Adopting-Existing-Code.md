@@ -10,7 +10,34 @@ npx openarc extract src/text-utils.ts --function slug --id text.makeSlug
 
 ## What it writes
 
-Given
+Since 0.9.0 the default output is code-first (see [[Code First]]): the markers go inside the body, the JSDoc gets an `@arc id`, and no spec statement is added. Given
+
+```ts
+/** Adds two numbers. */
+export function add(a: number, b: number): number {
+  return a + b;
+}
+```
+
+in `src/text-utils.ts`, `extract` produces
+
+```ts
+/**
+ * Adds two numbers.
+ * @arc id textUtils.add
+ */
+export function add(a: number, b: number): number {
+  // @openarc:begin textUtils.add
+  return a + b;
+  // @openarc:end textUtils.add
+}
+```
+
+plus a developer-owned manifest entry. The JSDoc is the intent; add `arc.test` cases for its behaviour, then `openarc release textUtils.add` when the compiler may regenerate it. Generic functions are fine in this form. The function (or its `const`) must declare its return type, since the signature is the contract. A body must be a block whose braces end and start their own lines (`function f() { return 1; }` on one line is refused); class methods are not extracted yet.
+
+### `--style region`: the `defineRegion` form
+
+`npx openarc extract src/text-utils.ts --style region` writes the earlier form. Given
 
 ```ts
 /** Adds two numbers. */
@@ -49,8 +76,10 @@ The file and the manifest are written in one transaction. Running `extract` agai
 
 ## Handing a region to the compiler
 
-1. Review the intent and drop the `[inferred]` prefix.
-2. Add `examples`: they are the region's tests, and the only thing that lets the compiler regenerate it safely.
+This works the same for both extraction styles.
+
+1. Review the intent. For a `defineRegion` region (`--style region`), drop the `[inferred]` prefix; for a code-first region, the intent is its JSDoc.
+2. Add tests: `examples` for a `defineRegion` region, `arc.test` cases (or `examples` through `arc.configure`) for a code-first one. They are the only thing that lets the compiler regenerate the region safely. `release` does not check for them: a region with none is regenerated with tsc and the static rules as its only checks.
 3. Run `openarc release <id>`. The current body is backed up to `.openarc/backup/`, and the next `openarc compile` generates and verifies a new one.
 
 If you edit the spec but keep the hand-written body, the region is a developer region whose spec changed, so the next compile reports `OARC-E061`. Run `openarc resolve <id> --keep` to accept it.
@@ -62,10 +91,12 @@ If you edit the spec but keep the hand-written body, the region is a developer r
 | Case | Why |
 |---|---|
 | overloaded functions | a region holds one declaration with one call signature |
-| generic functions | `defineRegion<F>` needs a non-generic `F` |
+| (`--style region`) generic functions | `defineRegion<F>` needs a non-generic `F` |
 | `export default function () {}` and other anonymous default exports | a region needs a name; give it one first |
 | class methods | regions are top-level functions (§3.2); move the logic out of the class |
 | a declaration sharing a line with other code | markers need whole lines |
+| (`--style code`) no explicit return type, on the function or its `const` | the signature is the region's contract; an inferred one would follow whatever body the compiler writes |
+| (`--style code`) a body whose braces share a line with code | the markers go on their own lines just inside the braces |
 | an invalid or already-used id | ids are unique (§2.3) |
 | a result that type-checks worse than the original | e.g. a `package.json` without `"type": "module"`, where the added `import` is a TS1295 error |
 

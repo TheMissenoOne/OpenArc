@@ -8,6 +8,7 @@
 import { defineFake } from "open-arc";
 import type { ApiKeyRecord, AuthPorts, MagicLinkRecord, User } from "../../src/palette/auth.ts";
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export default defineFake<AuthPorts>((init) => {
   const i = (init ?? {}) as unknown as { users?: User[]; apiKeys?: ApiKeyRecord[]; links?: MagicLinkRecord[]; now?: number; track?: string[]; claimedConcurrently?: string[] };
   const links = structuredClone(i.links ?? []); // a copy: consuming must not touch the example's init

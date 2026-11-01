@@ -3,6 +3,7 @@
 // The queue itself is the watch.* regions in ./watch.ts.
 import type { CompileResult, FsPort } from "./types.ts";
 import { classifyPath, enqueue, takeNext, type WatchQueue } from "./watch.ts";
+import { testFile } from "./tests-plan.ts";
 
 export const HISTORY = ".openarc/watch-history.jsonl";
 const HISTORY_CAP = 1000;
@@ -205,7 +206,9 @@ export function createWatcher(d: WatchDeps) {
     },
     /** A changed path, project-relative POSIX. */
     onChange(path: string) {
-      const kind = classifyPath(path);
+      // code-first: a test file is part of its regions' specs (the analysis re-reads it; one without tests changes nothing)
+      const c = classifyPath(path);
+      const kind = c === "ignore" && path.startsWith("tests/") && testFile(path) && !path.split("/").includes("node_modules") ? "source" : c;
       if (kind === "ignore" || stopping) return;
       if (kind === "config" || kind === "fakes") failed.clear(); // may fix any failed region: give them all another try
       changed.add(path);

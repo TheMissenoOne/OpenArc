@@ -4,6 +4,7 @@
 import { defineFake } from "open-arc";
 import type { Gossip, Transport } from "../../src/palette/p2p.ts";
 
+/** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 export default defineFake<Transport>((init) => {
   const links = ((init ?? {}) as { links?: [string, string][] }).links ?? [];
   const linked = (a: string, b: string) => links.some(([x, y]) => (x === a && y === b) || (x === b && y === a));

@@ -30,3 +30,16 @@ export default defineFake<FsPort>((init) => {
 - For `void` functions, `expected` is not allowed (the type forbids it), so `fakesAfter` is the assertion.
 
 Effects are passed in as parameters (ports), never reached as globals. That's what makes them fakeable, and why `process`, `fetch`, `fs` and similar are forbidden inside regions.
+
+## Fakes in code-first tests
+
+In an `arc.test`, ask for a fake by its port's type: `const net = fakes.of<Transport>()` (optionally `fakes.of<Transport>(init)`). The compiler finds the one `export default defineFake<Transport>(…)` in `tests/fakes/` when it reads the test, and names it in the sandbox's copy; none, or two, is `OARC-E010` (detail `fake:Transport`, `fake:Transport:ambiguous`). `fakes.named("net.memory", init)` picks one by file name, and `fakes.snapshot(net)` returns that instance's `snapshot()`, which replaces `fakesAfter`:
+
+```ts
+arc.test(Peer, "forwards once, with one hop less", async (P, expect, fakes) => {
+  const net = fakes.of<Transport>();
+  const a = new P("a", ["d", "b", "c"], net);
+  expect(await a.receive(null, { id: "g1", origin: "a", ttl: 2, body: "hi" })).toBe(true);
+  expect(fakes.snapshot(net)).toEqual({ sent: [["a", "b", "g1", 1], ["a", "c", "g1", 1]] });
+});
+```

@@ -187,6 +187,8 @@ export interface HarnessPlanEntry {
   oracle?: { module: string; export: string; inputs: Json[][] };
   /** palette: a UI region (§2.6): the structure tree; `module` is then the component file, run in a DOM by ui-harness.ts. */
   ui?: { param: string | null; root: UiNode };
+  /** Code-first tests (§2.7): run after the examples by test-runner.ts. */
+  tests?: import("./test-runner.ts").TestPlan;
 }
 
 const settle = async (fn: AnyFn, args: unknown[]): Promise<{ value?: unknown; throws?: string }> => {
@@ -225,6 +227,7 @@ export async function main(root: string, regionId: string): Promise<void> {
   const outcomes = entry.oracle
     ? await runOracle(mod[entry.symbol], (await importFile(root, entry.oracle.module))[entry.oracle.export], entry.oracle.inputs, { tolerance: entry.tolerance })
     : await runExamples(root, mod[entry.symbol], spec);
+  if (entry.tests && !entry.oracle) outcomes.push(...(await (await import("./test-runner.ts")).runTests(root, entry.tests))); // code-first
   for (const o of outcomes) process.stdout.write(JSON.stringify(o) + "\n");
   process.stdout.write(JSON.stringify({ done: outcomes.length }) + "\n");
 }

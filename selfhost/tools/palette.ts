@@ -1,3 +1,4 @@
+// DEPRECATED and frozen since 0.9.0, like the bundled palette it copies: it keeps working, with no behaviour changes.
 // The palette's compilable copy: every region body back to its pending placeholder, everything else byte for byte.
 // stage0/src/palette holds the hand-written bodies (the way stage0 works); selfhost/src/palette and
 // examples/palette-demo/src/palette hold this copy, for OpenArc to compile.
@@ -22,6 +23,7 @@ export const PALETTE_FILES = readdirSync(join(here, "src/palette")).filter((f) =
 export const PALETTE_FAKES = readdirSync(join(here, "tests/fakes")).filter((f) => f.startsWith("palette.")).sort();
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  console.error("palette: deprecated: the bundled palette is frozen since 0.9.0; write your own concepts (docs/wiki/Palette.md, Building your own palette)");
   const force = process.argv.includes("--force");
   const dir = process.argv.slice(2).find((a) => !a.startsWith("--"));
   if (!dir) throw new Error("usage: node tools/palette.ts <project dir> [--force]");

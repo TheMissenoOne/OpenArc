@@ -140,13 +140,15 @@ export function defineBlock(spec: BlockSpec): BlockSpec {
 export class OpenArcTodoError extends Error {
   id: string;
   constructor(id: string) {
-    super(`openarc: region "${id}" is not implemented yet`);
+    super(id ? `openarc: region "${id}" is not implemented yet` : "openarc: region not implemented yet");
     this.id = id;
   }
 }
 
-export function todo(id: string): never {
-  throw new OpenArcTodoError(id);
+/** A pending body. Classic regions pass their id; a code-first region (`{ return arc.todo(); }`) needs none: its id
+ *  comes from the declaration, or from a string argument here (the same as `@arc id`). */
+export function todo(id?: string): never {
+  throw new OpenArcTodoError(id ?? "");
 }
 
 /**
@@ -170,3 +172,7 @@ export type FakeFactory<T> = (init: Json | undefined) => FakeInstance<T>;
 export function defineFake<T>(factory: FakeFactory<T>): FakeFactory<T> {
   return factory;
 }
+
+// Code-first assertions and the customization layer (core/test.ts).
+export { test, law, configure } from "./test.ts";
+export type { Ctor, Expect, Matchers, Gen, Fakes, RegionConfig, TestBody, LawBody } from "./test.ts";

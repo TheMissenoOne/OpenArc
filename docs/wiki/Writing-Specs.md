@@ -1,5 +1,42 @@
 # Writing Specs
 
+## Code first: the main way
+
+Write the program as ordinary TypeScript and leave `return arc.todo();` where the compiler should write a body. The declaration is the spec:
+
+| Part | Comes from |
+|---|---|
+| contract | the signature (generics allowed; `this` for a method) |
+| intent | the JSDoc, or the JSDoc of the interface member it implements |
+| id | the module path, class and member (`lb.balancer.roundRobin.pick`), or `@arc id` |
+| behaviour | `arc.test`, `arc.test.hidden` and `arc.law`: TypeScript, type-checked against the real code, run in the sandbox |
+| context | the class shell (fields, constructor, other members' signatures), the types it reaches, the shown tests |
+| extra settings | `@arc calls\|effects\|deps\|backend\|outputFormat` tags, `arc.configure(target, { … })`, or a `defineRegion` with the same id |
+
+```ts
+export class LeastConnections implements Balancer {
+  readonly backends: Backend[];
+  constructor(backends: Backend[]) {
+    this.backends = backends.map((b) => ({ ...b }));
+  }
+  /** The healthy backend with the fewest connections (ties: first in list order); it then has one more. */
+  pick(key: string): string | null {
+    return arc.todo();
+  }
+}
+
+arc.test(LeastConnections, "picks the minimum, then counts it", (LC, expect) => {
+  const lb = new LC([{ id: "a", healthy: true, connections: 5 }, { id: "b", healthy: true, connections: 1 }]);
+  expect(["1", "2", "3", "4", "5"].map((k) => lb.pick(k))).toEqual(["b", "b", "b", "b", "a"]);
+});
+```
+
+Everything about this form (classes, ids and markers, `expect`, hidden tests, laws, fakes by type, the customization layer, `migrate`) is on [[Code First]].
+
+## More ways to write regions
+
+Every form below predates code-first and stays fully supported: nothing is deprecated, and the forms mix in one project and one file. They are also the customization layer for code-first regions (a `defineRegion` whose `id` is a code-first region's attaches to it).
+
 ## Function regions
 
 ```ts
@@ -182,7 +219,7 @@ export const apiKeySpec = arc.defineRegion<Strategy<ApiKeyCred>>({
 - `waive` skips a law with a reason; `compile` prints it and the manifest provenance records it.
 - Changing a law recompiles every variant. A region that calls a variant sees its signature and the concept's one-line summary, never its body.
 
-The [[Palette]] is a library of concepts (auth, load balancing, a p2p protocol, a login page) built this way.
+To build a library of your own concepts (a worked `cache` concept with LRU and TTL variants), see [[Your own palette|Palette]]. The bundled palette built this way (auth, load balancing, p2p, a login page) is deprecated and frozen since 0.9.0.
 
 ## UI specs: TSX structure
 
@@ -216,7 +253,7 @@ export const loginPageSpec = arc.defineRegion<LoginPageFn>({
 });
 ```
 
-- **Vocabulary:** `Form`, `Field`, `ErrorText`, `Submit` (from `open-arc/ui`). tsc checks the attributes; the compiler reads the tree without running it. Spreads, `.map`, conditionals, computed attributes and other tags are `OARC-E010` (`ui:*`): repetition and conditions belong in the intent.
+- **Vocabulary:** `Form`, `Field`, `ErrorText`, `Submit` (from `open-arc/ui`). tsc checks the attributes; the compiler reads the tree without running it. Spreads, `.map`, conditionals, computed attributes and other tags are `OARC-E010` (`ui:*`): repetition and conditions belong in the intent. This built-in vocabulary is deprecated and frozen since 0.9.0: it keeps working unchanged, and the mechanism (the static reader, the DOM harness, `ui.dom`) stays supported; project-defined vocabularies come with code-first phase 5.
 - **Checks, in a DOM in the sandbox:** derived structure and accessibility (each Field is an input whose accessible name is its label, with the right name, type, required and autocomplete; an alert for ErrorText; a submit button named by its text), a derived **wiring** example (fill every field, submit, the prop `Form onSubmit` points to is called once with `{ name: value }`, and while it is pending the submit button is disabled and shows `busyText`), then your examples: `script` steps (`fill` by label, `click` by role and name), `dom` assertions (`text`, `notText`, `enabled`, `disabled`) and `fakesAfter`.
 - **`action#<name>`** is a built-in fake: a function that records its calls and returns `init.returns` in order.
 - **Setup:** `"ui": { "dom": "jsdom" }` in `openarc.config.json`, and `jsdom`, `react`, `react-dom` (plus `@types/react` and `"jsx": "react-jsx"` in tsconfig) in the project. Without them a UI region is `OARC-E092` (`dom:not-configured`, `dom:jsdom-missing`, …) before any model call.

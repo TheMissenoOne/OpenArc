@@ -1,5 +1,7 @@
 # palette-demo
 
+> **Deprecated and frozen since 0.9.0**, with the bundled palette it uses. It keeps working; to build your own palette see [Palette](../../docs/wiki/Palette.md).
+
 OpenArc's [palette](../../stage0/src/palette/README.md) in use, as a project OpenArc compiles. Every region body is pending: `src/palette/` is the palette's compilable copy (written by `node ../../stage0/tools/palette.ts .`), and `src/app/` uses it:
 
 | Region | What | Form |

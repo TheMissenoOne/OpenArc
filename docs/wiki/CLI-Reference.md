@@ -2,7 +2,8 @@
 
 | Command | |
 |---|---|
-| `openarc init` | create `openarc.config.json`, `tsconfig.json`, `.openarc/` (existing files are kept) |
+| `openarc init` | create `openarc.config.json`, `tsconfig.json`, `.openarc/` (existing files are kept). At a terminal it also writes a code-first starter into an empty `src/`: `src/hello.ts` (an interface and a class with one pending method) and `src/hello.test.ts` |
+| `openarc init --example` / `--no-example` | write the starter also when not at a terminal (scripts, CI) / never |
 | `openarc init --backend <preset> [--model <id>] [--base-url <url>]` | the same, with that backend as the default in a new `openarc.config.json`. Presets: `ollama`, `openai`, `anthropic`, `openrouter`, `local`. See "Connecting providers" in [[Configuration]] |
 | `openarc backends` | list the configured backends: provider (and preset), model, URL, and whether each key's env var is set; the default is marked `*`. Keys are never printed |
 | `openarc backends test [name]` | send one small structured request through a backend (default: the default backend) and print `OK` or `FAIL`, the reason and the latency; for Ollama, also check the model is pulled. Exit 1 on FAIL |
@@ -10,7 +11,7 @@
 | `openarc compile [ids…]` | generate and verify pending/stale regions in one transaction. A sketch's callees compile before it; a concept variant prints each waived law (`<id>: law "<name>" waived: <reason>`) |
 | `openarc compile --keep-going` | commit what passed; failed regions stay pending; exit 1. Blocks whose function can't pass its examples yet (a sibling failed) are held back (W042). Stops calling the backend after 3 consecutive E080s |
 | `openarc watch [--debounce <ms>]` | keep running: on each relevant save, analyse, queue stale regions and compile them one at a time (one model in memory). Failed regions wait for their spec to change; an unreachable backend pauses the queue. See [[Watch Mode]] |
-| `openarc graph` | region tree: kind, state (`stale` for a compiler region whose spec changed since its body was verified), number of examples, file |
+| `openarc graph` | region tree: kind, state (`stale` for a compiler region whose spec changed since its body was verified), number of examples (and of tests, for a code-first region), file |
 | `openarc inspect <id>` | spec, state (`stale` as in `graph`, with `ownership` alongside), `tokens` (`{prompt, completion}` the model used to produce the current body, failed attempts included; `null` when the backend reports none or the body isn't generated), manifest entry and provenance (model, output format, context level, attempts, sampling, tokens, checks) |
 | `openarc check <id> --oracle <module>#<export>` | differential test: run the compiled region and a reference implementation on its examples' arguments plus 60 seeded variations, in the sandbox, and list every disagreement; exit 1 if any. See "Thin examples" in [[Writing Specs]] |
 | `openarc doctor` | report Node, the platform, the tools found and the selected sandbox tier, then run one example in that sandbox which also tries a file write, a child process and a network request; each must be refused. No model. Exit 1 if the tier is unavailable or anything gets through (except the network on Node < 25 in the `node` tier, which is reported) |
@@ -19,7 +20,8 @@
 | `openarc resolve <id> --keep` | accept the current body under the new spec |
 | `openarc resolve <id> --regen` | back up and regenerate |
 | `openarc resolve <id> --unlink` | forget a region whose markers you deleted |
-| `openarc extract <file> [--function <name>] [--id <id>]` | adopt existing functions as developer-owned regions: markers, a `defineRegion` spec with a checker-derived `type <Name>Fn`, and a manifest entry; bodies untouched. See [[Adopting Existing Code]] |
+| `openarc extract <file> [--function <name>] [--id <id>] [--style code\|region]` | adopt existing functions as developer-owned regions, bodies untouched. Default `--style code`: markers inside each body, `@arc id` added to the JSDoc, the derived id (generics are fine). `--style region`: markers around the declaration and a `defineRegion` spec with a checker-derived `type <Name>Fn`. Both add a manifest entry. See [[Adopting Existing Code]] |
+| `openarc migrate <id>` | convert one `defineRegion` function region to code-first form in one transaction: `export function` with the types printed from `F`, the intent as JSDoc, examples and settings in `arc.configure`; id, ownership and provenance kept. See [[Code First]] |
 
 ## Files
 
@@ -39,15 +41,19 @@ Errors are `OARC-Exxx` and warnings `OARC-Wxxx`. The full table is in `SPEC-phas
 
 | Code | Meaning |
 |---|---|
-| E070 | type error in the generated body (shown with the line); detail `sketch:TS<code>` for an error in a sketch, reported before any model call |
+| E013 | a code-first region's field (`calls`, `effects`, `deps`, `tolerance`, `outputFormat`, `backend`) is set in more than one of: JSDoc `@arc` tags, `arc.configure`, a `defineRegion` with its id (detail `<field>:<layers>`) |
+| E022 | a code-first region (`return arc.todo();`) has no explicit return type: `arc.todo()` would infer `never` |
+| E064 | `@arc id` disagrees with the markers inside the body (after the first commit the markers are the id) |
+| W023 | a code-first region has no intent: no JSDoc of its own or inherited (printed at PLAN) |
+| E070 | type error in the generated body (shown with the line); detail `sketch:TS<code>` for an error in a sketch, `test:TS<code>` for one in a code-first test that runs for the region, both reported before any model call |
 | E082 | attempts exhausted for a region |
-| E090 | an example failed |
+| E090 | an example or a test failed. For tests the repair prompt lists each failing assertion with its line; a hidden test by name only. Details: `joint:<tests>` (a class's members failed together), `test-registry:…` (the sandbox registered tests the static plan doesn't have: the run stops) |
 | E096 | a file changed on disk while the compile ran; nothing was written, run it again (watch re-queues it by itself) |
 | E097 | the generated code tried to write outside its region (a comment that merely mentions `@openarc:` is stripped instead, and logged) |
 | E098 | the body calls an imported or port function that its spec's `calls` list doesn't allow (detail: the call path); in a sketch, a fill calls something neither the sketch nor `calls` allows |
 | E099 | a sketch region's body changed code outside its holes |
 | E100 | an example fails without reaching any hole of the sketch: the sketch decides it, so fix the sketch or the example (detail: the example name) |
-| E010 | a spec isn't static, or (since 0.8.0) a sketch, concept or UI structure breaks its rules (detail `sketch:…`, `fixture-missing:<name>`, `concept-unknown:<id>`, `waive-unknown-law:<name>`, `ui:…`) |
+| E010 | a spec isn't static, or a code-first test or `arc.configure` can't be read statically (`test:<what>`, `configure:not-static`, `configure:not-a-region:<target>`, `fake:<type>[:ambiguous]`, `examples:method`, `backend:<name>`), or (since 0.8.0) a sketch, concept or UI structure breaks its rules (detail `sketch:…`, `fixture-missing:<name>`, `concept-unknown:<id>`, `waive-unknown-law:<name>`, `ui:…`) |
 | E020 | a body doesn't match its type `F`; or a concept variant's `F` isn't an instance of the concept's interface (detail `concept-interface:<name>`) |
 | W060 | manual edit detected; region is now yours |
 | E061 | you changed the spec of a region you had edited; resolve it |
@@ -55,7 +61,7 @@ Errors are `OARC-Exxx` and warnings `OARC-Wxxx`. The full table is in `SPEC-phas
 | W042 | a generated block was held back until its sibling blocks exist; it's cached for the next run |
 | W043 | a compiler-owned region's recompile failed, so it keeps a body that does not satisfy its current spec; `compile` exits 1 and `graph` shows it as `stale` |
 | W044 | thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); consider `openarc check --oracle` |
-| W045 | a generated block, or a sketch hole (detail `hole:<id>#<n>`), is unverified: no passing example reaches it. It isn't cached as verified or committed; add an example that runs through it |
+| W045 | a generated block, a code-first region (detail `unreached:<id>`), or a sketch hole (detail `hole:<id>#<n>`), is unverified: no passing example or test reaches it. It isn't cached as verified or committed; add one that runs through it |
 | E091 | the sandbox timed out (wall clock) or hit a resource limit |
 | E092 | the configured sandbox tier isn't available on this machine (detail: `bwrap-unavailable`, `sandbox-exec-unavailable`, `no-podman-or-docker`); nothing runs. For a UI region: no DOM (`dom:not-configured`, `dom:jsdom-missing`, `dom:react-missing`, `dom:react-dom-missing`) |
 | W046 | weaker isolation: Node permission model only, no OS sandbox (the `node` tier: Windows, or Linux without a usable `bwrap`). Printed once per command. Detail `node-<version>:network-not-blocked` on Node < 25 |

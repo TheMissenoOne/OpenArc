@@ -1,5 +1,7 @@
 # OpenArc palette
 
+> **Deprecated and frozen since 0.9.0.** It keeps working and shipping, unchanged; build your own palette instead ([Palette wiki: Building your own palette](https://github.com/TheMissenoOne/OpenArc/blob/main/docs/wiki/Palette.md)).
+
 Reusable concepts that ship with OpenArc: high-level building blocks written as specs (types, laws, examples, sketches) instead of prose prompts. Each file is an ordinary OpenArc source file. In `stage0/src/palette/` every body is hand-written and passes its laws and examples; in `selfhost/src/palette/` and `examples/palette-demo/src/palette/` the bodies are pending, for OpenArc to compile.
 
 | File | Concept and regions | Ports and fakes |
