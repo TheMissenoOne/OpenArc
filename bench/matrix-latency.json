@@ -1,0 +1,51 @@
+{
+  "_doc": "Latency profile (compile --timings) on the latency branch: arm A, same 8 exercises and seeds as results/2026-11-01-*. Server: the llama-server.service on :8080 (-c 16384), same model and quant.",
+  "backend": {
+    "provider": "openai",
+    "baseUrl": "http://127.0.0.1:8080/v1",
+    "maxContextTokens": 8192,
+    "outputReserveTokens": 4096,
+    "openarc": {
+      "outputFormat": "json"
+    },
+    "info": {
+      "label": "llama-server-vulkan-json",
+      "engine": "llama.cpp llama-server (Vulkan)",
+      "version": "version: 0.8.0-dev (build 1, commit f3586e6)",
+      "quant": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+      "kvCacheType": "f16",
+      "ctx": 16384,
+      "flags": "llama-server.service: -ngl 99 -c 16384 -fa on -np 1 --cache-ram 0 --sleep-idle-seconds 900 --jinja --reasoning off --no-webui --port 8080"
+    }
+  },
+  "memory": {
+    "minStartGb": 6,
+    "abortGb": 1.5
+  },
+  "configs": {
+    "A": {
+      "kind": "openarc",
+      "level": 0,
+      "timings": true,
+      "label": "OpenArc A with --timings"
+    }
+  },
+  "runs": [
+    {
+      "model": "qwen2.5-coder-7b",
+      "configs": [
+        "A"
+      ]
+    }
+  ],
+  "exercises": [
+    "acronym",
+    "binary-search",
+    "flatten-array",
+    "food-chain",
+    "relative-distance",
+    "spiral-matrix",
+    "transpose",
+    "wordy"
+  ]
+}

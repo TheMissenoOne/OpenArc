@@ -114,7 +114,7 @@ export async function runOpenArc({ dataset, ex, splitInfo, model, cfg, dir, oaMo
       config.regions = { ...config.regions, ...Object.fromEntries(todo.map((id) => [id, { backend: `round${round}` }])) };
       await writeConfig();
     }
-    comp = await step(["compile", "--keep-going"], 45 * 60_000);
+    comp = await step(["compile", "--keep-going", ...(cfg.timings ? ["--timings"] : [])], 45 * 60_000);
     out += comp.stdout + comp.stderr;
   }
 
@@ -156,6 +156,8 @@ export async function runOpenArc({ dataset, ex, splitInfo, model, cfg, dir, oaMo
     compileExit: comp.code,
     compileTimedOut: comp.timedOut || undefined,
     finalSource: src.slice(0, 20000),
+    // --timings: one {id, stages} per attempt, plus the commit time(s)
+    ...(cfg.timings ? { timings: [...out.matchAll(/^  (\S+): timings (.*)$/gm)].map((m) => ({ id: m[1], stages: Object.fromEntries(m[2].split(" · ").map((kv) => { const [k, v] = kv.split(" "); return [k, +v]; })) })), commitMs: [...out.matchAll(/^timings commit (\d+)$/gm)].map((m) => +m[1]) } : {}),
     log: log.map((l) => ({ ...l, out: l.cmd.startsWith("compile") ? l.out : l.out.slice(-800) })),
   };
 }
