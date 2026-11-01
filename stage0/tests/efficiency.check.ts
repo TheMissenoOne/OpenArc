@@ -6,7 +6,8 @@
 // 3. Whole-function unwrap: helpers + the region's own declaration (function, export, async, const arrow with block or
 //    expression body, a class method, each inside a fence) become the body; anything else is left alone.
 // 4. Prompt trim: a closed function region (no effects, deps or imports beyond open-arc) gets the short Rules and no
-//    "none" sections; the Examples heading keeps only the conventions its examples use; open regions are unchanged.
+//    "none" sections; the Examples heading keeps only the conventions its examples use; a function region whose file
+//    imports only open-arc doesn't see that import (a 7B called arc.flatten); open regions are unchanged.
 import assert from "node:assert/strict";
 import type { Json } from "open-arc";
 import type { CompileRequest, Ports } from "../src/types.ts";
@@ -130,7 +131,7 @@ async function compile(maxAttempts: number, bodies: string[]) {
   const closed = ctx("acronym.parse");
   for (const kept of ["## Fixed signature", "export type ParseFn = (phrase: string) => string;", "## Intent\nConvert a phrase to its acronym", '"expected":"HTML"', "never re-import or re-implement them. No new imports.", "No effects: never use Date.now()"])
     assert.ok(closed.includes(kept), `kept: ${kept}`);
-  for (const cut of ["## Effects allowed", "## Allowed new imports", '"$fake"', "need effect 'clock'"]) assert.ok(!closed.includes(cut), `cut: ${cut}`);
+  for (const cut of ["## Effects allowed", "## Allowed new imports", '"$fake"', "need effect 'clock'", "## Imports already in the file"]) assert.ok(!closed.includes(cut), `cut: ${cut}`);
   assert.match(closed, /## Examples \(deep equality\)\n/);
   const prompt = renderTemplate(PROMPT_TEMPLATE, { context: closed, repair: "" });
   assert.ok(prompt.ok && prompt.text.length < 1300, `the closed acronym prompt is ${prompt.ok && prompt.text.length} chars (0.9.0: 1905)`);

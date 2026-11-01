@@ -767,7 +767,10 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   const helperLines: string[] = [];
   // Every level: the file's imports and its other implemented top-level values (same-file helpers and regions).
   const importLines = sf.statements.filter(ts.isImportDeclaration).map((d) => d.getText(sf));
-  if (importLines.length) sections.push(["Imports already in the file", importLines.join("\n")]);
+  // Only open-arc (the spec library): nothing a function body calls, and showing `import * as arc` led a 7B to write
+  // `arc.flatten(input)` with an open-arc import (issue #19 rerun; D-min had the same failure), so leave it out.
+  const arcOnly = sf.statements.filter(ts.isImportDeclaration).every((d) => (d.moduleSpecifier as ts.StringLiteral).text === "open-arc");
+  if (importLines.length && !(r.kind === "function" && arcOnly)) sections.push(["Imports already in the file", importLines.join("\n")]);
   let sameFileLines: string[] = [];
   if (r.kind === "function") {
     // The prompt omits pending siblings (nothing to call yet); the stable view (fingerprint) lists them all, so a
@@ -821,8 +824,7 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   if (s.sketch) sections.push(sketch.sketchCalls(s.sketch, s.calls));
   else if (s.calls) sections.push(["Calls allowed", `You may call exactly: ${s.calls.join(", ") || "nothing"}. Any other call on an import or a port is rejected (OARC-E098); calls on local variables and on functions you define in the body are fine.`]);
   // closed: nothing to say about effects or imports beyond "none" (CLOSED_RULES says it once)
-  const closed = r.kind === "function" && !s.effects.length && !s.deps.length && !r.typeImports.size &&
-    sf.statements.filter(ts.isImportDeclaration).every((d) => (d.moduleSpecifier as ts.StringLiteral).text === "open-arc");
+  const closed = r.kind === "function" && !s.effects.length && !s.deps.length && !r.typeImports.size && arcOnly;
   if (r.kind === "function") {
     if (!closed) {
       sections.push(["Effects allowed", s.effects.join(", ") || "none"]);
