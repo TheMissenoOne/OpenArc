@@ -51,7 +51,7 @@ for (const k of arms) {
   md += `| ${k} | ${rs.length} | ${Object.values(M).map((m) => ci(boot(stat(perEx(rs, m.fn), m)), fmt(m))).join(" | ")} |\n`;
 }
 
-const PAIRS = [["A@0.9.1", "A@0.8.0"], ["A@0.9.1", "D@0.9.1"], ["A@0.9.1", "D@0.8.0"], ["E-resample@0.9.1", "E-resample@0.8.0"], ["E-resample@0.9.1", "D-resample@0.9.1"], ["A@0.8.0", "D@0.8.0"], ["D@0.9.1", "D@0.8.0"]];
+const PAIRS = [["A@0.9.2", "A@0.9.1"], ["A@0.9.2", "D@0.9.2"], ["A@0.9.2", "D@0.9.1"], ["E-resample@0.9.2", "E-resample@0.9.1"], ["E-resample@0.9.2", "D@0.9.2"], ["D@0.9.2", "D@0.9.1"], ["A@0.9.1", "A@0.8.0"], ["A@0.9.1", "D@0.9.1"], ["A@0.9.1", "D@0.8.0"], ["E-resample@0.9.1", "E-resample@0.8.0"], ["E-resample@0.9.1", "D-resample@0.9.1"], ["A@0.8.0", "D@0.8.0"], ["D@0.9.1", "D@0.8.0"]];
 const sign = (f) => (x) => `${x >= 0 ? "+" : ""}${f(x)}`;
 md += `\n## Paired differences (first arm minus second; 95% bootstrap CI over exercises)\n\n| pair | ${Object.keys(M).join(" | ")} |\n|---|${Object.keys(M).map(() => "---").join("|")}|\n`;
 for (const [a, b] of PAIRS) {
@@ -61,6 +61,26 @@ for (const [a, b] of PAIRS) {
     const d = m.pooled ? (idx) => (sum(idx.map((i) => va[i] - vb[i])) / sum(idx.map((i) => totals[i]))) : (idx) => mean(idx.map((i) => va[i] - vb[i]));
     return ci(boot(d), sign(m.f && !m.rate ? m.f : (x) => `${(100 * x).toFixed(1)} pp`));
   }).join(" | ")} |\n`;
+}
+
+// cost per accepted-and-correct task with CIs: a ratio of sums over the resampled exercises (seed means), and its
+// paired difference with the same resamples; resamples with no accepted-and-correct exercise (in either arm) are dropped
+const ratio = (num, den) => (idx) => { const d = sum(idx.map((i) => den[i])); return d ? sum(idx.map((i) => num[i])) / d : NaN; };
+function bootFinite(f) {
+  state = 1;
+  const n = exercises.length, all = Array.from({ length: n }, (_, i) => i), xs = [];
+  for (let b = 0; b < B; b++) xs.push(f(all.map(() => Math.floor(rand() * n))));
+  const ok = xs.filter(Number.isFinite).sort((a, b) => a - b);
+  return [f(all), ok[Math.floor(0.025 * ok.length)], ok[Math.floor(0.975 * ok.length)]];
+}
+const COST = { "tokens per accepted-and-correct task": (r) => r.promptTokens + r.evalTokens, "s per accepted-and-correct task": (r) => r.wallMs / 1000 };
+const fx = (x) => x.toFixed(Math.abs(x) >= 100 ? 0 : 1);
+md += `\n## Cost per accepted-and-correct task (95% bootstrap CI over exercises; ratio of sums; resamples without an accepted-and-correct exercise dropped)\n\n| arm or pair | ${Object.keys(COST).join(" | ")} |\n|---|${Object.keys(COST).map(() => "---").join("|")}|\n`;
+const accVec = (k) => perEx(byArm.get(k), M["accepted-and-correct"].fn);
+for (const k of arms) md += `| ${k} | ${Object.values(COST).map((fn) => ci(bootFinite(ratio(perEx(byArm.get(k), fn), accVec(k))), fx)).join(" | ")} |\n`;
+for (const [a, b] of PAIRS) {
+  if (!byArm.has(a) || !byArm.has(b)) continue;
+  md += `| ${a} - ${b} | ${Object.values(COST).map((fn) => { const ra = ratio(perEx(byArm.get(a), fn), accVec(a)), rb = ratio(perEx(byArm.get(b), fn), accVec(b)); return ci(bootFinite((idx) => ra(idx) - rb(idx)), (x) => `${x >= 0 ? "+" : ""}${fx(x)}`); }).join(" | ")} |\n`;
 }
 
 // efficiency per accepted-and-correct exercise, and OpenArc attempt diagnostics
