@@ -4,7 +4,7 @@ import type { HttpPort, ModelConfig, ModelOutput, OllamaChatRequest, Rendered } 
 
 // Policy artifacts: hand-written, versioned and part of the fingerprint (§4.3).
 // They are deliberately NOT regions. A generated prompt template would make the cache key depend on a model's output.
-export const PROMPT_TEMPLATE_VERSION = "4";
+export const PROMPT_TEMPLATE_VERSION = "5";
 /** {{context}} is the deterministic context package (engine.buildContext); {{repair}} is empty on attempt 1. */
 export const PROMPT_TEMPLATE = `Implement exactly one OpenArc region in TypeScript.
 
@@ -15,7 +15,7 @@ export const PROMPT_TEMPLATE = `Implement exactly one OpenArc region in TypeScri
 Reply with JSON only: {"body": "<statements>", "imports": []}. Add {"from": "<specifier>", "names": ["<name>"]} to "imports" only for a new import the Rules allow.`;
 /** Several independent regions of one file in one request (compilation.batch "file"): {{context}} is
  *  engine.batchContext (shared sections once, then one "## Region <id>" section each), {{shape}} the reply object. */
-export const BATCH_PROMPT_TEMPLATE = `Implement {{count}} OpenArc regions of one file in TypeScript. They are independent: write each region's body on its own.
+export const BATCH_PROMPT_TEMPLATE = `Implement {{count}} OpenArc regions of one file in TypeScript. They are independent: each body is its own function, and nothing one body declares is visible in another, so write each one complete on its own.
 
 {{context}}
 

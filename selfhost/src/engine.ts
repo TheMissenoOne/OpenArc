@@ -767,7 +767,7 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
     sections.push(["Task", `Write ONLY the statements of the body marked <<<BODY>>> (${cf.declaration}).${cf.cls ? " `this` is the instance; the class shell (fields, constructor, other members, signatures) is fixed." : ""} The declaration, its JSDoc and everything outside the body are fixed and checked to be unchanged.`]);
     sections.push(["Contract (fixed)", implicit.contract(s, checker, opts.stable ? null : pendingDecls)]);
   } else if (r.kind === "function") {
-    sections.push(["Fixed signature (write ONLY the statements inside the braces)", `export const ${s.symbol}: ${s.typeText} = ${s.isAsync ? "async " : ""}(${s.params.join(", ")}) => {\n  /* your body */\n};\n// ${s.typeText} = ${s.signature}`]);
+    sections.push(["Fixed signature (write ONLY the statements inside the braces)", `export const ${s.symbol}: ${s.typeText} = ${s.isAsync ? "async " : ""}(${s.params.join(", ")}) => {\n  /* your body */\n};`]);
   } else {
     sections.push(["Task", `Write ONLY the statements that replace arc.pending("${s.id}") inside function ${rootSpec.symbol}. Do not return, break or continue out of the block; report results by assigning the 'let' variables below.${rootSpec.isAsync ? " await is allowed." : ""}`]);
     sections.push(["Variables in scope", r.scope.join("\n")]);
@@ -825,6 +825,9 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
     r.typeImports.set(t.name, spec);
     return `// ${t.name}: not in scope; the compiler adds import type { ${t.name} } from "${spec}" if you use it\n${t.text}`;
   });
+  // "// T = signature" only when Types doesn't already declare T (issue #19: the signature was in the prompt twice)
+  if (r.kind === "function" && !cf && !s.sketch && !(/^\w+$/.test(s.typeText) ? types.some((t) => new RegExp(`\\b(type|interface) ${s.typeText}\\b`).test(t)) : true))
+    sections[0]![1] += `\n// ${s.typeText} = ${s.signature}`;
   if (types.length) sections.push([TYPES_HEADING, types.join("\n\n")]);
   if (sameFileLines.length) sections.push([`Already in ${r.file} (call these, don't re-implement them)`, sameFileLines.join("\n")]);
   if (helperLines.length) sections.push(["Helpers you may call", helperLines.join("\n\n")]);
@@ -855,7 +858,7 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
     for (const t of p.tests ?? []) if (t.hidden && t.file === r.file) full = full.replace(t.source, "// (a hidden test, not shown)");
     sections.push([`Full file ${r.file}`, full]);
   }
-  sections.push(["Rules", closed ? CLOSED_RULES : backend.outputFormat === "code" ? codeRules(RULES) : RULES]);
+  sections.push(["Rules", closed ? (sameFileLines.length ? CLOSED_RULES : CLOSED_RULES.replace(/^.*?No new imports\./, "No new imports.")) : backend.outputFormat === "code" ? codeRules(RULES) : RULES]);
 
   // Budget: drop optional sections (from the end of the optional list) until the package fits.
   const budget = (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5; // ~3.5 chars/token
@@ -1258,6 +1261,20 @@ export function spliceRegion(text: string, id: string, newBody: string[]): strin
   return lines.join("\n");
 }
 
+/** The body a compiler-owned, implemented region already has, when its spec is what the manifest recorded: the inverse
+ *  of regionBodyLines, accepted only if it round-trips exactly. null = nothing to keep. */
+function keptBody(p: Project, r: RegionInfo): string | null {
+  const m = p.manifest.regions[r.id];
+  if (r.state !== "compiler" || r.pending || r.childSpans.length || !m || m.specHash !== r.specHash) return null;
+  const plain = r.kind === "block" || !!r.spec.codeFirst;
+  const inner = plain ? r.bodyLines : r.bodyLines.slice(1, -1);
+  const pad = plain ? r.indent : `${r.indent}  `;
+  if (inner.some((l) => l.trim() && !l.startsWith(pad))) return null;
+  const body = inner.map((l) => l.slice(pad.length)).join("\n");
+  const again = regionBodyLines(r, body);
+  return again.length === r.bodyLines.length && again.every((l, i) => l === r.bodyLines[i]) ? body : null;
+}
+
 function regionBodyLines(r: RegionInfo, body: string): string[] {
   const inner = linesOf(body.replace(/\r/g, "")).map((l) => (l.trim() ? `${r.indent}  ${l}` : ""));
   if (r.kind === "block" || r.spec.codeFirst) return linesOf(body.replace(/\r/g, "")).map((l) => (l.trim() ? `${r.indent}${l}` : "")); // code-first: statements only (position M)
@@ -1401,7 +1418,7 @@ async function batchReply(ports: Ports, p: Project, r: RegionInfo, backend: Back
     const x = p.regions.find((y) => y.id === id)!;
     const b = backendFor(p, id, 0);
     if (x.file !== r.file || !batchable(x) || b.name !== backend.name || b.outputFormat !== backend.outputFormat) continue;
-    if ((await ports.fs.read(cachePathOf(x))) !== null) continue; // a cache hit needs no model call
+    if ((await ports.fs.read(cachePathOf(x))) !== null || keptBody(p, x) !== null) continue; // a cache hit or a kept body needs no model call
     group.push(x);
   }
   group = group.filter((x) => !group.some((y) => y !== x && (x.spec.calls ?? []).includes(y.spec.symbol)));
@@ -1454,7 +1471,11 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     return { candidate: null, modelCalls: 0 };
   }
   const cachePath = cachePathOf(r);
-  const cached = await ports.fs.read(cachePath);
+  let cached = await ports.fs.read(cachePath);
+  // Spec unchanged, only the context moved (a sibling added or changed, issue #19 evolution run): the region's own body
+  // goes through verification first, like a cache hit, and the model is asked only if it fails.
+  const kept = !cached ? keptBody(p, r) : null;
+  if (kept !== null) cached = JSON.stringify({ body: kept, imports: [] });
   // A compiler-owned region that fails keeps its old body, which may not satisfy the current spec: say so (display: stale).
   const giveUp = () => {
     if (r.state === "compiler") diagnostics.push(err("OARC-W043", { id }));
@@ -1501,7 +1522,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     const code = backend.outputFormat === "code";
     if (attempt === 1 && cached) {
       ({ body, imports, sampling = null, tokens: cachedTokens = null } = JSON.parse(cached) as { body: string; imports: ImportDecl[]; sampling?: { temperature: number; seed: number }; tokens?: Tokens });
-      ports.log(`  ${id}: cache hit`);
+      ports.log(`  ${id}: ${kept !== null ? "spec unchanged, re-verifying the current body" : "cache hit"}`);
     } else {
       if (p.e080Streak >= 3) return giveUp();
       const digest = await modelDigest(ports, p, backend, diagnostics);
