@@ -1,0 +1,43 @@
+{
+  "_doc": "Issue #19 evolution benchmark: toolkit.ts over 5 steps, OpenArc (A, repair) vs plain whole-file prompt (D). See evolve.mjs.",
+  "backend": {
+    "provider": "openai",
+    "baseUrl": "http://127.0.0.1:18080/v1",
+    "maxContextTokens": 8192,
+    "outputReserveTokens": 4096,
+    "openarc": {
+      "outputFormat": "json"
+    },
+    "info": {
+      "label": "llama-server-vulkan-json",
+      "engine": "llama.cpp llama-server (Vulkan)",
+      "version": "version: 0.8.0-dev (build 1, commit f3586e6)",
+      "quant": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+      "kvCacheType": "f16",
+      "ctx": 8192,
+      "flags": "-ngl 99 -c 8192 -fa on -np 1 --cache-ram 0 --reasoning off --jinja --no-webui --port 18080"
+    }
+  },
+  "memory": {
+    "minStartGb": 6,
+    "abortGb": 1.5
+  },
+  "configs": {
+    "A": {
+      "kind": "openarc",
+      "level": 0
+    },
+    "D": {
+      "kind": "baseline"
+    }
+  },
+  "runs": [
+    {
+      "model": "qwen2.5-coder-7b",
+      "configs": [
+        "A",
+        "D"
+      ]
+    }
+  ]
+}

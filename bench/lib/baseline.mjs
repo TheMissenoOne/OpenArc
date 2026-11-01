@@ -36,7 +36,7 @@ function publicTest(ex, splitInfo) {
  * One chat call through the proxy, with the same sampling OpenArc sends to that provider (temperature 0, seed 1, the
  * same output cap); OpenArc's structured-output schema is the only request difference. Returns the reply text.
  */
-async function chat(backend, port, model, messages, { seed = 1, temperature = 0 } = {}) {
+export async function chat(backend, port, model, messages, { seed = 1, temperature = 0 } = {}) {
   const base = proxyBase(backend, port);
   if (backend.provider === "ollama") {
     const r = await fetch(`${base}/api/chat`, {
