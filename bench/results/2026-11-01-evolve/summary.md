@@ -35,4 +35,4 @@ regressions in any arm. The hand edit survived in every arm and seed (the 7B kep
 3. **Creation is where OpenArc still loses**: 2719 vs 859 tokens (3 calls vs 1), from the per-call overhead and the
    retries the acceptance gate triggers (the same gap as the one-shot benchmark).
 4. Over these 5 steps the totals are 6438 vs 4491 tokens and 34.3 vs 35.6 s: OpenArc already matches on time; on tokens
-   it gains about 400-560 per incremental step, so it breaks even after roughly 4 more incremental steps on this file.
+   it saves 250-560 per incremental step, so it breaks even after roughly 4-8 more incremental steps on this file.
