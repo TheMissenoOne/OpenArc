@@ -12,9 +12,9 @@ import { canonicalJson, normalizeOwnedText, sha256Tagged } from "./hash.ts";
 import { detect } from "./ownership.ts";
 import { checkRestrictions } from "./block.ts";
 import { selectTargets } from "./plan.ts";
-import { PROMPT_TEMPLATE_VERSION, PROMPT_TEMPLATE, renderTemplate, parseOutput } from "./model.ts";
-import { addTokens, baseUrlOf, completeWithUsage, isOllamaCompat, type Tokens } from "./backends.ts";
-import { CODE_PROMPT_TEMPLATE, CODE_PROMPT_TEMPLATE_VERSION, CODE_SYSTEM, codeRules, parseCodeOutput } from "./output-format.ts";
+import { BATCH_PROMPT_TEMPLATE, PROMPT_TEMPLATE_VERSION, PROMPT_TEMPLATE, renderTemplate, parseOutput } from "./model.ts";
+import { OUTPUT_SCHEMA, STRICT_OUTPUT_SCHEMA, addTokens, baseUrlOf, completeWithUsage, isOllamaCompat, type Tokens } from "./backends.ts";
+import { BATCH_CODE_PROMPT_TEMPLATE, BATCH_CODE_SYSTEM, CODE_PROMPT_TEMPLATE, CODE_PROMPT_TEMPLATE_VERSION, CODE_SYSTEM, codeRules, parseCodeOutput, splitCodeSections } from "./output-format.ts";
 import { buildArgv, readHarnessOutput } from "./sandbox.ts";
 import { readFileSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -125,6 +125,8 @@ export interface Project {
   tests?: testsPlan.TestInfo[]; // code-first: every arc.test/arc.law statement, in file then source order
   scaffolds?: implicit.Scaffolded[]; // code-first: markers inserted in memory inside pending bodies
   codeFirstIds?: Set<string>; // code-first: every code-first region id (pending or with markers), known before extractSpecs
+  targets?: string[]; // plan's targets, in order: batchReply looks ahead for a region's file siblings
+  batched?: Map<string, BatchShare>; // a batched first reply waiting for its region's generate
 }
 
 const err = (code: Diagnostic["code"], extra: Omit<Diagnostic, "code"> = {}): Diagnostic => ({ code, ...extra });
@@ -507,6 +509,7 @@ export async function analyze(ports: Ports, req: CompileRequest, p: Project, dia
       // the normalised endpoint (provider presets, §13): a changed preset default re-fingerprints its regions
       endpoint: backend.provider === "ollama" ? null : { preset: backend.preset ?? backend.provider, structuredOutput: backend.structuredOutput ?? null, ollamaCompat: isOllamaCompat(backend) },
       promptTemplate: backend.outputFormat === "code" ? CODE_PROMPT_TEMPLATE_VERSION : PROMPT_TEMPLATE_VERSION, outputFormat: backend.outputFormat!,
+      batch: p.config.compilation.batch ?? "file",
       compiler: COMPILER_VERSION, typescript: ts.version,
     }));
     r.stale = p.manifest.regions[r.id]?.fingerprint !== r.fingerprint;
@@ -744,6 +747,13 @@ const TESTS_HEADING = "Tests your body must pass (TypeScript, run in a sandbox)"
 
 /** Deterministic context package for one region at one level (adaptive context, see config.ts). */
 export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, backend: BackendConfig, opts: { stable?: boolean } = {}): string {
+  return renderSections(contextSections(p, r, level, backend, opts).sections);
+}
+const renderSections = (sections: [string, string][], h = "##") => sections.map(([t, b]) => `${h} ${t}\n${b}`).join("\n\n");
+const TYPES_HEADING = "Types (verbatim)";
+
+/** buildContext's sections, and the type closure entries of its Types section (batchContext merges those). */
+function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend: BackendConfig, opts: { stable?: boolean } = {}): { sections: [string, string][]; types: string[] } {
   const checker = p.program!.getTypeChecker();
   const s = r.spec;
   const sf = p.program!.getSourceFile(abs(p, r.file))!;
@@ -815,7 +825,7 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
     r.typeImports.set(t.name, spec);
     return `// ${t.name}: not in scope; the compiler adds import type { ${t.name} } from "${spec}" if you use it\n${t.text}`;
   });
-  if (types.length) sections.push(["Types (verbatim)", types.join("\n\n")]);
+  if (types.length) sections.push([TYPES_HEADING, types.join("\n\n")]);
   if (sameFileLines.length) sections.push([`Already in ${r.file} (call these, don't re-implement them)`, sameFileLines.join("\n")]);
   if (helperLines.length) sections.push(["Helpers you may call", helperLines.join("\n\n")]);
   if (!cf) sections.push(["Intent", s.intent || "(none)"]);
@@ -849,7 +859,7 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
 
   // Budget: drop optional sections (from the end of the optional list) until the package fits.
   const budget = (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5; // ~3.5 chars/token
-  const render = () => sections.map(([h, b]) => `## ${h}\n${b}`).join("\n\n");
+  const render = () => renderSections(sections);
   let text = render();
   const ti = sections.findIndex(([h]) => h === TESTS_HEADING); // code-first: the summary replaces the test source first
   if (text.length > budget && ti >= 0) {
@@ -862,7 +872,7 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
     if (i >= 0) sections.splice(i, 1);
     text = render();
   }
-  return text;
+  return { sections, types };
 }
 
 function blockScopeTypeRoots(sf: ts.SourceFile, r: RegionInfo): ts.Node[] {
@@ -913,6 +923,7 @@ export function plan(p: Project, req: CompileRequest, diagnostics: Diagnostic[])
   // palette: callees compile before their callers (§8.1): a sketch's calls, and the regions of the files a file imports
   const targets = sketch.calleesFirst(selected, p.specs, (f) => [...importedSpecifiers(p.files.get(f) ?? "")].flatMap((x) => resolveLocal(p, f, x) ?? []));
   diagnostics.push(...skipped);
+  p.targets = targets;
   for (const id of targets) {
     const r = p.regions.find((x) => x.id === id)!;
     if (r.kind === "block" && !hasChecks(p.specs.get(r.root))) diagnostics.push(err("OARC-W041", { id }));
@@ -1332,10 +1343,99 @@ export function retrySampling(b: BackendConfig, attempt: number): { temperature:
   return attempt === 1 ? null : { temperature: attempt === 2 ? 0.4 : 0.7, seed: (b.seed ?? 1) + attempt - 1 };
 }
 
-/** A body compared for repeats: whitespace runs collapsed (ponytail: also inside string literals; a repeat that only
- *  differs in a string's spacing is rare enough). */
 // Exact text (trimmed): collapsing whitespace would also merge replies that differ only inside a string literal.
 export const repeatKey = (body: string): string => body.trim();
+
+/** The retry prompt's note. A body that failed only its examples or tests is resampled: the base prompt plus what
+ *  failed, without the body (issue #19: on a 7B, repairing with the body did no better than resampling, and resent the
+ *  body's tokens). A parse, tsc or static failure keeps the full repair: its diagnostics point into the body. */
+export function repairText(previous: { body: string; problems: string[] } | null): string {
+  if (!previous) return "";
+  if (previous.problems.length && previous.problems.every((x) => /^OARC-E09[01] /.test(x)))
+    return `## A previous attempt failed\n${previous.problems.slice(0, 3).map((x) => x.slice(0, 300)).join("\n")}\n\nWrite a new body that passes every example and test above.`;
+  return `## Your previous attempt failed\nPrevious body:\n${previous.body}\n\nProblems:\n${previous.problems.join("\n")}\n\nFix these problems.`;
+}
+
+const JSON_SYSTEM = "You are a compiler backend. You output JSON only: {\"body\": string, \"imports\": [{\"from\": string, \"names\": string[], \"default\"?: string}]}. body is TypeScript statements only, with no markdown.";
+const BATCH_JSON_SYSTEM = "You are a compiler backend. You output JSON only: an object with one {\"body\": string, \"imports\": [...]} entry per region id. Each body is TypeScript statements only, with no markdown.";
+
+/** A region's part of a batched first request: its slice of the reply ("json": its entry as JSON, "code": its
+ *  section), the shared prompt's hash, and its share of the tokens and of the one call (the first region holds it). */
+interface BatchShare { raw: string; tokens: Tokens | null; promptHash: string; ids: string[]; calls: number; contextChars: number }
+
+/** Regions that can share a request: plain function regions (no sketch, UI, class member or nested blocks). */
+const batchable = (r: RegionInfo) => r.kind === "function" && !r.spec.sketch && !r.spec.ui && !r.spec.codeFirst?.cls && r.childSpans.length === 0;
+const cachePathOf = (r: RegionInfo) => `.openarc/cache/${r.fingerprint.replace("sha256:", "")}.json`;
+
+/** The context of a batched request: the sections every member has verbatim, once (their type closures merged into
+ *  one Types section), then one "## Region <id>" section per member with the rest, then the shared Rules. */
+export function batchContext(p: Project, rs: RegionInfo[], backend: BackendConfig): string {
+  const parts = rs.map((r) => contextSections(p, r, initialLevel(p, r), backend));
+  const key = ([h, b]: [string, string]) => `${h}\n${b}`;
+  const everywhere = new Set(parts[0]!.sections.map(key).filter((k) => parts.every((x) => x.sections.some((s) => key(s) === k))));
+  const types = [...new Set(parts.flatMap((x) => x.types))];
+  const shared = parts[0]!.sections.filter((s) => everywhere.has(key(s)) && s[0] !== "Rules" && s[0] !== TYPES_HEADING);
+  if (types.length) shared.unshift([TYPES_HEADING, types.join("\n\n")]);
+  const own = rs.map((r, i): [string, string] => [`Region ${r.id}`, renderSections(parts[i]!.sections.filter((s) => !everywhere.has(key(s)) && s[0] !== TYPES_HEADING), "###")]);
+  return renderSections([...shared, ...own, ...parts[0]!.sections.filter((s) => s[0] === "Rules" && everywhere.has(key(s)))]);
+}
+
+const batchSchema = (ids: string[]): { loose: Json; strict: Json } => {
+  const make = (one: Json): Json => ({ type: "object", additionalProperties: false, required: ids, properties: Object.fromEntries(ids.map((id) => [id, one])) });
+  return { loose: make(OUTPUT_SCHEMA), strict: make(STRICT_OUTPUT_SCHEMA) };
+};
+
+/** compilation.batch "file": the first attempt of a region and of its pending siblings later in the plan (same file
+ *  and backend, no cache hit, none naming another in `calls`) is ONE request. Returns this region's share and keeps
+ *  the siblings' for their own generate; null = no batch (one request per region, as before). Each share then goes
+ *  through the usual parse, repeat, verify and commit of its region; only failed regions retry, one by one. */
+async function batchReply(ports: Ports, p: Project, r: RegionInfo, backend: BackendConfig & { name: string }): Promise<BatchShare | null> {
+  const mine = p.batched?.get(r.id);
+  if (mine) {
+    p.batched!.delete(r.id);
+    return mine;
+  }
+  if (p.config.compilation.batch === "off" || !batchable(r) || !p.targets) return null;
+  let group = [r];
+  for (const id of p.targets.slice(p.targets.indexOf(r.id) + 1)) {
+    const x = p.regions.find((y) => y.id === id)!;
+    const b = backendFor(p, id, 0);
+    if (x.file !== r.file || !batchable(x) || b.name !== backend.name || b.outputFormat !== backend.outputFormat) continue;
+    if ((await ports.fs.read(cachePathOf(x))) !== null) continue; // a cache hit needs no model call
+    group.push(x);
+  }
+  group = group.filter((x) => !group.some((y) => y !== x && (x.spec.calls ?? []).includes(y.spec.symbol)));
+  if (group.length < 2 || group[0] !== r) return null;
+  const ids = group.map((x) => x.id);
+  const code = backend.outputFormat === "code";
+  const context = batchContext(p, group, backend);
+  if (context.length > (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5) return null; // ponytail: too big to share
+  const rendered = renderTemplate(code ? BATCH_CODE_PROMPT_TEMPLATE : BATCH_PROMPT_TEMPLATE, {
+    count: String(ids.length), context, ids: ids.join("\n"), shape: `{${ids.map((id) => `"${id}": {"body": "<statements>", "imports": []}`).join(", ")}}`,
+  });
+  if (!rendered.ok) throw new Error(`batch prompt template is missing ${rendered.missing.join(", ")}`);
+  const t0 = Date.now();
+  // a failed request throws: generate reports it as this region's E080, like its own request's
+  const { text: raw, tokens } = await completeWithUsage(ports, { ...backend, ...(code ? {} : { outputSchema: batchSchema(ids) }) }, code ? BATCH_CODE_SYSTEM : BATCH_JSON_SYSTEM, rendered.text);
+  p.e080Streak = 0;
+  ports.log(`  ${ids.join(", ")}: one batched request via ${backend.name} (${backend.model}), context ${context.length} chars, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  let parts: string[];
+  if (code) parts = [...splitCodeSections(raw, ids).values()].map((t) => t ?? "");
+  else {
+    let v: unknown = null;
+    try {
+      v = JSON.parse(raw);
+    } catch { /* every region gets the raw reply and reports it as invalid JSON */ }
+    const o = typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+    parts = ids.map((id) => (o ? JSON.stringify(o[id] ?? null) : raw));
+  }
+  const n = ids.length;
+  const share = (v: number, i: number) => Math.floor(v / n) + (i === 0 ? v % n : 0);
+  const shares = ids.map((_, i): BatchShare => ({ raw: parts[i]!, tokens: tokens && { prompt: share(tokens.prompt, i), completion: share(tokens.completion, i) }, promptHash: sha256Tagged(rendered.text), ids, calls: i === 0 ? 1 : 0, contextChars: context.length }));
+  p.batched ??= new Map();
+  ids.forEach((id, i) => i > 0 && p.batched!.set(id, shares[i]!));
+  return shares[0]!;
+}
 
 export async function generate(ports: Ports, req: CompileRequest, p: Project, id: string, diagnostics: Diagnostic[]): Promise<{ candidate: Candidate | null; modelCalls: number }> {
   const r = p.regions.find((x) => x.id === id)!;
@@ -1345,7 +1445,6 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   let modelCalls = 0;
   let previous: { body: string; problems: string[] } | null = null;
   const seen = new Set<string>(); // repeatKey of every body (or invalid reply) this run produced for the region
-  let repeats = 0;
   let spent: Tokens | null = null; // every model call for this region in this run (provenance.tokens)
   let cachedTokens: Tokens | null = null; // a cache hit carries the tokens that produced its body
   for (const [law, why] of concepts.waivers(r.spec)) ports.log(`  ${id}: law "${law}" waived: ${why}`); // palette
@@ -1354,7 +1453,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     diagnostics.push(err("OARC-E092", { id, detail: dom })); // no unverified fallback, and no model call wasted
     return { candidate: null, modelCalls: 0 };
   }
-  const cachePath = `.openarc/cache/${r.fingerprint.replace("sha256:", "")}.json`;
+  const cachePath = cachePathOf(r);
   const cached = await ports.fs.read(cachePath);
   // A compiler-owned region that fails keeps its old body, which may not satisfy the current spec: say so (display: stale).
   const giveUp = () => {
@@ -1367,19 +1466,25 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     if (++p.e080Streak === 3) diagnostics.push(err("OARC-E080", { detail: "stopped:3-consecutive" }));
     return giveUp();
   };
-  // Repeat-stop: a reply identical to an earlier one of this run is not verified again; the next attempt
-  // samples differently (retrySampling), and a second repeat ends the region's attempts (E082 repeat:).
+  // Repeat-stop: a reply identical to an earlier one of this run is not verified again, and it ends the
+  // region's attempts (E082 repeat: with the earlier verdict): on a 7B no retry after a repeat ever passed (issue #19).
+  // A configured fallback backend still gets its turn.
   const repeated = (text: string): boolean => {
     const key = repeatKey(text);
     if (!seen.has(key)) {
       seen.add(key);
       return false;
     }
-    repeats++;
-    ports.log(`  ${id}: ✗ the reply repeats an earlier attempt${repeats >= 2 ? "; stopping" : "; not verified again, retrying with other sampling"}`);
+    const fallback = !!c.fallbackBackend && stage === 0;
+    ports.log(`  ${id}: ✗ the reply repeats an earlier attempt; ${fallback ? "switching to the fallback backend" : "stopping"}`);
     return true;
   };
-  const stopRepeating = () => {
+  /** After a repeat: the fallback backend's turn when there is one, else E082 and give up (null = continue). */
+  const afterRepeat = () => {
+    if (c.fallbackBackend && stage === 0) {
+      stage = 1;
+      return null;
+    }
     diagnostics.push(err("OARC-E082", { id, detail: `repeat: ${previous?.problems[0] ?? ""}`.slice(0, 200) }));
     return giveUp();
   };
@@ -1392,6 +1497,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     let sampling: { temperature: number; seed: number } | null = null;
     let promptHash: string | null = null;
     let tokens: Tokens | null = null;
+    let batch: string[] | null = null; // the region ids that shared this attempt's request
     const code = backend.outputFormat === "code";
     if (attempt === 1 && cached) {
       ({ body, imports, sampling = null, tokens: cachedTokens = null } = JSON.parse(cached) as { body: string; imports: ImportDecl[]; sampling?: { temperature: number; seed: number }; tokens?: Tokens });
@@ -1400,41 +1506,56 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       if (p.e080Streak >= 3) return giveUp();
       const digest = await modelDigest(ports, p, backend, diagnostics);
       if (digest === null) return backendDown();
-      const context = attempt === 1 && level === initialLevel(p, r) ? r.context0 : buildContext(p, r, level, backend);
-      // palette: a sketch region uses the fills protocol; in "code" format the model returns the whole filled sketch as
-      // one code block and verify's containment check (E099) recovers the fills
-      const rendered = renderTemplate(r.spec.sketch ? (code ? sketch.SKETCH_CODE_PROMPT_TEMPLATE : sketch.SKETCH_PROMPT_TEMPLATE) : code ? CODE_PROMPT_TEMPLATE : PROMPT_TEMPLATE, {
-        context,
-        repair: previous ? `## Your previous attempt failed\nPrevious body:\n${previous.body}\n\nProblems:\n${previous.problems.join("\n")}\n\nFix these problems.` : "",
-      });
-      if (!rendered.ok) throw new Error(`prompt template is missing ${rendered.missing.join(", ")}`);
-      promptHash = sha256Tagged(rendered.text);
-      sampling = retrySampling(backend, attempt);
       const t0 = Date.now();
       let raw: string;
+      let contextChars: number;
+      let shared: BatchShare | null;
       try {
-        ({ text: raw, tokens } = await completeWithUsage(
-          ports,
-          { ...(sampling ? { ...backend, ...sampling } : backend), ...(r.spec.sketch && !code ? { outputSchema: sketch.fillsSchema(r.spec.sketch) } : {}) },
-          r.spec.sketch ? (code ? sketch.SKETCH_CODE_SYSTEM : sketch.SKETCH_SYSTEM) : code ? CODE_SYSTEM : "You are a compiler backend. You output JSON only: {\"body\": string, \"imports\": [{\"from\": string, \"names\": string[], \"default\"?: string}]}. body is TypeScript statements only, with no markdown.",
-          rendered.text,
-        ));
-        spent = addTokens(spent, tokens);
+        shared = attempt === 1 ? await batchReply(ports, p, r, backend) : null;
       } catch (e) {
         diagnostics.push(err("OARC-E080", { id, detail: (e as Error).message.slice(0, 120) }));
         return backendDown();
       }
-      p.e080Streak = 0;
-      modelCalls++;
+      if (shared) {
+        ({ raw, tokens, promptHash, ids: batch, contextChars } = shared);
+        spent = addTokens(spent, tokens);
+        modelCalls += shared.calls;
+      } else {
+        const context = attempt === 1 && level === initialLevel(p, r) ? r.context0 : buildContext(p, r, level, backend);
+        contextChars = context.length;
+        // palette: a sketch region uses the fills protocol; in "code" format the model returns the whole filled sketch as
+        // one code block and verify's containment check (E099) recovers the fills
+        const rendered = renderTemplate(r.spec.sketch ? (code ? sketch.SKETCH_CODE_PROMPT_TEMPLATE : sketch.SKETCH_PROMPT_TEMPLATE) : code ? CODE_PROMPT_TEMPLATE : PROMPT_TEMPLATE, { context, repair: repairText(previous) });
+        if (!rendered.ok) throw new Error(`prompt template is missing ${rendered.missing.join(", ")}`);
+        promptHash = sha256Tagged(rendered.text);
+        sampling = retrySampling(backend, attempt);
+        try {
+          ({ text: raw, tokens } = await completeWithUsage(
+            ports,
+            { ...(sampling ? { ...backend, ...sampling } : backend), ...(r.spec.sketch && !code ? { outputSchema: sketch.fillsSchema(r.spec.sketch) } : {}) },
+            r.spec.sketch ? (code ? sketch.SKETCH_CODE_SYSTEM : sketch.SKETCH_SYSTEM) : code ? CODE_SYSTEM : JSON_SYSTEM,
+            rendered.text,
+          ));
+          spent = addTokens(spent, tokens);
+        } catch (e) {
+          diagnostics.push(err("OARC-E080", { id, detail: (e as Error).message.slice(0, 120) }));
+          return backendDown();
+        }
+        p.e080Streak = 0;
+        modelCalls++;
+      }
       const split = code ? { raw, defaults: new Map<number, string>() } : splitDefaults(raw);
       const parsed = code ? parseCodeOutput(raw) : r.spec.sketch ? sketch.parseFills(split.raw, r.spec.sketch) : parseOutput(split.raw); // palette: fills
       const varied = sampling ? ` (retry sampling: temperature ${sampling.temperature}, seed ${sampling.seed})` : "";
-      ports.log(`  ${id}: attempt ${attempt} via ${backend.name} (${backend.model}), context L${level} ${context.length} chars${varied}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+      ports.log(`  ${id}: attempt ${attempt} via ${backend.name} (${backend.model}), context L${level} ${contextChars} chars${varied}${batch ? `, batched with ${batch.length - 1} other region${batch.length === 2 ? "" : "s"}` : ""}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
       if (!parsed.ok) {
         const problem = `output was not valid: ${parsed.diagnostic.detail}`;
         ports.log(`  ${id}: ✗ ${problem} (${raw.length} chars${raw.length ? `, ends ${JSON.stringify(raw.slice(-40))}` : ""})`);
-        await saveAttempt(ports, id, { attempt, backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, raw, problems: [problem] });
-        if (repeated(raw) && repeats >= 2) return stopRepeating();
+        await saveAttempt(ports, id, { attempt, backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, ...(batch ? { batch } : {}), raw, problems: [problem] });
+        if (repeated(raw)) {
+          const stop = afterRepeat();
+          if (stop) return stop;
+        }
         previous = { body: raw.slice(0, 2000), problems: [problem] };
         continue;
       }
@@ -1451,8 +1572,8 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     const replyKey = body + (imports.length ? `\n${JSON.stringify(imports)}` : "");
     if (repeated(replyKey)) { // the same reply again: same verdict
       await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, body, imports: imports as unknown as Json, problems: ["repeat of an earlier attempt (not verified again)"] });
-      if (attempt === c.maxAttempts - 1 && c.fallbackBackend) stage = 1; // the last attempt is the fallback's, repeat or not
-      else if (repeats >= 2) return stopRepeating();
+      const stop = afterRepeat();
+      if (stop) return stop;
       continue;
     }
     const result = await verify(ports, req, p, r, body, imports);
@@ -1469,7 +1590,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       // committed only once the joint check sees a passing example reach it.
       if (!(attempt === 1 && cached) && !result.unverified) await ports.fs.write(cachePath, JSON.stringify({ body, imports, ...(sampling ? { sampling } : {}), ...(spent ? { tokens: spent } : {}) }));
       const waived = Object.fromEntries(concepts.waivers(r.spec)); // palette: waived laws are recorded with the body
-      p.provenance.set(id, { source: "generated", backend: at.backend.name, model: at.backend.model, outputFormat: at.backend.outputFormat!, contextLevel: at.level, attempts: attempt, verifiedBy: result.verifiedBy, ...(sampling ? { sampling } : {}), ...(spent ? { tokens: spent } : {}), ...(Object.keys(waived).length ? { waived } : {}) });
+      p.provenance.set(id, { source: "generated", backend: at.backend.name, model: at.backend.model, outputFormat: at.backend.outputFormat!, contextLevel: at.level, attempts: attempt, verifiedBy: result.verifiedBy, ...(sampling ? { sampling } : {}), ...(batch ? { batch } : {}), ...(spent ? { tokens: spent } : {}), ...(Object.keys(waived).length ? { waived } : {}) });
       if (result.unverified) {
         diagnostics.push(err("OARC-W045", { id, detail: `unreached:${r.root}` }));
         ports.log(`  ${id}: unverified: no passing example of ${r.root} reaches this block (${result.verifiedBy.join(", ")})`);
@@ -1478,7 +1599,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       return { candidate: { id, body, imports, verifiedBy: result.verifiedBy }, modelCalls };
     }
     ports.log(`  ${id}: ✗ ${result.problems[0]?.slice(0, 160)}`);
-    await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, body, imports: imports as unknown as Json, problems: result.problems });
+    await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, ...(batch ? { batch } : {}), body, imports: imports as unknown as Json, problems: result.problems });
     previous = { body, problems: result.problems };
     if (result.stop) { // palette: OARC-E100, no fill can fix it
       diagnostics.push(result.stop);

@@ -94,7 +94,7 @@ Code-first is the main way, and every earlier form stays fully supported. They m
 
 | | |
 |---|---|
-| Release | [`open-arc` on npm](https://www.npmjs.com/package/open-arc): 0.7.1 published; 0.8.0 (palette), 0.9.0 (code-first) and 0.9.1 (cheaper retries and prompts, [#19](https://github.com/TheMissenoOne/OpenArc/issues/19)) are in review |
+| Release | [`open-arc` on npm](https://www.npmjs.com/package/open-arc): 0.7.1 published; 0.8.0 (palette), 0.9.0 (code-first), 0.9.1 (cheaper retries and prompts) and 0.9.2 (per-file batching, [#19](https://github.com/TheMissenoOne/OpenArc/issues/19)) are in review |
 | CI | Linux (bwrap), macOS (sandbox-exec), Windows (Node permission model) on Node 25, plus Linux on Node 23 |
 | Benchmark | The untuned pilot solved 0/5 tasks with OpenArc against 2/5 for a plain prompt. A rerun on a tuned backend is in progress: preliminary results are about 2/8 against 3/8, and the code output format didn't help. OpenArc doesn't beat a plain prompt yet. See draft PR [#5](https://github.com/TheMissenoOne/OpenArc/pull/5) and issue [#10](https://github.com/TheMissenoOne/OpenArc/issues/10) |
 | Self-hosting | Part of OpenArc is compiled by OpenArc (`selfhost/`); finishing it is issue [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) |
@@ -131,7 +131,7 @@ Alpha: the compiler's guarantees (write scope, sandbox, ownership) are tested on
 ```bash
 cd stage0 && npm i && npx tsc -p . && node tools/run-examples.ts --strict   # 43/43 classic regions (24 compiler + 19 palette)
 (cd tests/fixtures/ui && npm i)                                              # optional: jsdom + react, so ui.check runs the DOM
-for f in tests/*.check.ts; do node $f; done                                   # 21 checks, no model; several run the real sandbox
+for f in tests/*.check.ts; do node $f; done                                   # 22 checks, no model; several run the real sandbox
 node tools/build.ts && (cd build && npm pack)                                # build/open-arc-x.y.z.tgz
 cd ../selfhost && npm i && npx openarc compile --keep-going                  # OpenArc compiling OpenArc
 ```

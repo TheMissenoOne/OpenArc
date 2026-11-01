@@ -6,7 +6,7 @@
 import ts from "typescript";
 import type { ImportDecl, ModelOutput } from "./types.ts";
 
-export const CODE_PROMPT_TEMPLATE_VERSION = "code-1";
+export const CODE_PROMPT_TEMPLATE_VERSION = "code-2";
 /** {{context}} and {{repair}} as in PROMPT_TEMPLATE. */
 export const CODE_PROMPT_TEMPLATE = `Implement exactly one OpenArc region in TypeScript.
 
@@ -15,6 +15,27 @@ export const CODE_PROMPT_TEMPLATE = `Implement exactly one OpenArc region in Typ
 {{repair}}
 
 Reply with ONE fenced code block (\`\`\`ts ... \`\`\`). Inside it: first any import lines you need (only for something listed under "Allowed new imports" that the file doesn't already import), then ONLY the statements: the function's body without its signature and braces, or the block's statements.`;
+
+/** Several regions in one request (engine.batchReply): {{ids}} lists the region ids, one per line. */
+export const BATCH_CODE_PROMPT_TEMPLATE = `Implement {{count}} OpenArc regions of one file in TypeScript. They are independent: write each region's body on its own.
+
+{{context}}
+
+Reply with one section per region, in this order:
+{{ids}}
+Each section is a line "### <region id>", then ONE fenced code block (\`\`\`ts ... \`\`\`). Inside it: first any import lines you need (only for something listed under "Allowed new imports" that the file doesn't already import), then ONLY the statements of that function's body, without its signature and braces.`;
+export const BATCH_CODE_SYSTEM = 'You are a compiler backend. For each region you output a "### <region id>" line, then one fenced TypeScript code block: optional import lines at the top, then statements only.';
+
+/** A batched "code" reply split at its region headings: a line that is just a region id, give or take "#", "Region",
+ *  backticks, asterisks and a colon. Each id gets the text up to the next heading (null when it has no heading). */
+export function splitCodeSections(raw: string, ids: string[]): Map<string, string | null> {
+  const lines = raw.replace(/\r/g, "").split("\n");
+  const idOf = (l: string) => ids.find((id) => l.replace(/^\s*#*\s*(region\s+)?/i, "").replace(/[`*:\s]/g, "") === id);
+  const heads = lines.flatMap((l, i) => { const id = idOf(l); return id ? [{ i, id }] : []; });
+  const out = new Map<string, string | null>(ids.map((id) => [id, null]));
+  heads.forEach(({ i, id }, k) => { if (out.get(id) === null) out.set(id, lines.slice(i + 1, heads[k + 1]?.i ?? lines.length).join("\n")); });
+  return out;
+}
 
 export const CODE_SYSTEM = "You are a compiler backend. You output exactly one fenced TypeScript code block: optional import lines at the top, then statements only.";
 

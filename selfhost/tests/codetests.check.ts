@@ -276,14 +276,15 @@ try {
   assert.equal(helped.code, 0, helped.out);
   assert.deepStrictEqual(manifest()["p2p.peer.receive"]!.provenance.verifiedBy, ["tsc", "static", "tests:2/2"], helped.out);
 
-  // a hidden test fails: the repair prompt names it, and nothing else about it
+  // a hidden test fails: the retry prompt names it, and nothing else about it (a test failure resamples: no body either)
   reset("json");
   replies = { "RoundRobin.pick": [UNFAIR] };
   let c = await cli(proj, "compile", "lb.roundRobin.pick", "lb.roundRobin.markDown");
   assert.equal(c.code, 0, c.out);
-  const repair = prompts.find((x) => x.includes("Your previous attempt failed"))!;
+  const repair = prompts.find((x) => x.includes("A previous attempt failed"))!;
   assert.ok(repair, c.out);
-  assert.match(repair, /Problems:\nOARC-E090 hidden test failed: "fair over 300 picks"\n/);
+  assert.match(repair, /## A previous attempt failed\nOARC-E090 hidden test failed: "fair over 300 picks"\n/);
+  assert.ok(!repair.includes("Previous body"), "a test failure is resampled, not repaired");
   assert.ok(!repair.includes("counts") && !repair.includes("100"), "no values or source of a hidden test reach the model");
 
   // a test registered outside the static plan (through an alias; a nested arc.test call is E010 test:not-top-level) is
