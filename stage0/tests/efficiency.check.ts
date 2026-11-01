@@ -82,6 +82,12 @@ async function compile(maxAttempts: number, bodies: string[]) {
   const fres = await run(fb.instance as Ports, { ...req, keepGoing: true });
   assert.equal(fres.exit, 0, JSON.stringify(fres.diagnostics));
   assert.deepStrictEqual(chats(fb.snapshot() as Snap).map((b) => b.options.seed), [1, 2, 11], "attempt 3 on the fallback (seed 9 + 2)");
+  // invalid output on the penultimate attempt (no repeat) still leaves the last attempt to the fallback (CodeRabbit #22)
+  const bad = JSON.stringify({ message: { role: "assistant", content: "not json" }, done: true });
+  const fb2 = fakePorts({ files: { ...project(3), "openarc.config.json": JSON.stringify({ version: 1, backends: { local: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, seed: 1 }, big: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, seed: 9 } }, compilation: { defaultBackend: "local", fallbackBackend: "big", maxAttempts: 3 } }) }, http: [TAGS, chat('return "x";'), bad, chat("return n + 1;")] });
+  const fres2 = await run(fb2.instance as Ports, { ...req, keepGoing: true });
+  assert.equal(fres2.exit, 0, JSON.stringify(fres2.diagnostics));
+  assert.deepStrictEqual(chats(fb2.snapshot() as Snap).map((b) => b.options.seed), [1, 2, 11], "attempt 3 on the fallback after an invalid reply");
 }
 
 // ── 3. whole-function unwrap

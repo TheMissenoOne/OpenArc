@@ -167,3 +167,33 @@ console.log("batch: request shape, partial failure, write scope, code format, of
   assert.ok(out.includes("  return n + 1;") && out.includes("  return n * 2;") && out.includes("  return -n;"), out);
 }
 console.log("batch.check: kept bodies ok");
+
+// ── 7. CodeRabbit #22: a kept body is verified, not trusted; a backend change regenerates; headings inside fences
+{
+  const config = (model = "qwen3.5:9b", maxAttempts = 2) => JSON.stringify({ version: 1, backends: { local: { provider: "ollama", model, maxContextTokens: 8192, seed: 1 } }, compilation: { defaultBackend: "local", maxAttempts } });
+  const SRC7 = SRC.replace("type Inc", "const K = 1;\ntype Inc");
+  const first = fakePorts({ files: { "src/bt.ts": SRC7, [M]: '{"schema":1,"regions":{}}', "openarc.config.json": config() }, http: [TAGS, both("return n + K;", "return n * 2;")] });
+  assert.equal((await run(first.instance as Ports, req)).exit, 0);
+  const after = Object.fromEntries(Object.entries((first.snapshot() as Snap).files).filter(([f]) => !f.startsWith(".openarc/cache/")));
+  // a file change outside the regions makes the kept body fail tsc: the model is asked, and the old body is not committed
+  const broken = { ...after, "src/bt.ts": after["src/bt.ts"]!.replace("const K = 1;", 'const K = "1";') };
+  const second = fakePorts({ files: broken, http: [TAGS, one("return n + 1;")] });
+  const res = await run(second.instance as Ports, req);
+  assert.equal(res.exit, 0, JSON.stringify(res.diagnostics));
+  assert.equal(res.modelCalls, 1, "bt.inc's kept body failed tsc, so it was regenerated; bt.dbl's still passed");
+  const out = (second.snapshot() as Snap).files["src/bt.ts"]!;
+  assert.ok(out.includes("  return n + 1;") && !out.includes("return n + K;") && out.includes("  return n * 2;"), out);
+  // another model: nothing is kept, both regions go to the model
+  const tags2 = JSON.stringify({ models: [{ name: "qwen3.5:9b", digest: "d1" }, { name: "other:7b", digest: "d2" }] });
+  const third = fakePorts({ files: { ...after, "openarc.config.json": config("other:7b") }, http: [tags2, both("return n + 1;", "return n * 2;")] });
+  const res3 = await run(third.instance as Ports, req);
+  assert.equal(res3.exit, 0, JSON.stringify(res3.diagnostics));
+  assert.equal(res3.modelCalls, 1, "one batched request for both: a body made by another backend is not kept");
+  assert.equal(JSON.parse((third.snapshot() as Snap).files[M]!).regions["bt.inc"].provenance.digest, "d2");
+}
+{
+  const reply = "### bt.inc\n```ts\nconst s = `\n### bt.dbl\n`;\nreturn n + s.length;\n```\n### bt.dbl\n```ts\nreturn n * 2;\n```";
+  const parts = splitCodeSections(reply, ["bt.inc", "bt.dbl"]);
+  assert.ok(parts.get("bt.inc")!.includes("return n + s.length;") && parts.get("bt.dbl")!.trim() === "```ts\nreturn n * 2;\n```", JSON.stringify([...parts]));
+}
+console.log("batch.check: kept body verified, backend change, fenced headings ok");

@@ -103,6 +103,7 @@ export interface RegionInfo {
   fingerprint: string;
   scope: string[]; // blocks: "let x: T" lines in scope
   context0: string; // the initial context package (its hash is part of the fingerprint)
+  kept?: string | null; // analyze: the current body to re-verify before any model call (keptBody), when the backend that made it is this one
   typeImports: Map<string, string>; // closure types shown in context but not in scope in the file: name -> import specifier
 }
 
@@ -513,6 +514,10 @@ export async function analyze(ports: Ports, req: CompileRequest, p: Project, dia
       compiler: COMPILER_VERSION, typescript: ts.version,
     }));
     r.stale = p.manifest.regions[r.id]?.fingerprint !== r.fingerprint;
+    // the body is kept for re-verification only when the same backend, model (digest) and output format made it: a
+    // backend change regenerates, so provenance never names a backend that did not produce the body (CodeRabbit #22)
+    const prov = p.manifest.regions[r.id]?.provenance;
+    r.kept = r.stale && prov?.source === "generated" && prov.backend === backend.name && prov.model === backend.model && prov.outputFormat === backend.outputFormat && prov.digest === digest ? keptBody(p, r) : null;
   }
 }
 
@@ -1418,22 +1423,25 @@ async function batchReply(ports: Ports, p: Project, r: RegionInfo, backend: Back
     const x = p.regions.find((y) => y.id === id)!;
     const b = backendFor(p, id, 0);
     if (x.file !== r.file || !batchable(x) || b.name !== backend.name || b.outputFormat !== backend.outputFormat) continue;
-    if ((await ports.fs.read(cachePathOf(x))) !== null || keptBody(p, x) !== null) continue; // a cache hit or a kept body needs no model call
+    if ((await ports.fs.read(cachePathOf(x))) !== null || x.kept) continue; // a cache hit or a kept body needs no model call
     group.push(x);
+    if (group.length === 4) break; // ponytail: bounded lookahead, so an over-budget file never rescans every sibling
   }
   group = group.filter((x) => !group.some((y) => y !== x && (x.spec.calls ?? []).includes(y.spec.symbol)));
   if (group.length < 2 || group[0] !== r) return null;
   const ids = group.map((x) => x.id);
   const code = backend.outputFormat === "code";
   const context = batchContext(p, group, backend);
-  if (context.length > (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5) return null; // ponytail: too big to share
   const rendered = renderTemplate(code ? BATCH_CODE_PROMPT_TEMPLATE : BATCH_PROMPT_TEMPLATE, {
     count: String(ids.length), context, ids: ids.join("\n"), shape: `{${ids.map((id) => `"${id}": {"body": "<statements>", "imports": []}`).join(", ")}}`,
   });
   if (!rendered.ok) throw new Error(`batch prompt template is missing ${rendered.missing.join(", ")}`);
+  const system = code ? BATCH_CODE_SYSTEM : BATCH_JSON_SYSTEM;
+  // the whole request (prompt and system text) must leave the output reserve free, else one request per region
+  if (rendered.text.length + system.length > (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5) return null;
   const t0 = Date.now();
   // a failed request throws: generate reports it as this region's E080, like its own request's
-  const { text: raw, tokens } = await completeWithUsage(ports, { ...backend, ...(code ? {} : { outputSchema: batchSchema(ids) }) }, code ? BATCH_CODE_SYSTEM : BATCH_JSON_SYSTEM, rendered.text);
+  const { text: raw, tokens } = await completeWithUsage(ports, { ...backend, ...(code ? {} : { outputSchema: batchSchema(ids) }) }, system, rendered.text);
   p.e080Streak = 0;
   ports.log(`  ${ids.join(", ")}: one batched request via ${backend.name} (${backend.model}), context ${context.length} chars, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   let parts: string[];
@@ -1474,7 +1482,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   let cached = await ports.fs.read(cachePath);
   // Spec unchanged, only the context moved (a sibling added or changed, issue #19 evolution run): the region's own body
   // goes through verification first, like a cache hit, and the model is asked only if it fails.
-  const kept = !cached ? keptBody(p, r) : null;
+  const kept = !cached ? (r.kept ?? null) : null;
   if (kept !== null) cached = JSON.stringify({ body: kept, imports: [] });
   // A compiler-owned region that fails keeps its old body, which may not satisfy the current spec: say so (display: stale).
   const giveUp = () => {
@@ -1511,6 +1519,8 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   };
 
   for (let attempt = 1; attempt <= c.maxAttempts; attempt++) {
+    // the last attempt is the fallback's however the previous one ended (invalid output, repeat or failed verify)
+    if (attempt === c.maxAttempts && attempt > 1 && c.fallbackBackend) stage = 1;
     const backend = backendFor(p, id, stage);
     const at: Attempt = { backend, level };
     let body: string;
@@ -1524,7 +1534,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       ({ body, imports, sampling = null, tokens: cachedTokens = null } = JSON.parse(cached) as { body: string; imports: ImportDecl[]; sampling?: { temperature: number; seed: number }; tokens?: Tokens });
       ports.log(`  ${id}: ${kept !== null ? "spec unchanged, re-verifying the current body" : "cache hit"}`);
     } else {
-      if (p.e080Streak >= 3) return giveUp();
+      if (p.e080Streak >= 3 && !p.batched?.has(id)) return giveUp(); // a queued batch share needs no model call
       const digest = await modelDigest(ports, p, backend, diagnostics);
       if (digest === null) return backendDown();
       const t0 = Date.now();
@@ -1611,7 +1621,8 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       // committed only once the joint check sees a passing example reach it.
       if (!(attempt === 1 && cached) && !result.unverified) await ports.fs.write(cachePath, JSON.stringify({ body, imports, ...(sampling ? { sampling } : {}), ...(spent ? { tokens: spent } : {}) }));
       const waived = Object.fromEntries(concepts.waivers(r.spec)); // palette: waived laws are recorded with the body
-      p.provenance.set(id, { source: "generated", backend: at.backend.name, model: at.backend.model, outputFormat: at.backend.outputFormat!, contextLevel: at.level, attempts: attempt, verifiedBy: result.verifiedBy, ...(sampling ? { sampling } : {}), ...(batch ? { batch } : {}), ...(spent ? { tokens: spent } : {}), ...(Object.keys(waived).length ? { waived } : {}) });
+      const digest = await modelDigest(ports, p, at.backend, []);
+      p.provenance.set(id, { source: "generated", backend: at.backend.name, model: at.backend.model, ...(digest ? { digest } : {}), outputFormat: at.backend.outputFormat!, contextLevel: at.level, attempts: attempt, verifiedBy: result.verifiedBy, ...(sampling ? { sampling } : {}), ...(batch ? { batch } : {}), ...(spent ? { tokens: spent } : {}), ...(Object.keys(waived).length ? { waived } : {}) });
       if (result.unverified) {
         diagnostics.push(err("OARC-W045", { id, detail: `unreached:${r.root}` }));
         ports.log(`  ${id}: unverified: no passing example of ${r.root} reaches this block (${result.verifiedBy.join(", ")})`);
@@ -1629,7 +1640,6 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     // Escalation by failure type: a missing name means a context problem, so expand; otherwise repair at the same level.
     // The last attempt switches to the fallback backend when one is configured.
     if (c.context.expandOnFailure && result.missingContext && level < (r.spec.sketch ? 1 : 2)) level = (level + 1) as ContextLevel;
-    if (attempt === c.maxAttempts - 1 && c.fallbackBackend) stage = 1;
   }
   diagnostics.push(err("OARC-E082", { id, detail: previous?.problems[0]?.slice(0, 200) }));
   return giveUp();

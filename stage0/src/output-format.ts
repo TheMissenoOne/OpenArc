@@ -26,12 +26,18 @@ Reply with one section per region, in this order:
 Each section is a line "### <region id>", then ONE fenced code block (\`\`\`ts ... \`\`\`). Inside it: first any import lines you need (only for something listed under "Allowed new imports" that the file doesn't already import), then ONLY the statements of that function's body, without its signature and braces.`;
 export const BATCH_CODE_SYSTEM = 'You are a compiler backend. For each region you output a "### <region id>" line, then one fenced TypeScript code block: optional import lines at the top, then statements only.';
 
-/** A batched "code" reply split at its region headings: a line that is just a region id, give or take "#", "Region",
- *  backticks, asterisks and a colon. Each id gets the text up to the next heading (null when it has no heading). */
+/** A batched "code" reply split at its region headings: a line outside a fenced block that is just a region id, give
+ *  or take "#", "Region", backticks, asterisks and a colon. Each id gets the text up to the next heading (null when it has no heading). */
 export function splitCodeSections(raw: string, ids: string[]): Map<string, string | null> {
   const lines = raw.replace(/\r/g, "").split("\n");
   const idOf = (l: string) => ids.find((id) => l.replace(/^\s*#*\s*(region\s+)?/i, "").replace(/[`*:\s]/g, "") === id);
-  const heads = lines.flatMap((l, i) => { const id = idOf(l); return id ? [{ i, id }] : []; });
+  // a heading line inside a fenced block (a template literal's "### <id>" line) is body text, not a heading
+  let fenced = false;
+  const heads = lines.flatMap((l, i) => {
+    if (/^\s*```/.test(l)) fenced = !fenced;
+    const id = fenced ? undefined : idOf(l);
+    return id ? [{ i, id }] : [];
+  });
   const out = new Map<string, string | null>(ids.map((id) => [id, null]));
   heads.forEach(({ i, id }, k) => { if (out.get(id) === null) out.set(id, lines.slice(i + 1, heads[k + 1]?.i ?? lines.length).join("\n")); });
   return out;
