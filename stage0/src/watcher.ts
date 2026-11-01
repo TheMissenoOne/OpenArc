@@ -144,7 +144,7 @@ export function createWatcher(d: WatchDeps) {
         pauses = 0;
         failed.delete(id);
         const n = examples[id] ?? 0;
-        say(`${id}  ✓ ${plural(res.modelCalls, "attempt")} · ${n}/${n} examples · ${secs}`);
+        say(`${id}  ✓ ${plural(res.modelCalls, "attempt")}${n ? ` · ${n}/${n} examples` : ""} · ${secs}`); // code-first regions are checked by tests, not examples
         await record(id, "done", ms, plural(res.modelCalls, "attempt"));
       } else {
         // W043: a compiler-owned region keeps its last body, which was verified against an older spec.

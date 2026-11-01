@@ -2,8 +2,8 @@
 // Run: node tests/eval-fixes.check.ts
 // 1. Context and scope: L0 shows the file's imports and implemented same-file values; a closure type that isn't in scope
 //    is marked and imported by the compiler; imports from modules the file already imports pass; default imports merge.
-// 2. Retries: a byte-identical retry prompt raises the temperature (0.4, 0.7) and moves the seed; failed attempts are
-//    logged and saved under .openarc/attempts/<id>/ (last 20).
+// 2. Retries: every retry varies sampling (temperature 0.4, then 0.7, seed + attempt - 1; 0.9.1); failed attempts are
+//    logged and saved under .openarc/attempts/<id>/ (last 20). Repeat-stop is in tests/efficiency.check.ts.
 // 3. A compiler-owned region whose recompile failed: OARC-W043, displayed as stale.
 // 4. Thin examples (OARC-W044) and `openarc check --oracle` (inputs, plan, report).
 // 5. Date.parse without 'clock'; scaffold without a clean tsc; COMPILER_VERSION from core/package.json.
@@ -83,7 +83,7 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
   assert.match(problems[2]!, /^OARC-E071 import "\.\/types\.ts"/);
 }
 
-// ── 2 + 3. identical retries vary sampling; attempts saved; a failing compiler region is W043 / stale
+// ── 2 + 3. retries vary sampling; attempts saved; a failing compiler region is W043 / stale
 {
   const src = (intent: string) => [
     'import * as arc from "open-arc";',
@@ -108,19 +108,19 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
     ...Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`.openarc/attempts/fx2.inc/${i + 1}.json`, "{}"])),
   };
   const logs: string[] = [];
-  const fake = fakePorts({ files, http: [TAGS, chat("nope"), chat("nope"), chat("nope"), chat("nope")] });
+  const fake = fakePorts({ files, http: [TAGS, chat("nope"), chat("nope2"), chat("nope3"), chat("nope4")] }); // distinct: a repeat would stop early
   const ports = { ...(fake.instance as Ports), log: (l: string) => logs.push(l) };
   const res = await run(ports, { ...req, keepGoing: true });
   const snap = fake.snapshot() as Snap;
   const sent = chats(snap).map((b) => b.options);
-  assert.deepStrictEqual(sent.map((o) => [o.temperature, o.seed, o.num_predict]), [[0, 1, 1500], [0, 1, 1500], [0.4, 3, 1500], [0.7, 4, 1500]],
-    "attempt 2 differs from 1 (it has the repair section); 3 and 4 repeat 2 byte for byte, so they vary");
-  assert.equal(logs.filter((l) => /✗ output was not valid: invalid-json \(4 chars/.test(l)).length, 4, "every invalid output is logged with its reason");
-  assert.ok(logs.some((l) => /identical prompt: temperature 0\.4, seed 3/.test(l)));
+  assert.deepStrictEqual(sent.map((o) => [o.temperature, o.seed, o.num_predict]), [[0, 1, 1500], [0.4, 2, 1500], [0.7, 3, 1500], [0.7, 4, 1500]],
+    "attempt 1 samples as configured; every retry varies, whether or not its prompt repeats");
+  assert.equal(logs.filter((l) => /✗ output was not valid: invalid-json \(\d chars/.test(l)).length, 4, "every invalid output is logged with its reason");
+  assert.ok(logs.some((l) => /retry sampling: temperature 0\.4, seed 2/.test(l)));
   const dumped = Object.keys(snap.files).filter((f) => f.startsWith(".openarc/attempts/fx2.inc/")).map((f) => Number(f.split("/").at(-1)!.split(".")[0])).sort((a, b) => a - b);
   assert.deepStrictEqual(dumped, Array.from({ length: 20 }, (_, i) => i + 5), "numbered after the old ones, capped at 20");
   const a24 = JSON.parse(snap.files[".openarc/attempts/fx2.inc/24.json"]!);
-  assert.deepStrictEqual([a24.attempt, a24.raw, a24.problems, a24.sampling], [4, "nope", ["output was not valid: invalid-json"], { temperature: 0.7, seed: 4 }]);
+  assert.deepStrictEqual([a24.attempt, a24.raw, a24.problems, a24.sampling], [4, "nope4", ["output was not valid: invalid-json"], { temperature: 0.7, seed: 4 }]);
   assert.deepStrictEqual(res.diagnostics.map((d) => d.code), ["OARC-W044", "OARC-E082", "OARC-W043"]);
   assert.equal(res.exit, 1);
   assert.equal(snap.files["src/fx2.ts"], src("add two"), "the old body stays");
@@ -136,14 +136,14 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
   assert.equal(engine.displayState(q, q.regions[0]!), "compiler");
 
   // a varied attempt that succeeds records its sampling in provenance and in the cache entry
-  const ok = fakePorts({ files: { ...files, "openarc.config.json": files["openarc.config.json"].replace('"maxAttempts":4', '"maxAttempts":3') }, http: [TAGS, chat("nope"), chat("nope"), chat('{"body":"return n + 2;"}')] });
+  const ok = fakePorts({ files: { ...files, "openarc.config.json": files["openarc.config.json"].replace('"maxAttempts":4', '"maxAttempts":3') }, http: [TAGS, chat("nope"), chat("nope2"), chat('{"body":"return n + 2;"}')] });
   const r2 = await run(ok.instance as Ports, req);
   const s2 = ok.snapshot() as Snap;
   assert.equal(r2.exit, 0, JSON.stringify(r2.diagnostics));
   const prov = JSON.parse(s2.files[M]!).regions["fx2.inc"].provenance;
-  assert.deepStrictEqual([prov.attempts, prov.sampling], [3, { temperature: 0.4, seed: 3 }]);
+  assert.deepStrictEqual([prov.attempts, prov.sampling], [3, { temperature: 0.7, seed: 3 }]);
   const cache = Object.entries(s2.files).find(([f]) => f.startsWith(".openarc/cache/"))![1];
-  assert.deepStrictEqual(JSON.parse(cache).sampling, { temperature: 0.4, seed: 3 });
+  assert.deepStrictEqual(JSON.parse(cache).sampling, { temperature: 0.7, seed: 3 });
 }
 
 // ── 4. thin examples and the oracle check

@@ -5,7 +5,7 @@ import type { ImportDecl } from "./types.ts";
 
 // Policy artifacts: hand-written, versioned and part of the fingerprint (§4.3).
 // They are deliberately NOT regions. A generated prompt template would make the cache key depend on a model's output.
-export const PROMPT_TEMPLATE_VERSION = "2";
+export const PROMPT_TEMPLATE_VERSION = "3";
 /** {{context}} is the deterministic context package (engine.buildContext); {{repair}} is empty on attempt 1. */
 export const PROMPT_TEMPLATE = `Implement exactly one OpenArc region in TypeScript.
 
@@ -13,8 +13,7 @@ export const PROMPT_TEMPLATE = `Implement exactly one OpenArc region in TypeScri
 
 {{repair}}
 
-Reply with JSON only: {"body": "<statements>", "imports": [{"from": "<specifier>", "names": ["<name>"]}]}.
-Use "imports": [] unless you need something listed under "Allowed new imports" that the file doesn't already import.`;
+Reply with JSON only: {"body": "<statements>", "imports": []}. Add {"from": "<specifier>", "names": ["<name>"]} to "imports" only for a new import the Rules allow.`;
 export const MODEL_OUTPUT_SCHEMA: Json = {
   type: "object",
   required: ["body"],
