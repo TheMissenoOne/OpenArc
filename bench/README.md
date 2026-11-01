@@ -112,3 +112,20 @@ See `results/2026-10-31-untuned-ollama-full-partial/summary.md` for the list wit
 |---|---|
 | `results/2026-10-31-untuned-ollama-pilot/` | pilot, 30 tasks, open-arc 0.6.3, stock Ollama 0.40.5 |
 | `results/2026-10-31-untuned-ollama-full-partial/` | full run paused after 4 of 72 tasks, open-arc 0.6.4 (first build), stock Ollama 0.40.5 |
+| `results/2026-11-01-ablations/` | issue #10 ablations: 8 arms x 8 exercises x 3 seeds, qwen2.5-coder-7b on llama-server, open-arc 0.8.0 + env-gated bench patch; see its `summary.md` |
+
+## Ablations (issue #10)
+
+Why does OpenArc trail the plain prompt? `matrix-ablations.json` holds one arm per suspected cause, all on the same model, server, sampling and call budget (3 per unit), selectable with `--configs`; `--seed n` sets the backend seed of every arm (OpenArc config `seed`, baseline request `seed`) and is part of the resume key. `ablations.sh <ts-bench> <work> <tgz>` waits for other benchmarks, starts llama-server, runs every arm with seeds 1-3, stops the server. Results: `results/2026-11-01-ablations/`.
+
+| arm | what changes (vs `A`, OpenArc L0) | hypothesis |
+|---|---|---|
+| `A`, `D` | controls: OpenArc L0 and the whole-file baseline | |
+| `A-same-info` | intent is ONE string: the full instructions verbatim, line breaks kept, no 2500-char cap, plus the original stub's comments. The default intent is an array of paragraphs that OpenArc joins with spaces, so code blocks (song lyrics, matrices, transpose examples) lose their line structure | requirement loss |
+| `B-oracle` | default intent + `gold/<exercise>.md` (types, built-in signatures, the domain facts the instructions state; written from instructions and stubs only, no solution code, no held-out values) | context selection |
+| `C-sketch` | 0.8.0 sketch per function from `sketches/<exercise>.<fn>.ts`: only structure the stub and instructions imply, holes for the logic; every hole sits on a path the public examples reach (else `OARC-W045` blocks the commit) | generation scope |
+| `D-min` | `OPENARC_MIN_PROMPT=1` in a locally patched 0.8.0 (`patches/min-prompt.patch`): drops the Rules section, empty Effects/Allowed-imports sections, the long equality note of Examples and the template's imports line. Verification is unchanged. Unset, the patched build is byte-for-byte 0.8.0 behaviour, so every arm runs on it | instruction overhead |
+| `E-resample`, `D-resample` | 3 independent samples, no feedback: attempt 1 temperature 0 and the run's seed, attempts 2-3 temperature 0.7 and seed + attempt - 1. OpenArc: three compiles of one attempt each, an unverified region moving to the next round's backend (`regions.<id>.backend`). Baseline: a fresh conversation per attempt | repair strategy |
+| every arm (F) | `summarize.mjs` reports raw held-out pass AND accepted-and-correct (counted only when the arm's own public-example gate passed) | acceptance strictness |
+
+Every request body is logged to `results/<dir>/prompts/s<seed>/<config>/<exercise>.jsonl` so prompts can be audited. Each task row records `failCounts` per attempt: compile (type/syntax error or unparseable output; for the baseline, the file did not load), public (a public example failed) and constraint (an OpenArc static rule).

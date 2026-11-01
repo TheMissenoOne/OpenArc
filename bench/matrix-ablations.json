@@ -1,0 +1,34 @@
+{
+  "_doc": "Ablations for OpenArc issue #10 (why OpenArc underperforms plain prompting). One model, one server, call budget 3 per unit for every arm. Run with the bench-patched build (patches/min-prompt.patch: OPENARC_MIN_PROMPT=1 only changes D-min; unset, the build behaves exactly like open-arc 0.8.0) and --seed 1|2|3. Select arms with --configs.",
+  "backend": {
+    "provider": "openai",
+    "baseUrl": "http://127.0.0.1:18080/v1",
+    "maxContextTokens": 8192,
+    "outputReserveTokens": 4096,
+    "openarc": { "outputFormat": "json" },
+    "info": {
+      "label": "llama-server-vulkan-json",
+      "engine": "llama.cpp llama-server (Vulkan)",
+      "version": "version: 0.8.0-dev (build 1, commit f3586e6)",
+      "quant": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+      "kvCacheType": "f16",
+      "ctx": 8192,
+      "flags": "-ngl 99 -c 8192 -fa on -np 1 --cache-ram 0 --reasoning off --jinja --no-webui --port 18080"
+    }
+  },
+  "memory": { "minStartGb": 6, "abortGb": 1 },
+  "configs": {
+    "A": { "kind": "openarc", "level": 0, "label": "OpenArc control (L0, paragraph intent, repair)" },
+    "D": { "kind": "baseline", "label": "Baseline control (whole file, repair)" },
+    "A-same-info": { "kind": "openarc", "level": 0, "intent": "full", "label": "OpenArc, intent = full instructions verbatim + stub comments" },
+    "B-oracle": { "kind": "openarc", "level": 0, "gold": true, "label": "OpenArc + hand-picked gold context (bench/gold)" },
+    "C-sketch": { "kind": "openarc", "level": 0, "sketch": true, "label": "OpenArc 0.8.0 sketches (bench/sketches)" },
+    "D-min": { "kind": "openarc", "level": 0, "env": { "OPENARC_MIN_PROMPT": "1" }, "label": "OpenArc, minimal prompt (no Rules/effects/imports text)" },
+    "E-resample": { "kind": "openarc", "level": 0, "resample": true, "label": "OpenArc, 3 independent samples, no feedback" },
+    "D-resample": { "kind": "baseline", "resample": true, "label": "Baseline, 3 independent samples, no feedback" }
+  },
+  "runs": [
+    { "model": "qwen2.5-coder-7b", "configs": ["A", "D", "A-same-info", "B-oracle", "C-sketch", "D-min", "E-resample", "D-resample"] }
+  ],
+  "exercises": ["acronym", "binary-search", "flatten-array", "food-chain", "relative-distance", "spiral-matrix", "transpose", "wordy"]
+}

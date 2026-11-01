@@ -1,6 +1,7 @@
 // Config D: conventional whole-file prompting through the same Ollama model, same examples, same retry budget.
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { RESAMPLE_TEMPERATURE } from "./adapter.mjs";
 import { EXERCISES, instructions, typedStub, heldOut, runTests, prepareTestDir, proxyBase } from "./common.mjs";
 
 const SYSTEM = "You are an expert TypeScript programmer. Reply with the complete TypeScript file in a single ```ts code block and nothing else.";
@@ -35,12 +36,12 @@ function publicTest(ex, splitInfo) {
  * One chat call through the proxy, with the same sampling OpenArc sends to that provider (temperature 0, seed 1, the
  * same output cap); OpenArc's structured-output schema is the only request difference. Returns the reply text.
  */
-async function chat(backend, port, model, messages) {
+async function chat(backend, port, model, messages, { seed = 1, temperature = 0 } = {}) {
   const base = proxyBase(backend, port);
   if (backend.provider === "ollama") {
     const r = await fetch(`${base}/api/chat`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, stream: false, think: false, keep_alive: "2m", messages, options: { temperature: 0, seed: 1, num_ctx: backend.maxContextTokens, num_predict: backend.outputReserveTokens } }),
+      body: JSON.stringify({ model, stream: false, think: false, keep_alive: "2m", messages, options: { temperature, seed, num_ctx: backend.maxContextTokens, num_predict: backend.outputReserveTokens } }),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
     return (await r.json()).message?.content ?? "";
@@ -49,14 +50,19 @@ async function chat(backend, port, model, messages) {
   if (backend.apiKeyEnv && process.env[backend.apiKeyEnv]) headers.authorization = `Bearer ${process.env[backend.apiKeyEnv]}`;
   const r = await fetch(`${base}/chat/completions`, {
     method: "POST", headers,
-    body: JSON.stringify({ model, temperature: 0, seed: 1, max_tokens: backend.outputReserveTokens, messages,
+    body: JSON.stringify({ model, temperature, seed, max_tokens: backend.outputReserveTokens, messages,
       ...(backend.info?.engine === "ollama" ? { keep_alive: "2m", reasoning_effort: "none" } : {}) }),
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
   return (await r.json()).choices?.[0]?.message?.content ?? "";
 }
 
-export async function runBaseline({ dataset, ex, splitInfo, model, dir, port, backend, maxAttempts = 3 }) {
+/**
+ * Repair (default): each retry appends the reply and the failing public-example output to the conversation.
+ * Resample (`cfg.resample`, E-resample): each attempt is a fresh conversation with no feedback; attempt 1 is temperature
+ * 0 and the run's seed, attempts 2 and 3 use RESAMPLE_TEMPERATURE and seed + attempt - 1 (the same schedule as OpenArc's).
+ */
+export async function runBaseline({ dataset, ex, splitInfo, model, dir, port, backend, cfg = {}, seed = 1, maxAttempts = 3 }) {
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
   await prepareTestDir(dir);
@@ -66,7 +72,8 @@ export async function runBaseline({ dataset, ex, splitInfo, model, dir, port, ba
   let code = typedStub(ex), ok = false;
   for (let i = 1; i <= maxAttempts && !ok; i++) {
     const t0 = Date.now();
-    const reply = await chat(backend, port, model, messages);
+    const sampling = cfg.resample && i > 1 ? { seed: seed + i - 1, temperature: RESAMPLE_TEMPERATURE } : { seed, temperature: 0 };
+    const reply = await chat(backend, port, model, cfg.resample ? messages.slice(0, 2) : messages, sampling);
     code = extractCode(reply.replace(/<think>[\s\S]*?<\/think>/g, "")); // a thinking server leaks its reasoning into content
     await writeFile(join(dir, `${ex}.ts`), code);
     const pt = await runTests(join(dir, "public.test.ts"));
@@ -76,9 +83,10 @@ export async function runBaseline({ dataset, ex, splitInfo, model, dir, port, ba
     const feedback = pt.lines.length === 0
       ? `The file did not load:\n${pt.stderr.split("\n").filter(Boolean).slice(-8).join("\n")}`
       : failed.map((l) => `- ${l.name}: ${l.msg}`).join("\n").slice(0, 3000);
-    tries.push({ attempt: i, ms: Date.now() - t0, publicPassed: pt.lines.length - failed.length, publicTotal: total, feedback: ok ? undefined : feedback.slice(0, 600) });
+    tries.push({ attempt: i, kind: ok ? undefined : pt.lines.length === 0 ? "compile" : "public", sampling, ms: Date.now() - t0, publicPassed: pt.lines.length - failed.length, publicTotal: total, feedback: ok ? undefined : feedback.slice(0, 600) });
     if (!ok) messages.push({ role: "assistant", content: reply }, { role: "user", content: `The file fails these examples:\n${feedback}\n\nFix it and return the complete corrected file.` });
   }
   const held = await heldOut(dataset, ex, join(dir, "heldout"), code, splitInfo);
-  return { publicPass: ok, attempts: tries.length, maxAttemptsPerUnit: tries.length, tries, heldOut: held, promptChars: messages[1].content.length + SYSTEM.length };
+  const fails = tries.filter((t) => t.kind);
+  return { publicPass: ok, attempts: tries.length, failCounts: { compile: fails.filter((t) => t.kind === "compile").length, public: fails.filter((t) => t.kind === "public").length, constraint: 0 }, finalSource: code.slice(0, 20000), maxAttemptsPerUnit: tries.length, tries, heldOut: held, promptChars: messages[1].content.length + SYSTEM.length };
 }

@@ -62,12 +62,13 @@ export async function runTests(testFile, { record = false, timeoutMs = 90_000 } 
   return { lines, done, stderr: r.stderr.slice(-2000), timedOut: r.timedOut };
 }
 
-export function instructions(dataset, ex) {
+/** The exercise instructions (+ append), headings and HTML comments removed. `cap: false` (A-same-info) skips the 2500-char cap. */
+export function instructions(dataset, ex, { cap = true } = {}) {
   const d = join(exDir(dataset, ex), ".docs");
   let s = readFileSync(join(d, "instructions.md"), "utf8");
   if (existsSync(join(d, "instructions.append.md"))) s += "\n" + readFileSync(join(d, "instructions.append.md"), "utf8");
   s = s.replace(/^# Instructions( append)?\s*$/gim, "").replace(/<!--[\s\S]*?-->/g, "").replace(/\n{3,}/g, "\n\n").trim();
-  return s.length > 2500 ? s.slice(0, 2500) + " [...]" : s; // ponytail: hard cap; none of the 12 function exercises hits it
+  return cap && s.length > 2500 ? s.slice(0, 2500) + " [...]" : s; // ponytail: hard cap; food-chain (2525 chars) hits it, losing only its trailing link
 }
 
 /**

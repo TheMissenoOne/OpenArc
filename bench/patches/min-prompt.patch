@@ -1,0 +1,45 @@
+diff -ru orig/package/dist/src/engine.js patched/package/dist/src/engine.js
+--- orig/package/dist/src/engine.js	1985-10-26 05:15:00.000000000 -0300
++++ patched/package/dist/src/engine.js	2026-10-31 20:14:18.787095433 -0300
+@@ -626,6 +626,8 @@
+ ].join("\n");
+ /** Deterministic context package for one region at one level (adaptive context, see config.ts). */
+ export function buildContext(p, r, level, backend, opts = {}) {
++    // bench patch (OpenArc issue #10, ablation D-min): OPENARC_MIN_PROMPT=1 drops non-essential prompt text; verification is unchanged
++    const MIN = process.env.OPENARC_MIN_PROMPT === "1";
+     const checker = p.program.getTypeChecker();
+     const s = r.spec;
+     const sf = p.program.getSourceFile(abs(p, r.file));
+@@ -714,10 +716,11 @@
+     else if (s.calls)
+         sections.push(["Calls allowed", `You may call exactly: ${s.calls.join(", ") || "nothing"}. Any other call on an import or a port is rejected (OARC-E098); calls on local variables and on functions you define in the body are fine.`]);
+     if (r.kind === "function") {
+-        sections.push(["Effects allowed", s.effects.join(", ") || "none"]);
+-        sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
++        if (!MIN || s.effects.length) sections.push(["Effects allowed", s.effects.join(", ") || "none"]);
++        if (!MIN || s.deps.length) sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
+         if (s.examples.length)
+-            sections.push(["Examples (deep equality; numbers match within 1e-9 relative and -0 equals 0 unless \"exact\"; the strings \"$NaN\", \"$Infinity\", \"$-Infinity\", \"$undefined\" stand for those values; {\"$fake\": name} is a test double for that parameter; {\"throws\": true} means the call must throw, and a \"throws\" string must appear in the error message)", s.examples.map((e) => canonicalJson(e)).join("\n")]);
++            if (MIN) sections.push(["Examples (args -> expected)", s.examples.map((e) => canonicalJson(e)).join("\n")]);
++            else sections.push(["Examples (deep equality; numbers match within 1e-9 relative and -0 equals 0 unless \"exact\"; the strings \"$NaN\", \"$Infinity\", \"$-Infinity\", \"$undefined\" stand for those values; {\"$fake\": name} is a test double for that parameter; {\"throws\": true} means the call must throw, and a \"throws\" string must appear in the error message)", s.examples.map((e) => canonicalJson(e)).join("\n")]);
+     }
+     else {
+         sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
+@@ -725,7 +728,7 @@
+     }
+     if (level >= 2 && !opts.stable)
+         sections.push([`Full file ${r.file}`, p.files.get(r.file)]); // ponytail: holds sibling bodies, so not in the fingerprint
+-    sections.push(["Rules", backend.outputFormat === "code" ? codeRules(RULES) : RULES]);
++    if (!MIN) sections.push(["Rules", backend.outputFormat === "code" ? codeRules(RULES) : RULES]);
+     // Budget: drop optional sections (from the end of the optional list) until the package fits.
+     const budget = (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5; // ~3.5 chars/token
+     const render = () => sections.map(([h, b]) => `## ${h}\n${b}`).join("\n\n");
+@@ -1229,7 +1232,7 @@
+             const context = attempt === 1 && level === initialLevel(p, r) ? r.context0 : buildContext(p, r, level, backend);
+             // palette: a sketch region uses the fills protocol; in "code" format the model returns the whole filled sketch as
+             // one code block and verify's containment check (E099) recovers the fills
+-            const rendered = renderTemplate(r.spec.sketch ? (code ? sketch.SKETCH_CODE_PROMPT_TEMPLATE : sketch.SKETCH_PROMPT_TEMPLATE) : code ? CODE_PROMPT_TEMPLATE : PROMPT_TEMPLATE, {
++            const rendered = renderTemplate(r.spec.sketch ? (code ? sketch.SKETCH_CODE_PROMPT_TEMPLATE : sketch.SKETCH_PROMPT_TEMPLATE) : code ? CODE_PROMPT_TEMPLATE : process.env.OPENARC_MIN_PROMPT === "1" ? PROMPT_TEMPLATE.replace(/\nUse "imports"[^\n]*$/, "") : PROMPT_TEMPLATE, {
+                 context,
+                 repair: previous ? `## Your previous attempt failed\nPrevious body:\n${previous.body}\n\nProblems:\n${previous.problems.join("\n")}\n\nFix these problems.` : "",
+             });
