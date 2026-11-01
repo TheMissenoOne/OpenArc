@@ -172,6 +172,7 @@ export async function run(ports: Ports, req: CompileRequest): Promise<CompileRes
       candidates.push(candidate);
     }
 
+    const tc0 = performance.now(); // "commit" timing: staging (ownership checks, joint check) and the transactional write
     // @openarc:begin compile.run.stage
     if (project !== null) staged = await engine.stage(ports, req, project, candidates, txid, diagnostics);
     // @openarc:end compile.run.stage
@@ -180,6 +181,7 @@ export async function run(ports: Ports, req: CompileRequest): Promise<CompileRes
     // @openarc:begin compile.run.commit
     await commit(ports.fs, planJournal(txid, staged.map((f, i) => ({ target: f.target, staged: `.openarc/txn/${txid}/stage/${i}` }))));
     // @openarc:end compile.run.commit
+    if (req.timings) ports.log(`timings commit ${Math.round(performance.now() - tc0)}`);
     return done(hasErrors(diagnostics) ? 1 : 0);
   } finally {
     // @openarc:begin compile.run.unlock
