@@ -104,6 +104,32 @@ Export the key in your shell (`export OPENROUTER_API_KEY=...`) and point `compil
 | `sandbox.containerImage` | the `container` tier's image, default `docker.io/library/node:<this Node's version>-slim` (it needs `timeout` from coreutils) |
 | `sandbox.heapMb`, `sandbox.cpuSeconds`, `sandbox.addressSpaceBytes` | heap cap (default 512), CPU limit (default 20 s; the wall-clock timeout is this plus 20 s), virtual address space for `prlimit` on Linux (default 32 GiB) |
 
+## Lint
+
+The `lint` block configures `openarc lint` (see "Lint rules" in [[CLI Reference]]). Compile ignores it.
+
+```json
+{
+  "lint": {
+    "extends": "recommended",
+    "failOnWarnings": false,
+    "rules": { "spec/require-tests": "error", "spec/require-intent": "off" },
+    "overrides": [
+      { "files": ["src/payments/**"], "extends": "strict", "rules": {} }
+    ]
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `lint.extends` | the profile: `"recommended"` (default) or `"strict"`. `openarc lint --profile` replaces it for one run |
+| `lint.failOnWarnings` | `true`: a warning fails the run too (exit 1), as `--fail-on-warnings` does. Default `false` |
+| `lint.rules` | rule name to `"off"`, `"warn"` or `"error"` |
+| `lint.overrides` | for specs in files matching one of `files` (project-relative globs: `*` within a path segment, `**` across segments), an `extends` and `rules` applied on top |
+
+A rule's severity for a spec is decided in this order, each step overriding the one before: the profile, the top-level `rules`, then each override whose `files` match the spec's file, in order: its profile (when it sets `extends`), then its `rules`. So a later override wins, and an override's `extends` replaces what the top-level `rules` said. An unknown rule name, a severity other than the three, an unknown profile or an override without `files` is invalid config (`OARC-E051`).
+
 ## Output format
 
 `outputFormat` decides what the model is asked to reply with. Set it on a backend, or on a region under `regions.<id>` (the region's setting wins):
