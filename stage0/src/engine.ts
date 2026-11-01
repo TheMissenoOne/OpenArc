@@ -721,6 +721,25 @@ const RULES = [
   "Deterministic output; no I/O except through parameters.",
 ].join("\n");
 
+/** RULES for a function region with no effects, no deps, nothing to import for its types and no import besides
+ *  open-arc (most regions): the same constraints in about half the tokens, with no import or effect vocabulary to
+ *  explain (issue #19 prompt trim). */
+const CLOSED_RULES = [
+  "Names the file already imports, and its same-file helpers, are in scope: call them directly, never re-import or re-implement them. No new imports.",
+  "No effects: never use Date.now(), new Date() without arguments, performance, Math.random, crypto, console, process, globalThis, eval, Function, fetch, require, import(), setTimeout or setInterval.",
+].join("\n");
+
+/** The Examples heading: deep equality, plus only the conventions these examples use. */
+export function examplesHeading(text: string): string {
+  const notes = ["deep equality"];
+  if (/\d\.\d|\d[eE][-+]?\d|"exact"|[:,[]-0[,\]}]/.test(text)) notes.push('numbers match within 1e-9 relative and -0 equals 0 unless "exact"');
+  const tokens = ["$NaN", "$Infinity", "$-Infinity", "$undefined"].filter((t) => text.includes(`"${t}"`));
+  if (tokens.length) notes.push(`the string${tokens.length > 1 ? "s" : ""} ${tokens.map((t) => `"${t}"`).join(", ")} stand${tokens.length > 1 ? "" : "s"} for ${tokens.length > 1 ? "those values" : "that value"}`);
+  if (text.includes('"$fake"')) notes.push('{"$fake": name} is a test double for that parameter');
+  if (text.includes('"throws"')) notes.push('{"throws": true} means the call must throw, and a "throws" string must appear in the error message');
+  return `Examples (${notes.join("; ")})`;
+}
+
 const TESTS_HEADING = "Tests your body must pass (TypeScript, run in a sandbox)";
 
 /** Deterministic context package for one region at one level (adaptive context, see config.ts). */
@@ -801,11 +820,18 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
   sections.push(...concepts.extraSections(p.specs, p.concepts ?? new Map(), s, p.files.get(r.file)!), ...ui.uiSections(s)); // palette: concept, callees, UI structure
   if (s.sketch) sections.push(sketch.sketchCalls(s.sketch, s.calls));
   else if (s.calls) sections.push(["Calls allowed", `You may call exactly: ${s.calls.join(", ") || "nothing"}. Any other call on an import or a port is rejected (OARC-E098); calls on local variables and on functions you define in the body are fine.`]);
+  // closed: nothing to say about effects or imports beyond "none" (CLOSED_RULES says it once)
+  const closed = r.kind === "function" && !s.effects.length && !s.deps.length && !r.typeImports.size &&
+    sf.statements.filter(ts.isImportDeclaration).every((d) => (d.moduleSpecifier as ts.StringLiteral).text === "open-arc");
   if (r.kind === "function") {
-    sections.push(["Effects allowed", s.effects.join(", ") || "none"]);
-    sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
-    if (s.examples.length)
-      sections.push(["Examples (deep equality; numbers match within 1e-9 relative and -0 equals 0 unless \"exact\"; the strings \"$NaN\", \"$Infinity\", \"$-Infinity\", \"$undefined\" stand for those values; {\"$fake\": name} is a test double for that parameter; {\"throws\": true} means the call must throw, and a \"throws\" string must appear in the error message)", s.examples.map((e) => canonicalJson(e)).join("\n")]);
+    if (!closed) {
+      sections.push(["Effects allowed", s.effects.join(", ") || "none"]);
+      sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
+    }
+    if (s.examples.length) {
+      const text = s.examples.map((e) => canonicalJson(e)).join("\n");
+      sections.push([examplesHeading(text), text]);
+    }
     if (cf?.tests.length) sections.push([TESTS_HEADING, testsPlan.testsSection(cf.tests)]); // code-first
   } else {
     sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
@@ -817,7 +843,7 @@ export function buildContext(p: Project, r: RegionInfo, level: ContextLevel, bac
     for (const t of p.tests ?? []) if (t.hidden && t.file === r.file) full = full.replace(t.source, "// (a hidden test, not shown)");
     sections.push([`Full file ${r.file}`, full]);
   }
-  sections.push(["Rules", backend.outputFormat === "code" ? codeRules(RULES) : RULES]);
+  sections.push(["Rules", closed ? CLOSED_RULES : backend.outputFormat === "code" ? codeRules(RULES) : RULES]);
 
   // Budget: drop optional sections (from the end of the optional list) until the package fits.
   const budget = (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5; // ~3.5 chars/token
@@ -930,12 +956,42 @@ interface Attempt {
   level: ContextLevel;
 }
 
-/** Normalise model output (F13): strip fences; unwrap a whole function when only a body was asked for. */
-export function unwrapBody(body: string, kind: "function" | "block", tsx = false): string {
+/** The function `st` declares under `name` (`function name`, `const name = (…) => …` / `= function`), if any. */
+function declaredFunction(st: ts.Statement, name: string): ts.FunctionLikeDeclaration | undefined {
+  if (ts.isFunctionDeclaration(st)) return st.name?.text === name ? st : undefined;
+  if (!ts.isVariableStatement(st) || st.declarationList.declarations.length !== 1) return undefined;
+  const d = st.declarationList.declarations[0]!;
+  const init = d.initializer;
+  return ts.isIdentifier(d.name) && d.name.text === name && init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) ? init : undefined;
+}
+
+/** The body of a function-like as statements (an expression body becomes `return expr;`). */
+const bodyText = (fn: ts.FunctionLikeDeclaration, sf: ts.SourceFile): string =>
+  ts.isBlock(fn.body!) ? fn.body.statements.map((s) => s.getText(sf)).join("\n") : `return ${fn.body!.getText(sf)};`;
+
+/** A reply of helper statements plus the region's own declaration (same name, same parameter names), e.g.
+ *  `const animals = [...];\nconst verse: VerseFn = (n) => {...};`: the helpers (export dropped) followed by the own
+ *  body. null when no single statement declares it, or another statement already returns (then it is a real body). */
+function unwrapOwn(sf: ts.SourceFile, self: { name: string; params: string[] }): string | null {
+  const own = sf.statements.filter((st) => declaredFunction(st, self.name));
+  if (own.length !== 1) return null;
+  const fn = declaredFunction(own[0]!, self.name)!;
+  const norm = (s: string) => s.replace(/\s+/g, "");
+  if (!fn.body || fn.parameters.length !== self.params.length || fn.parameters.some((x, i) => norm(x.name.getText(sf)) !== norm(self.params[i]!))) return null;
+  const rest = sf.statements.filter((st) => st !== own[0] && !ts.isExportAssignment(st) && !ts.isExportDeclaration(st)); // `export default f;`, `export { f };`
+  if (rest.some(ts.isReturnStatement)) return null;
+  return [...rest.map((st) => st.getText(sf).replace(/^export\s+(default\s+)?/, "")), bodyText(fn, sf)].join("\n");
+}
+
+/** Normalise model output (F13): strip fences; unwrap a whole function when only a body was asked for. With `self`
+ *  (the region's own name and parameter names), also a whole declaration of it that follows helper statements. */
+export function unwrapBody(body: string, kind: "function" | "block", tsx = false, self?: { name: string; params: string[] }): string {
   let b = body.trim().replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/, "").trim();
   if (kind !== "function") return b;
   const sf = ts.createSourceFile(tsx ? "b.tsx" : "b.ts", b, ts.ScriptTarget.Latest, true);
   if (sf.statements.length !== 1) { // code-first: a whole method (`pick(key: string): T { … }`)
+    const own = self && sf.statements.length > 1 ? unwrapOwn(sf, self) : null;
+    if (own !== null) return own;
     const m = ts.createSourceFile(tsx ? "m.tsx" : "m.ts", `class __M {\n${b}\n}`, ts.ScriptTarget.Latest, true);
     const c = m.statements[0];
     const clean = !(m as unknown as { parseDiagnostics: unknown[] }).parseDiagnostics.length; // ponytail: internal field, stable since TS 2
@@ -950,9 +1006,7 @@ export function unwrapBody(body: string, kind: "function" | "block", tsx = false
     const init = st.declarationList.declarations[0]!.initializer;
     if (init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init))) fn = init;
   }
-  if (!fn?.body) return b;
-  if (ts.isBlock(fn.body)) return fn.body.statements.map((s) => s.getText(sf)).join("\n");
-  return `return ${fn.body.getText(sf)};`;
+  return fn?.body ? bodyText(fn, sf) : b;
 }
 
 /** Names bound at module level in a file (imports and top-level declarations; only imports with `importsOnly`). */
@@ -1267,11 +1321,16 @@ async function saveAttempt(ports: Ports, id: string, record: { [k: string]: Json
   for (const old of ns.slice(0, Math.max(0, ns.length + 1 - ATTEMPTS_KEPT))) await ports.fs.remove(`${dir}/${old}.json`);
 }
 
-/** Sampling on a retry whose prompt is byte-identical to the previous attempt's: a deterministic resend can only
- *  repeat the same body, so the n-th identical repeat raises the temperature (0.4, then 0.7) and moves the seed. */
-export function retrySampling(b: BackendConfig, attempt: number, repeats: number): { temperature: number; seed: number } | null {
-  return repeats === 0 ? null : { temperature: repeats === 1 ? 0.4 : 0.7, seed: (b.seed ?? 1) + attempt - 1 };
+/** Sampling of an attempt: the backend's own on attempt 1; every retry varies it (temperature 0.4 on attempt 2, 0.7
+ *  after that, seed + attempt - 1), because at temperature 0 a small model mostly repeats its body whatever the repair
+ *  prompt says (issue #19: 14 of 24 retries were byte-identical to the previous body). */
+export function retrySampling(b: BackendConfig, attempt: number): { temperature: number; seed: number } | null {
+  return attempt === 1 ? null : { temperature: attempt === 2 ? 0.4 : 0.7, seed: (b.seed ?? 1) + attempt - 1 };
 }
+
+/** A body compared for repeats: whitespace runs collapsed (ponytail: also inside string literals; a repeat that only
+ *  differs in a string's spacing is rare enough). */
+export const repeatKey = (body: string): string => body.replace(/\s+/g, " ").trim();
 
 export async function generate(ports: Ports, req: CompileRequest, p: Project, id: string, diagnostics: Diagnostic[]): Promise<{ candidate: Candidate | null; modelCalls: number }> {
   const r = p.regions.find((x) => x.id === id)!;
@@ -1280,7 +1339,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   let stage: 0 | 1 = 0;
   let modelCalls = 0;
   let previous: { body: string; problems: string[] } | null = null;
-  let lastPrompt: string | null = null;
+  const seen = new Set<string>(); // repeatKey of every body (or invalid reply) this run produced for the region
   let repeats = 0;
   let spent: Tokens | null = null; // every model call for this region in this run (provenance.tokens)
   let cachedTokens: Tokens | null = null; // a cache hit carries the tokens that produced its body
@@ -1301,6 +1360,22 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   // run. Checked before each model call, not up front, so a cache hit still compiles.
   const backendDown = () => {
     if (++p.e080Streak === 3) diagnostics.push(err("OARC-E080", { detail: "stopped:3-consecutive" }));
+    return giveUp();
+  };
+  // Repeat-stop: a reply equal (whitespace aside) to an earlier one of this run is not verified again; the next attempt
+  // samples differently (retrySampling), and a second repeat ends the region's attempts (E082 repeat:).
+  const repeated = (text: string): boolean => {
+    const key = repeatKey(text);
+    if (!seen.has(key)) {
+      seen.add(key);
+      return false;
+    }
+    repeats++;
+    ports.log(`  ${id}: ✗ the reply repeats an earlier attempt${repeats >= 2 ? "; stopping" : "; not verified again, retrying with other sampling"}`);
+    return true;
+  };
+  const stopRepeating = () => {
+    diagnostics.push(err("OARC-E082", { id, detail: `repeat: ${previous?.problems[0] ?? ""}`.slice(0, 200) }));
     return giveUp();
   };
 
@@ -1328,10 +1403,8 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
         repair: previous ? `## Your previous attempt failed\nPrevious body:\n${previous.body}\n\nProblems:\n${previous.problems.join("\n")}\n\nFix these problems.` : "",
       });
       if (!rendered.ok) throw new Error(`prompt template is missing ${rendered.missing.join(", ")}`);
-      repeats = rendered.text === lastPrompt ? repeats + 1 : 0;
-      lastPrompt = rendered.text;
       promptHash = sha256Tagged(rendered.text);
-      sampling = retrySampling(backend, attempt, repeats);
+      sampling = retrySampling(backend, attempt);
       const t0 = Date.now();
       let raw: string;
       try {
@@ -1350,24 +1423,31 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       modelCalls++;
       const split = code ? { raw, defaults: new Map<number, string>() } : splitDefaults(raw);
       const parsed = code ? parseCodeOutput(raw) : r.spec.sketch ? sketch.parseFills(split.raw, r.spec.sketch) : parseOutput(split.raw); // palette: fills
-      const varied = sampling ? ` (identical prompt: temperature ${sampling.temperature}, seed ${sampling.seed})` : "";
+      const varied = sampling ? ` (retry sampling: temperature ${sampling.temperature}, seed ${sampling.seed})` : "";
       ports.log(`  ${id}: attempt ${attempt} via ${backend.name} (${backend.model}), context L${level} ${context.length} chars${varied}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
       if (!parsed.ok) {
         const problem = `output was not valid: ${parsed.diagnostic.detail}`;
         ports.log(`  ${id}: ✗ ${problem} (${raw.length} chars${raw.length ? `, ends ${JSON.stringify(raw.slice(-40))}` : ""})`);
-        previous = { body: raw.slice(0, 2000), problems: [problem] };
         await saveAttempt(ports, id, { attempt, backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, raw, problems: [problem] });
+        if (repeated(raw) && repeats >= 2) return stopRepeating();
+        previous = { body: raw.slice(0, 2000), problems: [problem] };
         continue;
       }
       body = parsed.body;
       imports = parsed.imports.map((im, i) => (split.defaults.has(i) ? { ...im, default: split.defaults.get(i)! } : im));
     }
     const tsx = r.file.endsWith(".tsx"); // palette: UI components are parsed as TSX
-    body = unwrapBody(body, r.kind, tsx);
+    body = unwrapBody(body, r.kind, tsx, { name: r.spec.symbol, params: r.spec.params });
     const clean = stripMarkerComments(body, tsx);
     if (clean.stripped) {
       ports.log(`  ${id}: stripped ${clean.stripped} comment${clean.stripped === 1 ? "" : "s"} mentioning @openarc: (markers belong to the compiler)`);
       body = clean.body;
+    }
+    if (repeated(body + (imports.length ? `\n${JSON.stringify(imports)}` : ""))) { // the same reply again: same verdict
+      await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, body, imports: imports as unknown as Json, problems: ["repeat of an earlier attempt (not verified again)"] });
+      if (repeats >= 2) return stopRepeating();
+      if (attempt === c.maxAttempts - 1 && c.fallbackBackend) stage = 1;
+      continue;
     }
     const result = await verify(ports, req, p, r, body, imports);
     if (result.ok) {

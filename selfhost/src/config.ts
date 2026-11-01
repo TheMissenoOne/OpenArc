@@ -26,7 +26,7 @@ export interface BackendConfig {
   maxContextTokens: number; // the context budget = this minus outputReserveTokens; Ollama also gets it as num_ctx
   outputReserveTokens?: number; // default 3072 (DEFAULT_OUTPUT_RESERVE), bounded by the context left after the prompt; the output cap: Ollama num_predict, hosted max_tokens. A truncated reply is retried with double the cap (backends.complete)
   seed?: number; // default 1 (ollama, openai)
-  temperature?: number; // default 0 (ollama, openai); a retry with a byte-identical prompt raises it (engine.retrySampling)
+  temperature?: number; // default 0 (ollama, openai); retries vary it (engine.retrySampling)
   // ollama
   host?: string; // default http://127.0.0.1:11434
   think?: boolean; // reasoning models (qwen3.x): default false, because structured output is enough
