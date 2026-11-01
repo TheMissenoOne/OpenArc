@@ -137,9 +137,9 @@ async function compile(maxAttempts: number, bodies: string[]) {
   await engine.analyze(fake, req, p, [], { offline: true });
   const ctx = (id: string) => engine.buildContext(p, p.regions.find((r) => r.id === id)!, 0, p.config.backends.local!);
   const closed = ctx("acronym.parse");
-  for (const kept of ["## Fixed signature", "export type ParseFn = (phrase: string) => string;", "## Intent\nConvert a phrase to its acronym", '"expected":"HTML"', "never re-import or re-implement them. No new imports.", "No effects: never use Date.now()"])
+  for (const kept of ["## Fixed signature", "export type ParseFn = (phrase: string) => string;", "## Intent\nConvert a phrase to its acronym", '"expected":"HTML"', "## Rules\nNo new imports.\nNo effects: never use Date.now()"])
     assert.ok(closed.includes(kept), `kept: ${kept}`);
-  for (const cut of ["## Effects allowed", "## Allowed new imports", '"$fake"', "need effect 'clock'", "## Imports already in the file"]) assert.ok(!closed.includes(cut), `cut: ${cut}`);
+  for (const cut of ["## Effects allowed", "## Allowed new imports", '"$fake"', "need effect 'clock'", "## Imports already in the file", "// ParseFn =", "never re-import"]) assert.ok(!closed.includes(cut), `cut: ${cut}`); // 0.9.3: no second signature, no in-scope sentence with nothing in scope
   assert.match(closed, /## Examples \(deep equality\)\n/);
   const prompt = renderTemplate(PROMPT_TEMPLATE, { context: closed, repair: "" });
   assert.ok(prompt.ok && prompt.text.length < 1300, `the closed acronym prompt is ${prompt.ok && prompt.text.length} chars (0.9.0: 1905)`);

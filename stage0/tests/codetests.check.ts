@@ -72,7 +72,7 @@ const codes = (ds: Diagnostic[]) => ds.map((d) => `${d.code}${d.id ? ` ${d.id}` 
   assert.ok(l2.includes("## Full file src/lb/balancer.ts") && l2.includes("// (a hidden test, not shown)"), l2);
   assert.ok(!l2.includes("secret sauce") && !l2.includes("424242"), "a hidden test's name and source stay out of the level-2 package");
   // under budget pressure the summary replaces the source before anything else goes
-  const tiny = engine.buildContext(p, r, 0, { ...p.config.backends.local!, maxContextTokens: 2000, outputReserveTokens: 1000 }); // 0.9.1: the trimmed Rules need a tighter budget to overflow
+  const tiny = engine.buildContext(p, r, 0, { ...p.config.backends.local!, maxContextTokens: 1950, outputReserveTokens: 1000 }); // 0.9.1/0.9.3: the trimmed Rules need a tighter budget to overflow
   assert.match(tiny, /## Tests your body must pass \(summary: the test source did not fit\)\nrr\.pick\("x"\) → "a"/);
   assert.match(tiny, /new RR\(three\)\.markDown\("z"\) throws "unknown backend z"\n\/\/ plus \d+ assertion\(s\) not shown/);
   // shapes the compiler can't read, and fakes it can't resolve

@@ -767,7 +767,7 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
     sections.push(["Task", `Write ONLY the statements of the body marked <<<BODY>>> (${cf.declaration}).${cf.cls ? " `this` is the instance; the class shell (fields, constructor, other members, signatures) is fixed." : ""} The declaration, its JSDoc and everything outside the body are fixed and checked to be unchanged.`]);
     sections.push(["Contract (fixed)", implicit.contract(s, checker, opts.stable ? null : pendingDecls)]);
   } else if (r.kind === "function") {
-    sections.push(["Fixed signature (write ONLY the statements inside the braces)", `export const ${s.symbol}: ${s.typeText} = ${s.isAsync ? "async " : ""}(${s.params.join(", ")}) => {\n  /* your body */\n};\n// ${s.typeText} = ${s.signature}`]);
+    sections.push(["Fixed signature (write ONLY the statements inside the braces)", `export const ${s.symbol}: ${s.typeText} = ${s.isAsync ? "async " : ""}(${s.params.join(", ")}) => {\n  /* your body */\n};`]);
   } else {
     sections.push(["Task", `Write ONLY the statements that replace arc.pending("${s.id}") inside function ${rootSpec.symbol}. Do not return, break or continue out of the block; report results by assigning the 'let' variables below.${rootSpec.isAsync ? " await is allowed." : ""}`]);
     sections.push(["Variables in scope", r.scope.join("\n")]);
@@ -825,6 +825,9 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
     r.typeImports.set(t.name, spec);
     return `// ${t.name}: not in scope; the compiler adds import type { ${t.name} } from "${spec}" if you use it\n${t.text}`;
   });
+  // "// T = signature" only when Types doesn't already declare T (issue #19: the signature was in the prompt twice)
+  if (r.kind === "function" && !cf && !s.sketch && !(/^\w+$/.test(s.typeText) ? types.some((t) => new RegExp(`\\b(type|interface) ${s.typeText}\\b`).test(t)) : true))
+    sections[0]![1] += `\n// ${s.typeText} = ${s.signature}`;
   if (types.length) sections.push([TYPES_HEADING, types.join("\n\n")]);
   if (sameFileLines.length) sections.push([`Already in ${r.file} (call these, don't re-implement them)`, sameFileLines.join("\n")]);
   if (helperLines.length) sections.push(["Helpers you may call", helperLines.join("\n\n")]);
@@ -855,7 +858,7 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
     for (const t of p.tests ?? []) if (t.hidden && t.file === r.file) full = full.replace(t.source, "// (a hidden test, not shown)");
     sections.push([`Full file ${r.file}`, full]);
   }
-  sections.push(["Rules", closed ? CLOSED_RULES : backend.outputFormat === "code" ? codeRules(RULES) : RULES]);
+  sections.push(["Rules", closed ? (sameFileLines.length ? CLOSED_RULES : CLOSED_RULES.replace(/^.*?No new imports\./, "No new imports.")) : backend.outputFormat === "code" ? codeRules(RULES) : RULES]);
 
   // Budget: drop optional sections (from the end of the optional list) until the package fits.
   const budget = (backend.maxContextTokens - (backend.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE)) * 3.5; // ~3.5 chars/token
