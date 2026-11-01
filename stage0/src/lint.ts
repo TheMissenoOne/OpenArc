@@ -235,16 +235,17 @@ export function lintProject(p: engine.Project, diagnostics: Diagnostic[], opts: 
     .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.line - b.line || (a.id < b.id ? -1 : a.id > b.id ? 1 : a.rule < b.rule ? -1 : a.rule > b.rule ? 1 : 0)));
 }
 
-export const LINT_USAGE = "openarc lint [--strict] [--profile recommended|strict] [--format text|json] [ids or files...]";
+export const LINT_USAGE = "openarc lint [--strict | --profile recommended|strict] [--fail-on-warnings] [--format text|json] [ids or files...]";
 
-/** `openarc lint`: exit 0 clean (warnings allowed unless --strict or lint.failOnWarnings), 1 findings at error level (or a
+/** `openarc lint`: exit 0 clean (warnings allowed unless --fail-on-warnings or lint.failOnWarnings), 1 findings at error level (or a
  *  bad config), 2 usage. `only` arguments are region ids or project-relative files. */
 export async function lintCommand(ports: Ports, req: CompileRequest, args: string[], io: { out: (l: string) => void; err: (l: string) => void; message?: (code: string) => string }): Promise<number> {
-  let strict = false, format = "text", profile: LintProfile | undefined;
+  let failOnWarnings = false, format = "text", profile: LintProfile | undefined;
   const only: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
-    if (a === "--strict") strict = true;
+    if (a === "--strict") profile = "strict"; // shorthand for --profile strict
+    else if (a === "--fail-on-warnings") failOnWarnings = true;
     else if (a === "--profile" && LINT_PROFILES.includes(args[i + 1] as LintProfile)) profile = args[++i] as LintProfile;
     else if (a === "--format" && ["text", "json"].includes(args[i + 1]!)) format = args[++i]!;
     else if (a.startsWith("-")) {
@@ -273,5 +274,5 @@ export async function lintCommand(ports: Ports, req: CompileRequest, args: strin
     const n = project.regions.filter((r) => r.kind === "function" && (!only.length || only.some((o) => o === r.id || o === r.file || o === r.spec.file))).length;
     io.out(`lint: ${errors} error(s), ${warnings} warning(s) in ${n} function region(s)`);
   }
-  return errors || (warnings && (strict || project.config.lint?.failOnWarnings)) ? 1 : 0;
+  return errors || (warnings && (failOnWarnings || project.config.lint?.failOnWarnings)) ? 1 : 0;
 }

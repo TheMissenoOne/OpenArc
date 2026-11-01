@@ -3,7 +3,7 @@
 // 1. Each rule fires, and doesn't on a spec that satisfies it.
 // 2. Severities: profile < rules < a matching override's profile < its rules; --profile; config validation.
 // 3. Suppressions: with a reason they silence the named rule; without one they are spec/suppression-reason and ignored.
-// 4. The command: text and JSON output, exit codes (warnings, --strict, failOnWarnings, usage), ids/files, zero requests.
+// 4. The command: text and JSON output, exit codes (warnings, --fail-on-warnings, failOnWarnings, usage), --strict = --profile strict, ids/files, zero requests.
 import assert from "node:assert/strict";
 import type { CompileRequest, Ports } from "../src/types.ts";
 import fakePorts from "./fakes/ports.memory.ts";
@@ -198,7 +198,9 @@ const brief = (fs: Finding[]) => fs.map((f) => `${f.severity} ${f.rule} ${f.id}`
     "lint: 0 error(s), 2 warning(s) in 1 function region(s)",
   ]);
   assert.equal(t.exit, 0);
-  assert.equal((await lint(["a.pick", "--strict"])).exit, 1, "--strict fails on warnings");
+  assert.equal((await lint(["a.pick", "--fail-on-warnings"])).exit, 1, "--fail-on-warnings fails on warnings");
+  assert.deepStrictEqual((await lint(["--strict", "--format", "json"])).out, (await lint(["--profile", "strict", "--format", "json"])).out, "--strict is --profile strict");
+  assert.notDeepStrictEqual((await lint(["--strict", "--format", "json"])).out, (await lint(["--format", "json"])).out, "and differs from recommended");
   assert.equal((await lint(["a.pick"], { failOnWarnings: true })).exit, 1, "so does lint.failOnWarnings");
   assert.equal((await lint(["a.good"])).exit, 0);
   const byFile = await lint(["--format", "json", "src/cf.ts"]);

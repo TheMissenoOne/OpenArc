@@ -15,7 +15,7 @@
 | `openarc inspect <id>` | spec, state (`stale` as in `graph`, with `ownership` alongside), `tokens` (`{prompt, completion}` the model used to produce the current body, failed attempts included; `null` when the backend reports none or the body isn't generated), manifest entry and provenance (model, output format, context level, attempts, sampling, tokens, checks) |
 | `openarc check <id> --oracle <module>#<export>` | differential test: run the compiled region and a reference implementation on its examples' arguments plus 60 seeded variations, in the sandbox, and list every disagreement; exit 1 if any. See "Thin examples" in [[Writing Specs]] |
 | `openarc doctor` | report Node, the platform, the tools found and the selected sandbox tier, then run one example in that sandbox which also tries a file write, a child process and a network request; each must be refused. No model. Exit 1 if the tier is unavailable or anything gets through (except the network on Node < 25 in the `node` tier, which is reported) |
-| `openarc lint [--strict] [--profile recommended\|strict] [--format text\|json] [ids or files…]` | check the specs against the lint rules below. Offline and deterministic: it parses and analyses the project like `graph` (no model call, no sandbox run, no network). Exit 1 if any finding is at `error` (or any at all with `--strict` or `lint.failOnWarnings`), 2 on a bad flag or an unknown id/file. Configure it in the `lint` block of [[Configuration]]. See [Lint rules](#lint-rules) |
+| `openarc lint [--strict \| --profile recommended\|strict] [--fail-on-warnings] [--format text\|json] [ids or files…]` | check the specs against the lint rules below. Offline and deterministic: it parses and analyses the project like `graph` (no model call, no sandbox run, no network). Exit 1 if any finding is at `error` (or any at all with `--fail-on-warnings` or `lint.failOnWarnings`), 2 on a bad flag or an unknown id/file. Configure it in the `lint` block of [[Configuration]]. See [Lint rules](#lint-rules) |
 | `openarc freeze <id>` | make a region developer-owned |
 | `openarc release <id>` | hand a region back to the compiler; the current body is backed up to `.openarc/backup/` |
 | `openarc resolve <id> --keep` | accept the current body under the new spec |
@@ -26,7 +26,7 @@
 
 ## Lint rules
 
-`openarc lint` prints one line per finding, `<severity> <rule> <regionId> <file>:<line>  <message>`, then a summary line. `--format json` prints an array of `{rule, severity, id, file, line, message}` instead. The line is the spec's on disk: the `defineRegion` statement, or the code-first declaration. Arguments select regions by id, or by the file that holds their spec. `--profile` replaces `lint.extends` for this run; `--strict` makes warnings fail the run too.
+`openarc lint` prints one line per finding, `<severity> <rule> <regionId> <file>:<line>  <message>`, then a summary line. `--format json` prints an array of `{rule, severity, id, file, line, message}` instead. The line is the spec's on disk: the `defineRegion` statement, or the code-first declaration. Arguments select regions by id, or by the file that holds their spec. `--profile` replaces `lint.extends` for this run, and `--strict` is short for `--profile strict`. `--fail-on-warnings` makes warnings fail the run too (for CI).
 
 Rules apply to function regions (blocks are verified through their function). Compile never runs them and never reads the `lint` block: lint only reports.
 

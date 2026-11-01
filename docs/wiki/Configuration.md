@@ -124,7 +124,7 @@ The `lint` block configures `openarc lint` (see "Lint rules" in [[CLI Reference]
 | Field | Meaning |
 |---|---|
 | `lint.extends` | the profile: `"recommended"` (default) or `"strict"`. `openarc lint --profile` replaces it for one run |
-| `lint.failOnWarnings` | `true`: a warning fails the run too (exit 1), as `--strict` does. Default `false` |
+| `lint.failOnWarnings` | `true`: a warning fails the run too (exit 1), as `--fail-on-warnings` does. Default `false` |
 | `lint.rules` | rule name to `"off"`, `"warn"` or `"error"` |
 | `lint.overrides` | for specs in files matching one of `files` (project-relative globs: `*` within a path segment, `**` across segments), an `extends` and `rules` applied on top |
 
