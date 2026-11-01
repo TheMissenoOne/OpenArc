@@ -72,7 +72,7 @@ const codes = (ds: Diagnostic[]) => ds.map((d) => `${d.code}${d.id ? ` ${d.id}` 
   assert.ok(l2.includes("## Full file src/lb/balancer.ts") && l2.includes("// (a hidden test, not shown)"), l2);
   assert.ok(!l2.includes("secret sauce") && !l2.includes("424242"), "a hidden test's name and source stay out of the level-2 package");
   // under budget pressure the summary replaces the source before anything else goes
-  const tiny = engine.buildContext(p, r, 0, { ...p.config.backends.local!, maxContextTokens: 2000, outputReserveTokens: 1000 }); // 0.9.1: the trimmed Rules need a tighter budget to overflow
+  const tiny = engine.buildContext(p, r, 0, { ...p.config.backends.local!, maxContextTokens: 1950, outputReserveTokens: 1000 }); // 0.9.1/0.9.3: the trimmed Rules need a tighter budget to overflow
   assert.match(tiny, /## Tests your body must pass \(summary: the test source did not fit\)\nrr\.pick\("x"\) → "a"/);
   assert.match(tiny, /new RR\(three\)\.markDown\("z"\) throws "unknown backend z"\n\/\/ plus \d+ assertion\(s\) not shown/);
   // shapes the compiler can't read, and fakes it can't resolve
@@ -276,14 +276,15 @@ try {
   assert.equal(helped.code, 0, helped.out);
   assert.deepStrictEqual(manifest()["p2p.peer.receive"]!.provenance.verifiedBy, ["tsc", "static", "tests:2/2"], helped.out);
 
-  // a hidden test fails: the repair prompt names it, and nothing else about it
+  // a hidden test fails: the retry prompt names it, and nothing else about it (a test failure resamples: no body either)
   reset("json");
   replies = { "RoundRobin.pick": [UNFAIR] };
   let c = await cli(proj, "compile", "lb.roundRobin.pick", "lb.roundRobin.markDown");
   assert.equal(c.code, 0, c.out);
-  const repair = prompts.find((x) => x.includes("Your previous attempt failed"))!;
+  const repair = prompts.find((x) => x.includes("A previous attempt failed"))!;
   assert.ok(repair, c.out);
-  assert.match(repair, /Problems:\nOARC-E090 hidden test failed: "fair over 300 picks"\n/);
+  assert.match(repair, /## A previous attempt failed\nOARC-E090 hidden test failed: "fair over 300 picks"\n/);
+  assert.ok(!repair.includes("Previous body"), "a test failure is resampled, not repaired");
   assert.ok(!repair.includes("counts") && !repair.includes("100"), "no values or source of a hidden test reach the model");
 
   // a test registered outside the static plan (through an alias; a nested arc.test call is E010 test:not-top-level) is

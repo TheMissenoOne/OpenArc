@@ -2,7 +2,8 @@
 // In-memory ports and a stub model; no sandbox (the regions have no examples, so verification is tsc + static rules).
 // Run: node tests/efficiency.check.ts
 // 1. Diverse retries: attempt 1 samples as configured; attempt 2 at temperature 0.4, then 0.7; seed + attempt - 1.
-// 2. Repeat-stop: a reply equal (whitespace aside) to an earlier one is not verified again; a second repeat stops (E082).
+// 2. Repeat-stop: a reply equal (whitespace aside) to an earlier one is not verified again and stops the region (E082),
+//    unless a fallback backend is still to come.
 // 3. Whole-function unwrap: helpers + the region's own declaration (function, export, async, const arrow with block or
 //    expression body, a class method, each inside a fence) become the body; anything else is left alone.
 // 4. Prompt trim: a closed function region (no effects, deps or imports beyond open-arc) gets the short Rules and no
@@ -58,29 +59,35 @@ async function compile(maxAttempts: number, bodies: string[]) {
 
 // ── 2. repeat-stop
 {
-  // the same body three times (surrounding whitespace aside): one verification, one varied retry, then stop with 2 of 5 calls left
-  const { res, sent, attempt, logs } = await compile(5, ['return "x";', '  return "x";\n', 'return "x";']);
+  // the same body twice (surrounding whitespace aside): one verification, then stop at the repeat with 3 of 5 calls left
+  const { res, sent, attempt, logs } = await compile(5, ['return "x";', '  return "x";\n']);
   assert.equal(res.exit, 1);
-  assert.equal(sent.length, 3, "a second repeat stops the region before the budget of 5 is spent");
+  assert.equal(sent.length, 2, "the first repeat stops the region before the budget of 5 is spent");
   assert.match(attempt(1)!.problems[0]!, /^OARC-E070 TS2322/);
-  assert.deepStrictEqual([attempt(2)!.problems, attempt(3)!.problems], [["repeat of an earlier attempt (not verified again)"], ["repeat of an earlier attempt (not verified again)"]]);
-  assert.equal(attempt(4), null);
+  assert.deepStrictEqual(attempt(2)!.problems, ["repeat of an earlier attempt (not verified again)"]);
+  assert.equal(attempt(3), null);
   const e082 = res.diagnostics.find((d) => d.code === "OARC-E082")!;
   assert.match(e082.detail!, /^repeat: OARC-E070 TS2322/, "reported with the last real verdict");
-  assert.ok(logs.some((l) => /repeats an earlier attempt; not verified again/.test(l)) && logs.some((l) => /repeats an earlier attempt; stopping/.test(l)));
+  assert.ok(logs.some((l) => /repeats an earlier attempt; stopping/.test(l)));
   // exact text: spacing inside a literal is a different reply (CodeRabbit #20)
   assert.notEqual(engine.repeatKey('return "a  b";'), engine.repeatKey('return "a b";'));
-  // with a fallback backend, a second repeat on the penultimate attempt still leaves the last attempt to the fallback
-  const fb = fakePorts({ files: { ...project(4), "openarc.config.json": JSON.stringify({ version: 1, backends: { local: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, seed: 1 }, big: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, seed: 9 } }, compilation: { defaultBackend: "local", maxAttempts: 4, fallbackBackend: "big" } }) }, http: [TAGS, ...['return "x";', 'return "x";', 'return "x";', "return n + 1;"].map(chat)] });
-  const fbRes = await run(fb.instance as Ports, { ...req, keepGoing: true });
-  assert.equal(fbRes.exit, 0, JSON.stringify(fbRes.diagnostics));
-  assert.equal(chats(fb.snapshot() as Snap).length, 4, "the fallback's attempt ran");
-  // one repeat, then a different body that passes: compiled on attempt 3 with the varied sampling recorded
-  const ok = await compile(3, ['return "x";', 'return "x";', "return n + 1;"]);
+  // a different body after a failure is verified as usual and can pass
+  const ok = await compile(3, ['return "x";', 'return "y";', "return n + 1;"]);
   assert.equal(ok.res.exit, 0, JSON.stringify(ok.res.diagnostics));
   const prov = JSON.parse(ok.snap.files[M]!).regions["ef.inc"].provenance;
   assert.deepStrictEqual([prov.attempts, prov.sampling], [3, { temperature: 0.7, seed: 3 }]);
   assert.ok(ok.snap.files["src/ef.ts"]!.includes("  return n + 1;"));
+  // with a fallback backend, a repeat hands over to it instead of stopping
+  const fb = fakePorts({ files: { ...project(3), "openarc.config.json": JSON.stringify({ version: 1, backends: { local: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, seed: 1 }, big: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, seed: 9 } }, compilation: { defaultBackend: "local", fallbackBackend: "big", maxAttempts: 3 } }) }, http: [TAGS, ...['return "x";', 'return "x";', "return n + 1;"].map(chat)] });
+  const fres = await run(fb.instance as Ports, { ...req, keepGoing: true });
+  assert.equal(fres.exit, 0, JSON.stringify(fres.diagnostics));
+  assert.deepStrictEqual(chats(fb.snapshot() as Snap).map((b) => b.options.seed), [1, 2, 11], "attempt 3 on the fallback (seed 9 + 2)");
+  // invalid output on the penultimate attempt (no repeat) still leaves the last attempt to the fallback (CodeRabbit #22)
+  const bad = JSON.stringify({ message: { role: "assistant", content: "not json" }, done: true });
+  const fb2 = fakePorts({ files: { ...project(3), "openarc.config.json": JSON.stringify({ version: 1, backends: { local: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, seed: 1 }, big: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, seed: 9 } }, compilation: { defaultBackend: "local", fallbackBackend: "big", maxAttempts: 3 } }) }, http: [TAGS, chat('return "x";'), bad, chat("return n + 1;")] });
+  const fres2 = await run(fb2.instance as Ports, { ...req, keepGoing: true });
+  assert.equal(fres2.exit, 0, JSON.stringify(fres2.diagnostics));
+  assert.deepStrictEqual(chats(fb2.snapshot() as Snap).map((b) => b.options.seed), [1, 2, 11], "attempt 3 on the fallback after an invalid reply");
 }
 
 // ── 3. whole-function unwrap
@@ -136,9 +143,9 @@ async function compile(maxAttempts: number, bodies: string[]) {
   await engine.analyze(fake, req, p, [], { offline: true });
   const ctx = (id: string) => engine.buildContext(p, p.regions.find((r) => r.id === id)!, 0, p.config.backends.local!);
   const closed = ctx("acronym.parse");
-  for (const kept of ["## Fixed signature", "export type ParseFn = (phrase: string) => string;", "## Intent\nConvert a phrase to its acronym", '"expected":"HTML"', "never re-import or re-implement them. No new imports.", "No effects: never use Date.now()"])
+  for (const kept of ["## Fixed signature", "export type ParseFn = (phrase: string) => string;", "## Intent\nConvert a phrase to its acronym", '"expected":"HTML"', "## Rules\nNo new imports.\nNo effects: never use Date.now()"])
     assert.ok(closed.includes(kept), `kept: ${kept}`);
-  for (const cut of ["## Effects allowed", "## Allowed new imports", '"$fake"', "need effect 'clock'", "## Imports already in the file"]) assert.ok(!closed.includes(cut), `cut: ${cut}`);
+  for (const cut of ["## Effects allowed", "## Allowed new imports", '"$fake"', "need effect 'clock'", "## Imports already in the file", "// ParseFn =", "never re-import"]) assert.ok(!closed.includes(cut), `cut: ${cut}`); // 0.9.3: no second signature, no in-scope sentence with nothing in scope
   assert.match(closed, /## Examples \(deep equality\)\n/);
   const prompt = renderTemplate(PROMPT_TEMPLATE, { context: closed, repair: "" });
   assert.ok(prompt.ok && prompt.text.length < 1300, `the closed acronym prompt is ${prompt.ok && prompt.text.length} chars (0.9.0: 1905)`);

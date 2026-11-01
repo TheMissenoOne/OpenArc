@@ -58,6 +58,9 @@ export interface OpenArcConfig {
     fallbackBackend?: string;
     maxAttempts: number;
     context: { initialLevel: ContextLevel; expandOnFailure: boolean };
+    /** "file" (default): a file's pending, independent function regions share ONE first request (engine.batchReply);
+     *  each reply is still verified and committed per region, and retries go region by region. "off": one request per region. */
+    batch?: "file" | "off";
   };
   regions?: Record<string, { backend?: string; contextLevel?: ContextLevel; outputFormat?: OutputFormat }>;
   sandbox?: {
@@ -116,6 +119,8 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
     if (b.ollamaCompat !== undefined && typeof b.ollamaCompat !== "boolean") return bad(`"ollamaCompat" must be true or false`);
     if (b.outputFormat !== undefined && !OUTPUT_FORMATS.includes(b.outputFormat)) return bad(`"outputFormat" must be json or code`);
   }
+  if (c.compilation?.batch !== undefined && !["file", "off"].includes(c.compilation.batch))
+    return { config: DEFAULT_CONFIG, error: 'openarc.config.json: compilation.batch must be "file" or "off"' };
   for (const [id, r] of Object.entries(c.regions ?? {}))
     if (r.outputFormat !== undefined && !OUTPUT_FORMATS.includes(r.outputFormat))
       return { config: DEFAULT_CONFIG, error: `openarc.config.json: region "${id}": "outputFormat" must be json or code` };
@@ -127,6 +132,7 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
         defaultBackend: c.compilation?.defaultBackend ?? names[0]!,
         fallbackBackend: c.compilation?.fallbackBackend,
         maxAttempts: c.compilation?.maxAttempts ?? 3,
+        batch: c.compilation?.batch ?? "file",
         context: { initialLevel: c.compilation?.context?.initialLevel ?? 0, expandOnFailure: c.compilation?.context?.expandOnFailure ?? true },
       },
     },

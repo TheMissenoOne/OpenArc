@@ -36,7 +36,7 @@ const withImportItem = (required: string[], defaultType: Json, extra: Schema = {
 /** The §8.4 schema plus an optional `default` (a default import's local name) on each imports item. */
 export const OUTPUT_SCHEMA: Json = withImportItem(["from", "names"], { type: "string" });
 // OpenAI strict json_schema needs every property listed in `required` (imports: [] and default: null mean absent).
-const STRICT_OUTPUT_SCHEMA: Json = withImportItem(["from", "names", "default"], { type: ["string", "null"] }, { required: ["body", "imports"] });
+export const STRICT_OUTPUT_SCHEMA: Json = withImportItem(["from", "names", "default"], { type: ["string", "null"] }, { required: ["body", "imports"] });
 
 /** fetch() connection failures: the server is down or restarting (e.g. Ollama OOM-killed mid-run). Judged by the
  *  error code only (fetch puts it on `cause`), never the message: an HTTP error message carries the response body. */

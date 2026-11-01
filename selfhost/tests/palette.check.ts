@@ -191,7 +191,7 @@ try {
   const cli = (...args: string[]) => new Promise<{ code: number; out: string }>((done) =>
     execFile(process.execPath, [main, ...args], { cwd: dir, encoding: "utf8", timeout: 600_000 }, (e, stdout, stderr) => done({ code: e ? (typeof e.code === "number" ? e.code : 1) : 0, out: `${stdout}${stderr}` })));
   assert.equal((await cli("init")).code, 0);
-  writeFileSync(join(dir, "openarc.config.json"), JSON.stringify({ version: 1, backends: { stub: { provider: "ollama", model: "stub:1", host: `http://127.0.0.1:${(server.address() as { port: number }).port}`, maxContextTokens: 8192 } }, compilation: { defaultBackend: "stub", maxAttempts: 1 } }));
+  writeFileSync(join(dir, "openarc.config.json"), JSON.stringify({ version: 1, backends: { stub: { provider: "ollama", model: "stub:1", host: `http://127.0.0.1:${(server.address() as { port: number }).port}`, maxContextTokens: 8192 } }, compilation: { defaultBackend: "stub", maxAttempts: 1, batch: "off" } })); // per-region stub replies
   mkdirSync(join(dir, "src", "palette"), { recursive: true });
   mkdirSync(join(dir, "tests", "fakes"), { recursive: true });
   for (const f of PALETTE_FILES) writeFileSync(join(dir, "src", "palette", f), pendingCopy(files[`src/palette/${f}`]!));
