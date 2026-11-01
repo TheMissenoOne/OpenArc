@@ -103,7 +103,7 @@ setInterval(() => {
   const av = memAvailKb();
   sample.minAvail = Math.min(sample.minAvail, av);
   sample.peakRss = Math.max(sample.peakRss, runnerRssKb());
-  if (av < ABORT_KB) abort(`MemAvailable ${Math.round(av / 1024)} MB < 1 GB`);
+  if (av < ABORT_KB) abort(`MemAvailable ${Math.round(av / 1024)} MB < ${matrix.memory?.abortGb ?? 1} GB`);
 }, 2000).unref();
 
 // ponytail: only Ollama can unload on request; a llama-server holds one model for its lifetime (the operator owns it).

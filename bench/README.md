@@ -113,10 +113,11 @@ See `results/2026-10-31-untuned-ollama-full-partial/summary.md` for the list wit
 | `results/2026-10-31-untuned-ollama-pilot/` | pilot, 30 tasks, open-arc 0.6.3, stock Ollama 0.40.5 |
 | `results/2026-10-31-untuned-ollama-full-partial/` | full run paused after 4 of 72 tasks, open-arc 0.6.4 (first build), stock Ollama 0.40.5 |
 | `results/2026-11-01-ablations/` | issue #10 ablations: 8 arms x 8 exercises x 3 seeds, qwen2.5-coder-7b on llama-server, open-arc 0.8.0 + env-gated bench patch; see its `summary.md` |
+| `results/2026-11-01-efficiency/` | issue #19: arms A, E-resample, D, D-resample on open-arc 0.9.1 (c9c1c62), paired with the ablations; `compare.md` (`node compare.mjs`), `tables.md`. `efficiency-first-try/`: the first 0.9.1 build (lost flatten-array to `arc.flatten`), kept for the record |
 
 ## Ablations (issue #10)
 
-Why does OpenArc trail the plain prompt? `matrix-ablations.json` holds one arm per suspected cause, all on the same model, server, sampling and call budget (3 per unit), selectable with `--configs`; `--seed n` sets the backend seed of every arm (OpenArc config `seed`, baseline request `seed`) and is part of the resume key. `ablations.sh <ts-bench> <work> <tgz>` waits for other benchmarks, starts llama-server, runs every arm with seeds 1-3, stops the server. Results: `results/2026-11-01-ablations/`.
+Why does OpenArc trail the plain prompt? `matrix-ablations.json` holds one arm per suspected cause, all on the same model, server, sampling and call budget (3 per unit), selectable with `--configs`; `--seed n` sets the backend seed of every arm (OpenArc config `seed`, baseline request `seed`) and is part of the resume key. `ablations.sh <ts-bench> <work> <tgz>` waits for other benchmarks, starts llama-server, runs every arm with seeds 1-3, stops the server. Results: `results/2026-11-01-ablations/`. `efficiency.sh` (same arguments, `matrix-efficiency.json`) reruns A, E-resample, D and D-resample on a newer OpenArc; `node compare.mjs <out.md> <dirs...>` pairs runs by config@version.
 
 | arm | what changes (vs `A`, OpenArc L0) | hypothesis |
 |---|---|---|
