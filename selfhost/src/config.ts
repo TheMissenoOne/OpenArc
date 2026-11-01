@@ -76,6 +76,63 @@ export interface OpenArcConfig {
   /** UI regions (§2.6): the DOM the harness renders components in, from the project's devDependencies. Without it, UI
    *  regions fail with OARC-E092 (dom:not-configured); there is no unverified fallback. */
   ui?: { dom?: "jsdom" };
+  /** `openarc lint` (src/lint.ts): which spec rules run at which severity. Never read by compile. */
+  lint?: LintConfig;
+}
+
+export type LintSeverity = "off" | "warn" | "error";
+export type LintProfile = "recommended" | "strict";
+export interface LintRules { [rule: string]: LintSeverity }
+export interface LintConfig {
+  extends?: LintProfile; // default "recommended"
+  failOnWarnings?: boolean; // default false: only an error-level finding fails `openarc lint`
+  rules?: LintRules;
+  /** For specs in files matching one of `files` (globs with * and **): the profile, then the rules, over the top level. Later overrides win. */
+  overrides?: { files: string[]; extends?: LintProfile; rules?: LintRules }[];
+}
+export const LINT_SEVERITIES: readonly LintSeverity[] = ["off", "warn", "error"];
+export const LINT_PROFILES: readonly LintProfile[] = ["recommended", "strict"];
+/** Every lint rule: [its severity in "recommended", in "strict"]. */
+export const LINT_RULES: Record<string, readonly [LintSeverity, LintSeverity]> = {
+  "spec/contradictory-examples": ["error", "error"],
+  "spec/duplicate-test-names": ["warn", "error"],
+  "spec/require-tests": ["warn", "error"],
+  "spec/require-intent": ["warn", "warn"],
+  "spec/thin-examples": ["warn", "warn"],
+  "spec/boundary-cases": ["off", "warn"],
+  "spec/return-union-coverage": ["off", "warn"],
+  "spec/undeclared-effects": ["warn", "error"],
+  "spec/explicit-deps": ["off", "warn"],
+  "spec/suppression-reason": ["error", "error"],
+};
+
+/** What is wrong with a `lint` block, or null. */
+function lintProblem(l: LintConfig | undefined): string | null {
+  if (l === undefined) return null;
+  if (typeof l !== "object" || l === null || Array.isArray(l)) return "must be an object";
+  const profile = (e: unknown, at: string) => (e === undefined || LINT_PROFILES.includes(e as LintProfile) ? null : `${at}extends must be "recommended" or "strict"`);
+  const rules = (r: unknown, at: string): string | null => {
+    if (r === undefined) return null;
+    if (typeof r !== "object" || r === null || Array.isArray(r)) return `${at}rules must be an object`;
+    for (const [k, v] of Object.entries(r)) {
+      if (!(k in LINT_RULES)) return `${at}unknown rule "${k}" (one of ${Object.keys(LINT_RULES).join(", ")})`;
+      if (!LINT_SEVERITIES.includes(v as LintSeverity)) return `${at}rule "${k}" must be "off", "warn" or "error"`;
+    }
+    return null;
+  };
+  if (l.failOnWarnings !== undefined && typeof l.failOnWarnings !== "boolean") return "failOnWarnings must be true or false";
+  const top = profile(l.extends, "") ?? rules(l.rules, "");
+  if (top) return top;
+  if (l.overrides === undefined) return null;
+  if (!Array.isArray(l.overrides)) return "overrides must be an array";
+  for (const [i, o] of l.overrides.entries()) {
+    const at = `overrides[${i}].`;
+    if (typeof o !== "object" || o === null || Array.isArray(o)) return `overrides[${i}] must be an object`;
+    if (!Array.isArray(o.files) || !o.files.length || !o.files.every((f) => typeof f === "string" && f)) return `${at}files must be a non-empty array of globs`;
+    const bad = profile(o.extends, at) ?? rules(o.rules, at);
+    if (bad) return bad;
+  }
+  return null;
 }
 
 export const DEFAULT_CONFIG: OpenArcConfig = {
@@ -121,6 +178,8 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
   }
   if (c.compilation?.batch !== undefined && !["file", "off"].includes(c.compilation.batch))
     return { config: DEFAULT_CONFIG, error: 'openarc.config.json: compilation.batch must be "file" or "off"' };
+  const lint = lintProblem(c.lint);
+  if (lint) return { config: DEFAULT_CONFIG, error: `openarc.config.json: lint: ${lint}` };
   for (const [id, r] of Object.entries(c.regions ?? {}))
     if (r.outputFormat !== undefined && !OUTPUT_FORMATS.includes(r.outputFormat))
       return { config: DEFAULT_CONFIG, error: `openarc.config.json: region "${id}": "outputFormat" must be json or code` };

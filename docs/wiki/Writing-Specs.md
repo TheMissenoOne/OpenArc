@@ -123,6 +123,10 @@ check text.outputFileName against legacy/text.js#outputFileName: 52/60 inputs ag
 
 Add the inputs it finds as examples, and recompile.
 
+## Linting specs
+
+`openarc lint` checks specs before any compile, without a model: contradictory or duplicate examples, regions nothing verifies, empty intents, thin examples (the `W044` rule), and in the `strict` profile missing boundary values and uncovered return values. It's fast enough for a pre-commit hook or CI. The rules, their profiles and the suppression comment are in [[CLI Reference]]; the `lint` block in [[Configuration]].
+
 ## What is verified, and what isn't
 
 | Guaranteed (mechanically checked) | Not guaranteed |

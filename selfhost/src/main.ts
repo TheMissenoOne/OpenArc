@@ -16,6 +16,7 @@ import { clearStaleLock, releaseOwnLock } from "./lock.ts";
 import { createWatcher, regionKey, type RegionKey } from "./watcher.ts";
 import { watchDirs } from "./dirwatch.ts";
 import { migrate } from "./migrate.ts";
+import { LINT_USAGE, lintCommand } from "./lint.ts";
 import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools, type TierChoice } from "./isolation.ts";
 
 const MESSAGES: Record<string, string> = {
@@ -259,7 +260,8 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc extract <file> [--function <name>] [--id <id>] [--style code|region]
        openarc migrate <id>
        openarc check <id> --oracle <module>#<export>
-       openarc doctor`;
+       openarc doctor
+       ${LINT_USAGE}`;
 
 /** `openarc backends [test [name]]`: list the configured backends, or send one tiny request through one of them. */
 async function backends(ports: Ports, args: string[]): Promise<number> {
@@ -383,6 +385,10 @@ async function main(argv: string[]): Promise<number> {
   if (argv[0] === "backends") return backends(ports, argv.slice(1));
   if (argv[0] === "doctor") return doctor(root, ports);
   if (argv[0] === "migrate") return migrateCmd(root, ports, argv.slice(1));
+  if (argv[0] === "lint") { // spec rules, offline: no model, no sandbox (src/lint.ts)
+    const args = argv.slice(1).map((a, i, all) => (/[/\\]|\.tsx?$/.test(a) && all[i - 1] !== "--profile" && all[i - 1] !== "--format" ? relative(root, resolve(process.cwd(), a)).split(sep).join("/") : a));
+    return lintCommand(ports, request(root, null, []), args, { out: (l) => console.log(l), err: (l) => console.error(l), message: (c) => MESSAGES[c] ?? "" });
+  }
   // init's code-first starter: with --example, or by default at a terminal; --no-example skips it. ponytail: a script
   // (CI, the checks) gets no starter unless it asks, so an existing `init && write src/` flow is unchanged.
   const example = argv[0] === "init" && !argv.includes("--no-example") && (argv.includes("--example") || process.stdout.isTTY === true);

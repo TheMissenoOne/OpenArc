@@ -937,9 +937,7 @@ export function plan(p: Project, req: CompileRequest, diagnostics: Diagnostic[])
     if (r.kind === "block" && !hasChecks(p.specs.get(r.root))) diagnostics.push(err("OARC-W041", { id }));
     else if (r.kind === "block") diagnostics.push(err("OARC-W040", { id }));
     else {
-      // palette: UI examples are interaction scripts. code-first: tests are the checks; with none, the examples' rule
-      const cfTests = r.spec.codeFirst?.tests.length ?? 0;
-      const thin = r.spec.ui || cfTests ? null : r.spec.codeFirst && !r.spec.examples.length ? "tests:0" : thinExamples(r.spec.examples);
+      const thin = thinDetail(r.spec);
       if (thin) diagnostics.push(err("OARC-W044", { id, detail: thin }));
       if (r.spec.codeFirst && !r.spec.intent) diagnostics.push(err("OARC-W023", { id, file: r.file })); // code-first: no JSDoc anywhere
     }
@@ -947,8 +945,13 @@ export function plan(p: Project, req: CompileRequest, diagnostics: Diagnostic[])
   return targets;
 }
 
+/** OARC-W044's detail for a function region's spec, or null (also `openarc lint`'s spec/thin-examples). palette: UI
+ *  examples are interaction scripts. code-first: tests are the checks; with none, the examples' rule. */
+export const thinDetail = (s: SpecInfo): string | null =>
+  s.ui || s.codeFirst?.tests.length ? null : s.codeFirst && !s.examples.length ? "tests:0" : thinExamples(s.examples);
+
 /** A region with behavioural checks: examples, a UI structure, or code-first tests. */
-const hasChecks = (s: SpecInfo | undefined): boolean => !!s && (s.examples.length > 0 || !!s.ui || (s.codeFirst?.tests.length ?? 0) > 0);
+export const hasChecks = (s: SpecInfo | undefined): boolean => !!s && (s.examples.length > 0 || !!s.ui || (s.codeFirst?.tests.length ?? 0) > 0);
 
 /** Any value inside `v` that is an edge case: "", [], {}, 0, a negative number, null, or a NaN/Infinity/undefined token. */
 const hasEdge = (v: Json): boolean =>
