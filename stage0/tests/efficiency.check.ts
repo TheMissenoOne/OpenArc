@@ -169,3 +169,31 @@ console.log("efficiency: ok");
   assert.ok(!quiet.some((l) => l.includes("timings")), "no timings without the flag");
   console.log("efficiency: timings ok");
 }
+
+// ── failed-region memory: a region that exhausted its attempts is skipped by later compiles until its fingerprint
+//    changes; naming it or --retry-failed retries it (multi-file evolution benchmark)
+{
+  const go = async (files: Record<string, string>, bodies: string[], extra: Partial<CompileRequest> = {}) => {
+    const logs: string[] = [];
+    const fake = fakePorts({ files, http: [TAGS, ...bodies.map(chat)] });
+    const res = await run({ ...(fake.instance as Ports), log: (l: string) => logs.push(l) }, { ...req, keepGoing: true, ...extra });
+    const snap = fake.snapshot() as Snap;
+    return { res, logs, files: snap.files, calls: chats(snap).length };
+  };
+  const first = await go(project(2), ['return "a";', 'return "b";']);
+  assert.equal(first.calls, 2);
+  assert.match(JSON.parse(first.files[".openarc/failed.json"]!)["ef.inc"].detail, /^OARC-E070 TS2322/);
+  const again = await go(first.files, []);
+  assert.equal(again.calls, 0, "same fingerprint: no model call");
+  assert.equal(again.res.exit, 1);
+  assert.match(again.res.diagnostics.find((d) => d.code === "OARC-E082")!.detail!, /^failed before: OARC-E070 TS2322/);
+  assert.ok(again.logs.some((l) => /ef\.inc: failed before with this spec and context; skipped/.test(l)));
+  const named = await go(first.files, ["return n + 1;"], { ids: ["ef.inc"] });
+  assert.equal(named.calls, 1, "naming the region retries it");
+  assert.equal(named.res.exit, 0, JSON.stringify(named.res.diagnostics));
+  assert.deepStrictEqual(JSON.parse(named.files[".openarc/failed.json"]!), {}, "a pass forgets the failure");
+  assert.equal((await go(first.files, ["return n + 1;"], { retryFailed: true })).calls, 1, "--retry-failed retries it");
+  const edited = { ...first.files, "src/ef.ts": first.files["src/ef.ts"]!.replace('"add one"', '"add one to n"') };
+  assert.equal((await go(edited, ["return n + 1;"])).calls, 1, "a spec change retries it");
+  console.log("efficiency: failed-region memory ok");
+}

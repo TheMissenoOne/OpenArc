@@ -4,7 +4,7 @@ import type { Json } from "open-arc";
 import type { Ports } from "../src/types.ts";
 import type { BackendConfig } from "../src/config.ts";
 import { parseConfig } from "../src/config.ts";
-import { complete, ANTHROPIC_VERSION, OUTPUT_SCHEMA } from "../src/backends.ts";
+import { complete, looping, ANTHROPIC_VERSION, OUTPUT_SCHEMA } from "../src/backends.ts";
 import { MODEL_OUTPUT_SCHEMA } from "../src/model.ts";
 
 const OUT = '{"body":"return 1;","imports":[]}';
@@ -172,6 +172,13 @@ const strictSchema = { ...schemaWith(["from", "names", "default"], { type: ["str
   })();
   assert.equal(await complete(rejectSecond.ports, { provider: "ollama", model: "m", maxContextTokens: 16384 }, "S", "U", env, 0), '{"body":"retur');
   assert.match(rejectSecond.logs[1]!, /retry with 6144 tokens failed \(HTTP 400: max_tokens too large\); using the reply truncated at 3072/);
+  // a truncated repetition loop is not retried with more room (multi-file evolution benchmark: 11k tokens, 210 s)
+  const loop = '{"body":"const ok = (w: string) => w !== \'a\'' + " && w !== 'on' && w !== 'at' && w !== 'to'".repeat(60);
+  const l = replies([JSON.stringify({ message: { role: "assistant", content: loop }, done: true, done_reason: "length" })]);
+  assert.equal(await complete(l.ports, { provider: "ollama", model: "m", maxContextTokens: 16384 }, "S", "U", env), loop);
+  assert.equal(l.caps.length, 1);
+  assert.match(l.logs[0]!, /in a repetition loop; not retrying with more/);
+  assert.ok(!looping("x".repeat(100)) && !looping('{"body":"' + Array.from({ length: 200 }, (_, i) => `v${i};`).join(" ")), "short or varied text is no loop");
 }
 // openai provider pointed at Ollama's /v1: keep_alive and reasoning_effort "none" (auto-detected or ollamaCompat)
 {

@@ -1531,7 +1531,21 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       stage = 1;
       return null;
     }
-    diagnostics.push(err("OARC-E082", { id, detail: `repeat: ${previous?.problems[0] ?? ""}`.slice(0, 200) }));
+    return exhausted(`repeat: ${previous?.problems[0] ?? ""}`);
+  };
+  // A region that exhausted its attempts (E082) is not retried by later compiles until its fingerprint changes (spec,
+  // context, model, templates), like watch's failed-region memory: the same inputs fail the same way on a small model,
+  // and every compile paid up to maxAttempts calls for it (multi-file evolution benchmark). Naming the id, or
+  // --retry-failed, retries it.
+  const failed = await readFailed(ports);
+  if (cached === null && r.fingerprint && failed[id]?.fingerprint === r.fingerprint && !req.retryFailed && !req.ids.includes(id)) {
+    ports.log(`  ${id}: failed before with this spec and context; skipped (name it, or pass --retry-failed, to try again)`);
+    diagnostics.push(err("OARC-E082", { id, detail: `failed before: ${failed[id]!.detail}`.slice(0, 200) }));
+    return giveUp();
+  }
+  const exhausted = async (detail: string) => {
+    diagnostics.push(err("OARC-E082", { id, detail: detail.slice(0, 200) }));
+    if (r.fingerprint) await writeFailed(ports, { ...(await readFailed(ports)), [id]: { fingerprint: r.fingerprint, detail: detail.slice(0, 200) } });
     return giveUp();
   };
 
@@ -1656,6 +1670,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
         ports.log(`  ${id}: unverified: no passing example of ${r.root} reaches this block (${result.verifiedBy.join(", ")})`);
       } else if (result.verifiedBy.includes("unreached")) ports.log(`  ${id}: provisional: ${result.verifiedBy.join(", ")} (no passing example reaches it while siblings are pending; the joint check decides)`);
       else ports.log(`  ${id}: ✓ ${result.verifiedBy.join(", ")}`);
+      if (failed[id]) { const { [id]: _, ...rest } = await readFailed(ports); await writeFailed(ports, rest); }
       return { candidate: { id, body, imports, verifiedBy: result.verifiedBy }, modelCalls };
     }
     ports.log(`  ${id}: ✗ ${result.problems[0]?.slice(0, 160)}`);
@@ -1669,9 +1684,20 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     // The last attempt switches to the fallback backend when one is configured.
     if (c.context.expandOnFailure && result.missingContext && level < (r.spec.sketch ? 1 : 2)) level = (level + 1) as ContextLevel;
   }
-  diagnostics.push(err("OARC-E082", { id, detail: previous?.problems[0]?.slice(0, 200) }));
-  return giveUp();
+  return exhausted(previous?.problems[0] ?? "");
 }
+
+/** Regions whose attempts were exhausted (E082), with the fingerprint they failed on (generate). */
+const FAILED = ".openarc/failed.json";
+type Failed = Record<string, { fingerprint: string; detail: string }>;
+async function readFailed(ports: Ports): Promise<Failed> {
+  try {
+    return JSON.parse((await ports.fs.read(FAILED)) ?? "{}") as Failed;
+  } catch {
+    return {};
+  }
+}
+const writeFailed = (ports: Ports, f: Failed) => ports.fs.write(FAILED, JSON.stringify(f, null, 2) + "\n");
 
 interface Verified {
   ok: boolean;
