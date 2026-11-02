@@ -70,12 +70,11 @@ const caller = async (text: string) => {
   const t = src(PENDING);
   assert.equal(scanMarkers(t), scanMarkers(t), "one scan per text");
   const pending = await caller(t);
-  assert.match(pending.context0, /\nconst verse: Verse \/\/ pending: no body yet [^\n]*; intent: the verse for n bottles\n/, "the pending callee: signature, note, intent");
+  assert.match(pending.context0, /\nconst verse: Verse\n/, "the pending callee: signature only (a note and intent cost tokens, no correctness)");
   const done = await caller(src(DONE));
   assert.match(done.context0, /\nconst verse: Verse\n/, "an implemented callee: signature only");
   assert.equal(done.fingerprint, pending.fingerprint, "the callee's commit leaves the caller's fingerprint alone");
   const edited = await caller(src(PENDING, "the verse for n bottles, plural"));
-  assert.match(edited.context0, /intent: the verse for n bottles, plural\n/, "the next analysis sees the edit");
   assert.notEqual(edited.fingerprint, pending.fingerprint, "the callee's intent is part of the caller's fingerprint");
 }
-console.log("watch-context: .tsx queued, reused analyses see edits, pending siblings by contract ok");
+console.log("watch-context: .tsx queued, reused analyses see edits, pending siblings by signature ok");

@@ -226,6 +226,6 @@ const staging = (ports: Ports) => {
   const before = await analyzed('export const a: S = (s) => arc.todo("fx.a");');
   const after = await analyzed("export const a: S = (s) => {\n  return s.toLowerCase() as string;\n};");
   assert.equal(after.fingerprint, before.fingerprint, "a's commit leaves b's fingerprint alone");
-  assert.ok(before.context0.includes("const a: S // pending: ") && after.context0.includes("const a: S\n"), "the prompt shows a, as pending until it has a body");
+  assert.ok(before.context0.includes("const a: S\n") && after.context0.includes("const a: S\n"), "the prompt shows a by signature, pending or not");
 }
 console.log("v063: calls allowlist (E098), coverage probe (W045), requested-import bindings, marker-comment strip, sibling-signature fingerprints ok");
