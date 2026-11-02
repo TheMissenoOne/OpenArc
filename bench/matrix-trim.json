@@ -1,0 +1,57 @@
+{
+  "_doc": "Issue #19 prompt-trim run: 0.9.2 + batch scope note, signature once, closed Rules trim (batch 7263b22). A and E-resample only; D control from results/2026-11-01-batch.",
+  "backend": {
+    "provider": "openai",
+    "baseUrl": "http://127.0.0.1:18080/v1",
+    "maxContextTokens": 8192,
+    "outputReserveTokens": 4096,
+    "openarc": {
+      "outputFormat": "json"
+    },
+    "info": {
+      "label": "llama-server-vulkan-json",
+      "engine": "llama.cpp llama-server (Vulkan)",
+      "version": "version: 0.8.0-dev (build 1, commit f3586e6)",
+      "quant": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+      "kvCacheType": "f16",
+      "ctx": 8192,
+      "flags": "-ngl 99 -c 8192 -fa on -np 1 --cache-ram 0 --reasoning off --jinja --no-webui --port 18080"
+    }
+  },
+  "memory": {
+    "minStartGb": 6,
+    "abortGb": 1.5
+  },
+  "configs": {
+    "A": {
+      "kind": "openarc",
+      "level": 0,
+      "label": "OpenArc (L0, repair; 0.9.2 + prompt trim)"
+    },
+    "E-resample": {
+      "kind": "openarc",
+      "level": 0,
+      "resample": true,
+      "label": "OpenArc, 3 independent samples, no feedback"
+    }
+  },
+  "runs": [
+    {
+      "model": "qwen2.5-coder-7b",
+      "configs": [
+        "A",
+        "E-resample"
+      ]
+    }
+  ],
+  "exercises": [
+    "acronym",
+    "binary-search",
+    "flatten-array",
+    "food-chain",
+    "relative-distance",
+    "spiral-matrix",
+    "transpose",
+    "wordy"
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "_doc": "backend applies to every config (OpenArc A/B/C and baseline D) of every run; a run's own `backend` overrides it field by field. provider: \"ollama\" (baseUrl = Ollama origin, native /api/chat) or \"openai\" (baseUrl = OpenAI-compatible base ending in /v1, e.g. llama-server). Both arms go through run.mjs's token-counting proxy to the same server. `openarc` is merged verbatim into OpenArc's backend block (preset, structuredOutput, think, ...). `info` is copied into every results row; fill it from the server you actually run. Thinking must be off server-side for openai backends: OpenArc's openai provider sends no thinking switch, so the baseline sends none either.",
+  "backend": {
+    "provider": "ollama",
+    "baseUrl": "http://127.0.0.1:11434",
+    "maxContextTokens": 8192,
+    "outputReserveTokens": 4096,
+    "openarc": { "think": false },
+    "info": { "label": "untuned-ollama", "engine": "ollama", "version": "0.40.5", "quant": "Q4_K_M (ollama default tags)", "kvCacheType": "f16 (ollama default)", "ctx": 8192 }
+  },
+  "backendTemplates": {
+    "llama-server": {
+      "provider": "openai",
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "maxContextTokens": 8192,
+      "outputReserveTokens": 4096,
+      "openarc": {},
+      "info": { "label": "tuned-llama-server", "engine": "llama.cpp llama-server", "version": "FILL: llama-server --version", "quant": "FILL: GGUF quant", "kvCacheType": "FILL: --cache-type-k/--cache-type-v", "ctx": 8192, "flags": "FILL: full llama-server command line" }
+    },
+    "tuned-ollama": {
+      "provider": "ollama",
+      "baseUrl": "http://127.0.0.1:11434",
+      "maxContextTokens": 8192,
+      "outputReserveTokens": 4096,
+      "openarc": { "think": false },
+      "info": { "label": "tuned-ollama", "engine": "ollama", "version": "FILL", "quant": "FILL", "kvCacheType": "FILL: OLLAMA_KV_CACHE_TYPE", "ctx": 8192, "flags": "FILL: OLLAMA_FLASH_ATTENTION etc." }
+    }
+  },
+  "memory": { "minStartGb": 6, "abortGb": 1, "_why": "a persistent llama-server keeps its weights resident, so MemAvailable may sit under 6 GB between tasks; lower minStartGb deliberately if so (Ollama-only runs unload instead)" },
+  "configs": {
+    "A": { "kind": "openarc", "level": 0, "label": "OpenArc L0 (contract only)" },
+    "B": { "kind": "openarc", "level": 1, "label": "OpenArc L1 (dependency-aware)" },
+    "C": { "kind": "openarc", "level": 2, "label": "OpenArc L2 (full file)" },
+    "D": { "kind": "baseline", "label": "Baseline: whole-file prompt" }
+  },
+  "runs": [
+    { "model": "qwen3.5:9b", "configs": ["A", "B", "C", "D"] },
+    { "model": "qwen2.5:7b-instruct-q4_K_M", "configs": ["A", "D"] }
+  ],
+  "disabledRuns": [
+    { "_why": "14B+ does not fit this machine (15 GB RAM, 8 GB VRAM). Move into `runs` on a bigger box.", "model": "qwen2.5-coder:14b", "configs": ["A", "D"] },
+    { "_why": "API slot: move into `runs` and export OPENROUTER_API_KEY. Tokens come from the response's `usage`.", "model": "qwen/qwen3-coder", "configs": ["A", "D"], "backend": { "provider": "openai", "baseUrl": "https://openrouter.ai/api/v1", "apiKeyEnv": "OPENROUTER_API_KEY", "maxContextTokens": 32768, "openarc": {}, "info": { "label": "openrouter", "engine": "openrouter" } } }
+  ],
+  "pilot": ["acronym", "flatten-array", "food-chain", "relative-distance", "wordy"]
+}

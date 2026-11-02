@@ -1,0 +1,9 @@
+{
+  "name": "openarc-bench",
+  "private": true,
+  "type": "module",
+  "description": "Benchmark harness for OpenArc on the ts-bench v1 (Exercism TypeScript) dataset",
+  "devDependencies": {
+    "expect": "29.7.0"
+  }
+}

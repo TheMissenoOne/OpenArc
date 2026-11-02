@@ -1,0 +1,296 @@
+{
+  "_note": "Signatures for ts-bench v1 exercises. Exercism stubs mostly say `unknown` or have no parameters, so a stub-derived F is useless as a contract. Each `type` below was written by hand from the call sites in the exercise's test file (argument and expectation shapes only, never a solution). OpenArc (A/B/C) and the baseline (D) get exactly the same typed signatures. `types` holds extra project-local types the signature needs. `sets` splits the function exercises into a dev set (prompt tuning) and a held-out test set (final check only). Rule, deterministic: each exercise gets one hand-assigned category (text: string transforms/ciphers/parsing; generate: verse/number-to-text output; numeric; structure: arrays/matrices/maps/search); within a category, exercises are taken in order of Exercism track difficulty (config.json), then slug; the nine evolve-multi exercises (acronym, binary-search, diamond, flatten-array, rectangles, spiral-matrix, transpose, variable-length-quantity, wordy) are pinned to dev, and each remaining exercise goes to whichever set has fewer non-pinned members of its category so far (ties to test). Never tune on `test`.",
+  "functions": {
+    "acronym": {
+      "fns": {
+        "parse": "(phrase: string) => string"
+      }
+    },
+    "all-your-base": {
+      "fns": {
+        "convert": "(digits: number[], inputBase: number, outputBase: number) => number[]"
+      }
+    },
+    "alphametics": {
+      "fns": {
+        "solve": "(puzzle: string) => Record<string, number> | undefined"
+      }
+    },
+    "atbash-cipher": {
+      "fns": {
+        "encode": "(plainText: string) => string",
+        "decode": "(cipherText: string) => string"
+      }
+    },
+    "binary-search": {
+      "fns": {
+        "find": "(haystack: number[], needle: number) => number"
+      }
+    },
+    "bob": {
+      "fns": {
+        "hey": "(message: string) => string"
+      }
+    },
+    "diamond": {
+      "fns": {
+        "makeDiamond": "(character: string) => string"
+      }
+    },
+    "etl": {
+      "types": "export type Legacy = Record<string, string[]>;",
+      "fns": {
+        "transform": "(old: Legacy) => Record<string, number>"
+      }
+    },
+    "flatten-array": {
+      "types": "export interface Nested extends Array<number | null | undefined | Nested> {}",
+      "fns": {
+        "flatten": "(input: Nested) => number[]"
+      },
+      "_note": "interface form on purpose: the equivalent `type Nested = Array<number | null | undefined | Nested>` makes open-arc 0.6.3's Example<F> fail with TS2589 on the spec itself (pilot run used it; see results/2026-10-31-untuned-ollama-pilot/summary.md)"
+    },
+    "food-chain": {
+      "fns": {
+        "verse": "(n: number) => string",
+        "verses": "(start: number, end: number) => string"
+      }
+    },
+    "house": {
+      "fns": {
+        "verse": "(n: number) => string[]",
+        "verses": "(start: number, end: number) => string[]"
+      }
+    },
+    "knapsack": {
+      "types": "export interface Item { weight: number; value: number }",
+      "fns": {
+        "maximumValue": "(input: { maximumWeight: number; items: Item[] }) => number"
+      }
+    },
+    "largest-series-product": {
+      "fns": {
+        "largestProduct": "(digits: string, span: number) => number"
+      }
+    },
+    "matching-brackets": {
+      "fns": {
+        "isPaired": "(input: string) => boolean"
+      }
+    },
+    "minesweeper": {
+      "fns": {
+        "annotate": "(field: string[]) => string[]"
+      }
+    },
+    "nucleotide-count": {
+      "types": "export interface NucleotideCounts { A: number; C: number; G: number; T: number }",
+      "fns": {
+        "nucleotideCounts": "(strand: string) => NucleotideCounts"
+      }
+    },
+    "ocr-numbers": {
+      "fns": {
+        "convert": "(grid: string) => string"
+      }
+    },
+    "perfect-numbers": {
+      "fns": {
+        "classify": "(n: number) => 'perfect' | 'abundant' | 'deficient'"
+      }
+    },
+    "phone-number": {
+      "fns": {
+        "clean": "(input: string) => string"
+      }
+    },
+    "pig-latin": {
+      "fns": {
+        "translate": "(phrase: string) => string"
+      }
+    },
+    "prime-factors": {
+      "fns": {
+        "calculatePrimeFactors": "(n: number) => number[]"
+      }
+    },
+    "protein-translation": {
+      "fns": {
+        "translate": "(rna: string) => string[]"
+      }
+    },
+    "rectangles": {
+      "fns": {
+        "count": "(rows: string[]) => number"
+      }
+    },
+    "relative-distance": {
+      "types": "export type FamilyTree = Record<string, string[]>;",
+      "fns": {
+        "degreesOfSeparation": "(familyTree: FamilyTree, personA: string, personB: string) => number"
+      }
+    },
+    "resistor-color-trio": {
+      "fns": {
+        "decodedResistorValue": "(colors: string[]) => string"
+      }
+    },
+    "roman-numerals": {
+      "fns": {
+        "toRoman": "(n: number) => string"
+      }
+    },
+    "rotational-cipher": {
+      "fns": {
+        "rotate": "(text: string, shift: number) => string"
+      }
+    },
+    "run-length-encoding": {
+      "fns": {
+        "encode": "(plain: string) => string",
+        "decode": "(encoded: string) => string"
+      }
+    },
+    "saddle-points": {
+      "types": "export interface Point { row: number; column: number }",
+      "fns": {
+        "saddlePoints": "(matrix: number[][]) => Point[]"
+      }
+    },
+    "say": {
+      "fns": {
+        "sayInEnglish": "(n: number) => string"
+      }
+    },
+    "secret-handshake": {
+      "fns": {
+        "commands": "(n: number) => string[]"
+      }
+    },
+    "sieve": {
+      "fns": {
+        "primes": "(limit: number) => number[]"
+      }
+    },
+    "spiral-matrix": {
+      "fns": {
+        "ofSize": "(size: number) => number[][]"
+      }
+    },
+    "sum-of-multiples": {
+      "fns": {
+        "sum": "(factors: number[], limit: number) => number"
+      }
+    },
+    "transpose": {
+      "fns": {
+        "transpose": "(rows: string[]) => string[]"
+      }
+    },
+    "twelve-days": {
+      "fns": {
+        "recite": "(startVerse: number, endVerse: number) => string"
+      }
+    },
+    "variable-length-quantity": {
+      "fns": {
+        "encode": "(numbers: number[]) => number[]",
+        "decode": "(bytes: number[]) => number[]"
+      }
+    },
+    "wordy": {
+      "fns": {
+        "answer": "(question: string) => number"
+      }
+    }
+  },
+  "skipped": {
+    "accumulate": "takes a callback argument; functions are not JSON-encodable, so no test is eligible",
+    "allergies": "class Allergies(score) with methods; mappable only through a wrapper class",
+    "anagram": "class Anagram(input).matches(...words): constructor state + method; mappable only through a hand-written wrapper class, which the baseline would not get",
+    "armstrong-numbers": "every expectation is toBeTruthy/toBeFalsy, which the recorder cannot turn into a value; 0 eligible tests",
+    "bank-account": "stateful class (open/close/deposit/withdraw/balance) with a custom error type; no function region fits",
+    "binary-search-tree": "recursive mutable class with getters; no function region fits",
+    "bowling": "stateful class (roll/score) whose behaviour depends on call history; examples are single calls with JSON args",
+    "circular-buffer": "stateful generic class with custom error types",
+    "clock": "value class with methods returning new instances and equals()",
+    "complex-numbers": "value class with getters and methods returning new instances; examples cannot construct class instances",
+    "connect": "class Board(board).winner(); mappable only through a wrapper class",
+    "crypto-square": "class Crypto(text).ciphertext getter; mappable only through a wrapper class",
+    "custom-set": "value class; tests chain methods on instances",
+    "difference-of-squares": "class Squares(n) with getters; mappable only through a wrapper class",
+    "diffie-hellman": "class DiffieHellman(p, g) with constructor validation and getPublicKey/getSecret methods; mappable only through a wrapper class",
+    "dnd-character": "static methods, one uses randomness (effect 'random'); tests are statistical",
+    "game-of-life": "stateful class (tick/state)",
+    "gigasecond": "class over Date objects; Date is not JSON-encodable",
+    "grade-school": "stateful class (add/roster/grade) whose behaviour depends on call history",
+    "grains": "expectations are bigint, not JSON-encodable",
+    "isbn-verifier": "every expectation is toBeTruthy/toBeFalsy; 0 eligible tests",
+    "kindergarten-garden": "class Garden(diagram, students) with methods; mappable only through a wrapper class",
+    "linked-list": "stateful mutable generic class",
+    "list-ops": "class List with callback-taking methods",
+    "luhn": "every expectation is toBeTruthy/toBeFalsy; 0 eligible tests",
+    "matrix": "class Matrix(string) with rows/columns getters; mappable only through a wrapper class",
+    "palindrome-products": "tests read .smallest/.largest properties off the result and sort factors with a helper; no single-call value expectation",
+    "pascals-triangle": "class Triangle(n) with rows/lastRow getters; mappable only through a wrapper class",
+    "pythagorean-triplet": "returns Triplet class instances compared via toArray(); not JSON-encodable",
+    "queen-attack": "class with constructor validation and getters",
+    "rational-numbers": "value class; tests chain methods on instances",
+    "react": "reactive closures (createInput/createComputed/createCallback) with shared module state; examples cannot express subscriptions",
+    "robot-name": "stateful class with global name registry and randomness; tests use beforeEach/afterEach",
+    "robot-simulator": "stateful class with custom error type; instructions mutate position",
+    "series": "class Series(string).slices(n); mappable only through a wrapper class",
+    "simple-cipher": "class with a random default key",
+    "strain": "takes a predicate callback; functions are not JSON-encodable",
+    "sublist": "class List with compare(); mappable only through a wrapper class",
+    "tournament": "class Tournament().tally(); mappable only through a wrapper class",
+    "triangle": "class Triangle(...sides) with getters; mappable only through a wrapper class",
+    "two-bucket": "class with constructor parameters and getters; mappable only through a wrapper class",
+    "word-count": "returns a Map, not JSON-encodable",
+    "word-search": "class WordSearch(grid).find(words); mappable only through a wrapper class"
+  },
+  "sets": {
+    "dev": [
+      "acronym",
+      "all-your-base",
+      "binary-search",
+      "diamond",
+      "flatten-array",
+      "food-chain",
+      "matching-brackets",
+      "minesweeper",
+      "phone-number",
+      "pig-latin",
+      "rectangles",
+      "spiral-matrix",
+      "sum-of-multiples",
+      "transpose",
+      "twelve-days",
+      "variable-length-quantity",
+      "wordy"
+    ],
+    "test": [
+      "alphametics",
+      "atbash-cipher",
+      "bob",
+      "etl",
+      "house",
+      "knapsack",
+      "largest-series-product",
+      "nucleotide-count",
+      "ocr-numbers",
+      "perfect-numbers",
+      "prime-factors",
+      "protein-translation",
+      "relative-distance",
+      "resistor-color-trio",
+      "roman-numerals",
+      "rotational-cipher",
+      "run-length-encoding",
+      "saddle-points",
+      "say",
+      "secret-handshake",
+      "sieve"
+    ]
+  }
+}
