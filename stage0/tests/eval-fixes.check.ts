@@ -148,15 +148,17 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
 
 // ── 4. thin examples and the oracle check
 {
-  assert.equal(engine.thinExamples([{ args: [1], expected: 2 }]), "examples:1");
-  assert.equal(engine.thinExamples([{ args: [1] }, { args: [2] }, { args: ["a"] }]), "no-edge-case");
+  assert.equal(engine.thinExamples([{ args: [1], expected: 2 }]), "examples:1; try: 0, a negative number");
+  assert.equal(engine.thinExamples([{ args: [1] }, { args: [2] }, { args: ["a"] }]), 'no-edge-case; try: 0, a negative number, ""');
+  assert.equal(engine.thinExamples([{ args: [["x"]] }]), 'examples:1; try: [], ""', "the suggestion follows the argument kinds");
+  assert.equal(engine.thinExamples([{ args: [[]] }]), "examples:1", "an edge case already there: no suggestion");
   for (const edge of [0, "", [], {}, null, -3, "$NaN"]) assert.equal(engine.thinExamples([{ args: [1] }, { args: [2] }, { args: [[{ k: edge }]] }]), null, `edge ${JSON.stringify(edge)}`);
   const w = fakePorts({ files: { "src/w.ts": 'import * as arc from "open-arc";\ntype F = (n: number) => number;\nexport const fSpec = arc.defineRegion<F>({ id: "w.f", intent: "x", examples: [{ args: [1], expected: 1 }] });\n' } });
   const p = await engine.parse(w.instance, req, []);
   await engine.analyze(w.instance, req, p, [], { offline: true });
   const ds: { code: string; detail?: string }[] = [];
   engine.plan(p, req, ds as never);
-  assert.deepStrictEqual(ds, [{ code: "OARC-W044", id: "w.f", detail: "examples:1" }]);
+  assert.deepStrictEqual(ds, [{ code: "OARC-W044", id: "w.f", detail: "examples:1; try: 0, a negative number" }]);
 
   // inputs: the examples first, then deterministic shape-preserving variations
   const exs = [{ args: [[[0, 0], [1, 0], [2, 0]], "speed", true] }, { args: [[[0, 1], [1, 1]], "power", false] }, { args: [{ $fake: "x" }] }];

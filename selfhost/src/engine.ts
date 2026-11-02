@@ -965,8 +965,20 @@ const hasEdge = (v: Json): boolean =>
 /** OARC-W044 detail when a function region's examples are thin: fewer than 3 (`examples:<n>`), or none with an edge-case
  *  argument (`no-edge-case`). ponytail: a syntactic heuristic on the args; a boundary like 5 in [1, 5] goes unnoticed. */
 export function thinExamples(examples: Json[]): string | null {
-  if (examples.length < 3) return `examples:${examples.length}`;
-  return examples.some((e) => hasEdge(((e as { args?: Json }).args ?? []) as Json)) ? null : "no-edge-case";
+  const args = examples.map((e) => ((e as { args?: Json }).args ?? []) as Json);
+  const edge = args.some(hasEdge);
+  const detail = examples.length < 3 ? `examples:${examples.length}` : edge ? null : "no-edge-case";
+  if (!detail || edge) return detail;
+  // the edge values matching the kinds of argument the examples already use, e.g. "no-edge-case; try: \"\", []"
+  const kinds = new Set<string>();
+  const walk = (v: Json): void => {
+    if (typeof v === "string") kinds.add('""');
+    else if (typeof v === "number") kinds.add("0").add("a negative number");
+    else if (Array.isArray(v)) (kinds.add("[]"), v.forEach(walk));
+    else if (v && typeof v === "object" && !("$fake" in v)) (kinds.add("{}"), Object.values(v).forEach(walk));
+  };
+  args.forEach((a) => (Array.isArray(a) ? a.forEach(walk) : walk(a)));
+  return kinds.size ? `${detail}; try: ${[...kinds].join(", ")}` : detail;
 }
 
 /** What graph, inspect and watch show: a compiler-owned region whose spec (or, when known, fingerprint) no longer matches

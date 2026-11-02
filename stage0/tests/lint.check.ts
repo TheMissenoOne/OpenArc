@@ -115,7 +115,7 @@ const brief = (fs: Finding[]) => fs.map((f) => `${f.severity} ${f.rule} ${f.id}`
 {
   const thin = 'import * as arc from "open-arc";\ntype Inc = (n: number) => number;\nexport const incSpec = arc.defineRegion<Inc>({ id: "t.inc", intent: "add one", examples: [{ args: [1], expected: 2 }] });\n';
   const r = await lint(["--format", "json"], undefined, { "src/t.ts": thin });
-  assert.deepStrictEqual(r.json().map((x) => [x.rule, x.message]), [["spec/thin-examples", "thin examples (examples:1): fewer than 3, or none with an edge case (empty, zero, negative, null)"]]);
+  assert.deepStrictEqual(r.json().map((x) => [x.rule, x.message]), [["spec/thin-examples", "thin examples (examples:1; try: 0, a negative number): fewer than 3, or none with an edge case (empty, zero, negative, null)"]]);
   assert.equal(r.exit, 0, "warnings alone pass");
   const e022 = await lint(["--format", "json"], undefined, { "src/u.ts": 'import * as arc from "open-arc";\n/** x */\nexport function f(n: number) {\n  return arc.todo();\n}\n' });
   assert.deepStrictEqual(e022.json().map((x) => [x.rule, x.severity, x.file, x.line]), [["OARC-E022", "error", "src/u.ts", 3]]);
