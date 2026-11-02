@@ -10,7 +10,7 @@ import type { Json } from "open-arc";
 import type { Diagnostic } from "./types.ts";
 import type { SpecInfo } from "./engine.ts";
 import { isValidId } from "./ids.ts";
-import { buildRegionTree, scanMarkers } from "./markers.ts";
+import { buildRegionTree, scanMarkers as scanText } from "./markers.ts";
 import * as plan from "./tests-plan.ts";
 
 export type CodeFirstKind = "function" | "method" | "getter" | "arrow";
@@ -48,6 +48,22 @@ export const idSegment = (s: string) => {
 };
 /** Files whose declarations can be regions: src/, not test files. */
 export const regionFile = (rel: string) => rel.startsWith("src/") && /\.tsx?$/.test(rel) && !/\.test\.tsx?$/.test(rel);
+/** Memoised by text: whole-file scans that analysis repeats per region, and watch on every run for files that did not
+ *  change. Results are shared: callers must not mutate them. ponytail: cleared at 512 texts, an LRU if ever needed. */
+const byText = <T>(f: (text: string) => T) => {
+  const seen = new Map<string, T>();
+  return (text: string): T => {
+    if (seen.has(text)) return seen.get(text)!;
+    if (seen.size >= 512) seen.clear();
+    const r = f(text);
+    seen.set(text, r);
+    return r;
+  };
+};
+export const scanMarkers = byText(scanText);
+/** A file's syntax tree, without types. */
+export const parseText = byText((text) => ts.createSourceFile("f.ts", text, ts.ScriptTarget.Latest, true));
+
 const lineOf = (sf: ts.SourceFile, pos: number) => sf.getLineAndCharacterOfPosition(pos).line; // 0-based
 const hasMod = (n: ts.Node, k: ts.SyntaxKind) => ts.canHaveModifiers(n) && (ts.getModifiers(n)?.some((m) => m.kind === k) ?? false);
 

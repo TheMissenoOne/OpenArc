@@ -7,6 +7,7 @@ import type { Json } from "open-arc";
 import { posix } from "node:path";
 import { canonicalJson, sha256Tagged } from "./hash.ts";
 import type { Diagnostic } from "./types.ts";
+import { parseText } from "./implicit.ts";
 
 export interface ConceptInfo {
   id: string;
@@ -171,7 +172,7 @@ export function extraSections(specs: Map<string, ContextSpec>, concepts: Map<str
   }
   // a prose region: the variants its file imports
   const lines: string[] = [];
-  const sf = ts.createSourceFile("i.ts", fileText, ts.ScriptTarget.Latest, true);
+  const sf = parseText(fileText);
   for (const d of sf.statements.filter(ts.isImportDeclaration)) {
     const spec = (d.moduleSpecifier as ts.StringLiteral).text;
     const nb = d.importClause?.namedBindings;

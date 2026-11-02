@@ -6,7 +6,7 @@ import type { Json } from "open-arc";
 import type { Candidate, ChildSpan, CompileRequest, Diagnostic, ImportDecl, ManifestView, Ports, RegionState, StagedFile } from "./types.ts";
 import type { BackendConfig, ContextLevel, OpenArcConfig } from "./config.ts";
 import { DEFAULT_OUTPUT_RESERVE, hostOf, parseConfig } from "./config.ts";
-import { scanMarkers, buildRegionTree } from "./markers.ts";
+import { buildRegionTree } from "./markers.ts";
 import { findDuplicateIds, isValidId } from "./ids.ts";
 import { canonicalJson, normalizeOwnedText, sha256Tagged } from "./hash.ts";
 import { detect } from "./ownership.ts";
@@ -28,6 +28,7 @@ import * as concepts from "./concepts.ts";
 import * as ui from "./ui.ts";
 // code-first (SPEC §3.8, §2.7): implicit regions, tests as code; hooks below are marked `code-first:`
 import * as implicit from "./implicit.ts";
+import { parseText, scanMarkers } from "./implicit.ts";
 import * as testsPlan from "./tests-plan.ts";
 
 const versionAt = (rel: string): string | undefined => {
@@ -222,6 +223,7 @@ export function specCallIds(rel: string, text: string): string[] {
 // ───────────────────────────── TypeScript program ─────────────────────────────
 
 const sfCache = new Map<string, ts.SourceFile>();
+let lastProgram: ts.Program | undefined; // the previous analysis, for structure reuse (watch analyses again after every change)
 
 function compilerOptions(root: string): ts.CompilerOptions {
   const cfg = ts.readConfigFile(`${root}/tsconfig.json`, ts.sys.readFile);
@@ -436,7 +438,8 @@ export async function scaffoldProject(ports: Ports, p: Project, diagnostics: Dia
 
 export async function analyze(ports: Ports, req: CompileRequest, p: Project, diagnostics: Diagnostic[], opts: { offline?: boolean } = {}): Promise<void> {
   if (srcFiles(p).length === 0) return;
-  p.program = makeProgram(p, p.files);
+  p.program = makeProgram(p, p.files, lastProgram);
+  lastProgram = p.program;
   const cfScaffolded = implicit.scaffoldPending(p, diagnostics); // code-first: markers inside pending bodies, in memory
   extractSpecs(p, p.program.getTypeChecker(), diagnostics);
   if (scaffoldInMemory(p, diagnostics).length || cfScaffolded) {
@@ -803,12 +806,23 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
   if (importLines.length && !(r.kind === "function" && arcOnly)) sections.push(["Imports already in the file", importLines.join("\n")]);
   let sameFileLines: string[] = [];
   if (r.kind === "function") {
-    // The prompt omits pending siblings (nothing to call yet); the stable view (fingerprint) lists them all, so a
-    // sibling going from pending to implemented doesn't change it.
-    const pendingSiblings = opts.stable ? [] : p.regions.filter((x) => x.file === r.file && x.pending && x.kind === "function").map((x) => x.spec.symbol);
-    const skip = new Set([s.symbol, ...pendingSiblings]);
-    const own = moduleSignatures(sf, checker, { skip });
-    sameFileLines = own.lines;
+    // Sibling regions by signature, pending or not, so a caller can be written against a callee that failed or isn't
+    // compiled yet. A pending one carries its intent and a note that its body isn't there; the stable view (fingerprint)
+    // carries every sibling's intent and no note, so a sibling going from pending to implemented doesn't change it.
+    const own = moduleSignatures(sf, checker, { skip: new Set([s.symbol]) });
+    const siblings = new Map(p.regions.filter((x) => x.file === r.file && x.kind === "function" && x.id !== r.id && !x.spec.codeFirst?.cls).map((x) => [x.spec.symbol, x]));
+    // a sibling accepted earlier in this run (its body replaced in p.accepted) can be called: no pending note
+    const now = p.accepted.get(r.file);
+    const marks = now ? scanMarkers(now).markers : [];
+    const at = (kind: string, id: string) => marks.find((m) => m.kind === kind && m.id === id)?.line;
+    const accepted = (x: RegionInfo) => at("begin", x.id) !== undefined && linesOf(now!).slice(at("begin", x.id), (at("end", x.id) ?? 0) - 1).join("\n") !== x.bodyLines.join("\n");
+    sameFileLines = own.lines.map((l) => {
+      const x = siblings.get(/^(?:const|function) ([\w$]+)/.exec(l)?.[1] ?? "");
+      if (!x || !(opts.stable || (x.pending && !accepted(x)))) return l;
+      const intent = x.spec.intent.replace(/\s+/g, " ").trim();
+      const notes = [...(opts.stable ? [] : ["pending: no body yet (it failed or isn't compiled); call it as its contract says"]), ...(intent ? [`intent: ${intent}`] : [])];
+      return notes.length ? `${l} // ${notes.join("; ")}` : l;
+    });
     typeRoots.push(...own.nodes);
   }
   if (level >= 1 || r.kind === "block") {
@@ -1064,7 +1078,7 @@ export function unwrapBody(body: string, kind: "function" | "block", tsx = false
 
 /** Names bound at module level in a file (imports and top-level declarations; only imports with `importsOnly`). */
 export function fileBindings(text: string, importsOnly = false): Set<string> {
-  const sf = ts.createSourceFile("f.ts", text, ts.ScriptTarget.Latest, true);
+  const sf = parseText(text);
   const out = new Set<string>();
   for (const st of sf.statements) {
     if (ts.isImportDeclaration(st) && st.importClause) {
@@ -1772,7 +1786,7 @@ interface Verified {
 
 /** Specifiers a file imports from. */
 const importedSpecifiers = (text: string) =>
-  new Set(ts.createSourceFile("i.ts", text, ts.ScriptTarget.Latest, true).statements.filter(ts.isImportDeclaration).map((d) => (d.moduleSpecifier as ts.StringLiteral).text));
+  new Set(parseText(text).statements.filter(ts.isImportDeclaration).map((d) => (d.moduleSpecifier as ts.StringLiteral).text));
 
 async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionInfo, body: string, imports: ImportDecl[]): Promise<Verified> {
   const ts0 = performance.now();
