@@ -129,6 +129,7 @@ export async function heldOut(dataset, ex, dir, solutionSrc, splitInfo, links = 
     passed: held.length - failed.length,
     total: held.length,
     allPass: failed.length === 0,
+    publicPass: splitInfo.tests.filter((t) => t.public).every((t) => byName.get(t.name)?.ok), // its own examples too
     failed: failed.map((n) => ({ name: n, msg: byName.get(n)?.msg?.slice(0, 200) ?? "no result (crash/timeout/load error)" })),
     loadError: r.lines.length === 0 ? r.stderr.slice(-600) : undefined,
     timedOut: r.timedOut || undefined,

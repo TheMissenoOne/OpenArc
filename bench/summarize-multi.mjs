@@ -18,9 +18,11 @@ const per = (r) => {
   const tokens = sum(st.map((s) => s.prompt + s.eval));
   const wall = sum(st.map((s) => s.wallMs)) / 1000;
   const good = sum(st.map((s) => Object.values(s.heldOut).filter((h) => h.allPass).length));
+  // strict: also passes its own public examples (rows before 2026-11-02 evening lack publicPass)
+  const strict = st.every((s) => Object.values(s.heldOut).every((h) => h.publicPass !== undefined)) ? sum(st.map((s) => Object.values(s.heldOut).filter((h) => h.allPass && h.publicPass).length)) : NaN;
   const last = st.at(-1)?.heldOut ?? {};
   return {
-    tokens, wall, calls: sum(st.map((s) => s.calls)), good,
+    tokens, wall, calls: sum(st.map((s) => s.calls)), good, strict,
     first: st[0] ? st[0].prompt + st[0].eval : NaN, later: sum(st.slice(1).map((s) => s.prompt + s.eval)),
     finalOk: Object.values(last).filter((h) => h.allPass).length, finalN: Object.keys(last).length,
     heldPassed: sum(Object.values(last).map((h) => h.passed)), heldTotal: sum(Object.values(last).map((h) => h.total)),
@@ -29,13 +31,13 @@ const per = (r) => {
   };
 };
 const lines = [
-  "| Arm | Seeds | Tokens | Wall s | Calls | Initial step tokens | Later steps tokens | Correct function-steps | Tokens per correct fn-step | Seconds per correct fn-step | Final functions passing | Final held-out tests | Regressions | Hand edit |",
-  "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+  "| Arm | Seeds | Tokens | Wall s | Calls | Initial step tokens | Later steps tokens | Correct function-steps | Strict (public too) | Tokens per correct fn-step | Seconds per correct fn-step | Final functions passing | Final held-out tests | Regressions | Hand edit |",
+  "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
 ];
 for (const c of arms) {
   const ps = rows.filter((r) => r.config === c).map(per);
   const m = (k) => mean(ps.map((p) => p[k]));
-  lines.push(`| ${c} | ${ps.length} | ${f0(m("tokens"))} | ${f1(m("wall"))} | ${f1(m("calls"))} | ${f0(m("first"))} | ${f0(m("later"))} | ${f1(m("good"))} | ${f0(m("tokens") / m("good"))} | ${f1(m("wall") / m("good"))} | ${f1(m("finalOk"))}/${f0(m("finalN"))} | ${f1(m("heldPassed"))}/${f0(m("heldTotal"))} | ${f1(m("regress"))} | ${ps.some((p) => p.handLost) ? "LOST" : "kept"}${ps.some((p) => p.errors) ? " (errors)" : ""} |`);
+  lines.push(`| ${c} | ${ps.length} | ${f0(m("tokens"))} | ${f1(m("wall"))} | ${f1(m("calls"))} | ${f0(m("first"))} | ${f0(m("later"))} | ${f1(m("good"))} | ${f1(m("strict"))} | ${f0(m("tokens") / m("good"))} | ${f1(m("wall") / m("good"))} | ${f1(m("finalOk"))}/${f0(m("finalN"))} | ${f1(m("heldPassed"))}/${f0(m("heldTotal"))} | ${f1(m("regress"))} | ${ps.some((p) => p.handLost) ? "LOST" : "kept"}${ps.some((p) => p.errors) ? " (errors)" : ""} |`);
 }
 const perSeed = ["", "Per seed: tokens / wall s / correct function-steps", "", `| Arm | ${[...new Set(rows.map((r) => r.seed))].map((s) => `s${s}`).join(" | ")} |`, `|---|${[...new Set(rows.map((r) => r.seed))].map(() => "---").join("|")}|`];
 for (const c of arms) perSeed.push(`| ${c} | ${[...new Set(rows.map((r) => r.seed))].map((s) => { const r = rows.find((x) => x.config === c && x.seed === s); if (!r) return "-"; const p = per(r); return `${p.tokens} / ${f1(p.wall)} / ${p.good}`; }).join(" | ")} |`);

@@ -99,7 +99,7 @@ async function score(dir, layout, path) {
   const out = {};
   for (const [f, exs] of Object.entries(layout)) for (const ex of exs) {
     const h = await heldOut(a.dataset, ex, join(dir, "heldout", ex), `export * from ${JSON.stringify(path(f))};\n`, splits[ex], { "open-arc": join(oaModules, "open-arc") });
-    out[ex] = { passed: h.passed, total: h.total, allPass: h.allPass, loadError: h.loadError?.slice(0, 300) };
+    out[ex] = { passed: h.passed, total: h.total, allPass: h.allPass, publicPass: h.publicPass, loadError: h.loadError?.slice(0, 300) };
   }
   return out;
 }
