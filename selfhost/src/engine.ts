@@ -200,13 +200,24 @@ export async function parse(ports: Ports, req: CompileRequest, diagnostics: Diag
     for (const d of d1) diagnostics.push({ ...d, file: rel });
     const { diagnostics: d2 } = buildRegionTree(markers);
     for (const d of d2) diagnostics.push({ ...d, file: rel });
-    for (const m of /\bdefine(?:Region|Block)\s*(?:<[^>]*>)?\s*\(\s*\{\s*id:\s*"([^"]+)"/g[Symbol.matchAll](text)) ids.push({ id: m[1]!, file: rel });
+    for (const id of specCallIds(rel, text)) ids.push({ id, file: rel });
   }
   diagnostics.push(...findDuplicateIds(ids));
   return project;
 }
 
 const srcFiles = (p: Project) => [...p.files].filter(([rel]) => rel.startsWith("src/"));
+
+/** The `id` of every top-level `const x = …defineRegion|defineBlock({ id: "…" })` (real calls: text in strings never counts). */
+export function specCallIds(rel: string, text: string): string[] {
+  if (!/\bdefine(Region|Block)\b/.test(text)) return [];
+  const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest);
+  return sf.statements.flatMap((st) => (ts.isVariableStatement(st) ? [...st.declarationList.declarations] : [])).flatMap((d) => {
+    const c = d.initializer, a = c && ts.isCallExpression(c) && /define(Region|Block)$/.test(c.expression.getText(sf)) ? c.arguments[0] : undefined;
+    const id = a && ts.isObjectLiteralExpression(a) ? a.properties.find((x): x is ts.PropertyAssignment => ts.isPropertyAssignment(x) && x.name.getText(sf) === "id") : undefined;
+    return id && ts.isStringLiteralLike(id.initializer) ? [id.initializer.text] : [];
+  });
+}
 
 // ───────────────────────────── TypeScript program ─────────────────────────────
 
@@ -1344,6 +1355,32 @@ function mergeImports(text: string, imports: ImportDecl[], typeOnly: (from: stri
   return lines.join("\n");
 }
 
+/** tsc errors in `rel` outside every region's markers, on the analysed program (pending bodies are placeholders): no
+ *  body can fix them, so they are spec errors (OARC-E070 detail `spec:TS<code>`), found before any model call. Unused
+ *  names are not counted (a placeholder doesn't use its parameters yet). When an import does not resolve (TS2307,
+ *  TS2792: dependencies not installed), only those are reported: the rest is their fallout. */
+export function specTypeErrors(p: Project, rel: string): Diagnostic[] {
+  const prog = p.program;
+  const sf = prog?.getSourceFile(abs(p, rel));
+  if (!prog || !sf) return [];
+  let memo = specErrMemo.get(prog);
+  if (!memo) specErrMemo.set(prog, (memo = new Map()));
+  if (memo.has(rel)) return memo.get(rel)!;
+  const ms = scanMarkers(sf.text).markers;
+  const spans = ms.filter((m) => m.kind === "begin").map((b) => [b.line, ms.find((e) => e.kind === "end" && e.id === b.id && e.line > b.line)?.line ?? b.line] as const);
+  const errs = [...prog.getSyntacticDiagnostics(sf), ...prog.getSemanticDiagnostics(sf)].flatMap((d) => {
+    if (d.category !== ts.DiagnosticCategory.Error || d.start === undefined || d.reportsUnnecessary) return [];
+    const line = sf.getLineAndCharacterOfPosition(d.start).line + 1;
+    return spans.some(([b, e]) => line >= b && line <= e) ? [] : [{ code: d.code, line }];
+  });
+  const missing = errs.filter((d) => MISSING_MODULE.has(d.code));
+  const out = (missing.length ? missing : errs).map((d) => err("OARC-E070", { file: rel, line: d.line, detail: `spec:TS${d.code}` }));
+  memo.set(rel, out);
+  return out;
+}
+const specErrMemo = new WeakMap<ts.Program, Map<string, Diagnostic[]>>();
+const MISSING_MODULE = new Set([2307, 2792]);
+
 // cannot find name/property/export, or the wrong import form for a module (TS2595/TS1259/TS2497): a context problem
 const TS_MISSING_CONTEXT = new Set([2304, 2305, 2339, 2551, 2552, 2724, 2595, 2614, 1259, 2497]);
 
@@ -1520,6 +1557,13 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     if (r.state === "compiler") diagnostics.push(err("OARC-W043", { id }));
     return { candidate: null, modelCalls };
   };
+  // a spec (or other code outside the regions) that fails tsc on its own fails every attempt the same way: no model call
+  const specErrs = [...new Set([r.file, r.spec.file])].flatMap((f) => specTypeErrors(p, f));
+  if (specErrs.length) {
+    for (const d of specErrs) diagnostics.push({ ...d, id });
+    ports.log(`  ${id}: tsc errors outside the regions (${specErrs.map((d) => `${d.file}:${d.line} ${d.detail}`).join(", ")}): fix the spec first; no model call`);
+    return giveUp();
+  }
   // The backend died mid-run (e.g. Ollama OOM-killed): after 3 consecutive E080s, stop calling it for the rest of the
   // run. Checked before each model call, not up front, so a cache hit still compiles.
   const backendDown = () => {
@@ -1802,6 +1846,11 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
     if (res.error) return fail([res.error]);
     const registry = res.failed.find((o) => o.name === "test-registry"); // code-first: no body can fix it: stop
     if (registry) return { ...fail([testsPlan.failureText(undefined, registry.name, registry.actual)]), stop: err("OARC-E090", { id: r.id, detail: `test-registry:${(registry.actual as { registry?: string }).registry ?? ""}` }) };
+    // every failure ends in a pending callee: inconclusive, and no body can change that: stop until the callee exists
+    if (res.complete && real.length && real.every(isPendingOutcome)) {
+      const waiting = [...new Set(real.map((o) => (o.actual as { pending: string }).pending))];
+      return { ...fail([`inconclusive: ${real.length} example(s) end in pending region(s) ${waiting.join(", ")}`]), stop: err("OARC-W042", { id: r.id, detail: `waiting:${waiting.join(",")}` }) };
+    }
     const conflict = sk && real.length ? sketch.sketchConflict(res.stdout ?? "", r.id) : null; // palette: OARC-E100
     if (conflict) return { ...fail([`OARC-E100 example "${conflict.detail}" fails without reaching any hole: the sketch decides it, so no fill can fix it`]), stop: conflict };
     if (real.length || (!res.complete && r.kind === "function"))

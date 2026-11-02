@@ -259,7 +259,36 @@ try {
   assert.equal(c.code, 1, c.out);
   assert.match(c.out, /OARC-E100 .*empty email is unknown/, c.out);
   assert.match(c.out, /1 model call\(s\)/, c.out);
-  console.log("sketch.check: real sandbox compile ok (repair, W045 per hole, E100)");
+
+  // a pending callee: every example ends in it, so the outcome is inconclusive (W042 waiting:<callee>), not E090, and
+  // no attempt is spent after the first (was 3 model calls, each an E090)
+  const CALLEE = `import * as arc from "open-arc";
+type Norm = (s: string) => string;
+export const normSpec = arc.defineRegion<Norm>({ id: "fx.norm", intent: "trim and lower-case s" });
+// @openarc:begin fx.norm
+export const norm: Norm = (s) => arc.todo("fx.norm");
+// @openarc:end fx.norm
+type Greet = (s: string) => string;
+export const greetSpec = arc.defineRegion<Greet>({
+  id: "fx.greet",
+  examples: [{ args: [" Ana "], expected: "hi ana" }, { args: ["BO"], expected: "hi bo" }],
+  sketch: (s) => {
+    const n = norm(s);
+    return arc.hole<string>("the greeting for n");
+  },
+});
+`;
+  writeFileSync(join(dir, "src", "fx.ts"), CALLEE);
+  rmSync(join(dir, ".openarc", "cache"), { recursive: true, force: true });
+  writeFileSync(join(dir, ".openarc", "manifest.json"), '{"schema":1,"regions":{}}');
+  replies = [reply({ 1: '"hi " + n' }), reply({ 1: '"hi " + n.trim()' }), reply({ 1: '"hi " + n.toLowerCase()' })];
+  chats = 0;
+  c = await cli(dir, "compile", "fx.greet");
+  assert.equal(c.code, 1, c.out);
+  assert.match(c.out, /OARC-W042 fx\.greet .*\[waiting:fx\.norm\]/, c.out);
+  assert.doesNotMatch(c.out, /OARC-E090|OARC-E082/, c.out);
+  assert.equal(chats, 1, "one model call: the repair loop stops on an inconclusive outcome");
+  console.log("sketch.check: real sandbox compile ok (repair, W045 per hole, E100, pending callee inconclusive)");
 } finally {
   server.close();
   rmSync(dir, { recursive: true, force: true });

@@ -165,7 +165,9 @@ export function sketchTypeErrors(program: ts.Program, root: string, specs: Itera
     const sf = program.getSourceFile(`${root}/${s.file}`);
     if (!sf) continue;
     const [from, to] = s.sketch.span;
-    for (const d of [...program.getSyntacticDiagnostics(sf), ...program.getSemanticDiagnostics(sf)])
+    const diags = [...program.getSyntacticDiagnostics(sf), ...program.getSemanticDiagnostics(sf)];
+    if (diags.some((d) => d.code === 2307 || d.code === 2792)) continue; // an import doesn't resolve (not installed?): the sketch's types are unknown; engine.specTypeErrors reports the import
+    for (const d of diags)
       if (d.category === ts.DiagnosticCategory.Error && d.start !== undefined && d.start >= from && d.start < to)
         out.push({ code: "OARC-E070", id: s.id, file: s.file, line: sf.getLineAndCharacterOfPosition(d.start).line + 1, detail: `sketch:TS${d.code}` });
   }

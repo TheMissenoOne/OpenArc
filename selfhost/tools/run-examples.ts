@@ -4,6 +4,7 @@
 // (with its fixtures) before its own examples, as the compiler does.
 import { readdirSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import ts from "typescript";
 import { runExamples, showValue } from "open-arc/harness";
 import type { AnyFn, ConceptSpec, RegionSpec } from "open-arc";
 import { expandLaws } from "../src/concepts.ts";
@@ -19,8 +20,15 @@ const files = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).flatMap((e) =>
     e.isDirectory() ? files(`${dir}/${e.name}`) : /\.ts$/.test(e.name) ? [`${dir}/${e.name}`] : []);
 const mods: Record<string, unknown>[] = [];
+// a spec file has a top-level `const x = …defineRegion|defineConcept(…)` (a concept may live in a file of its own); the
+// text alone is not enough: main.ts mentions defineRegion in a string, and importing it would run the CLI
+const isSpecFile = (file: string, text: string) => {
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest);
+  return sf.statements.some((st) => ts.isVariableStatement(st) && st.declarationList.declarations.some((d) => !!d.initializer && ts.isCallExpression(d.initializer) && /define(Region|Concept)$/.test(d.initializer.expression.getText(sf))));
+};
 for (const file of files(`${root}/src`)) {
-  if (!/\bdefine(Region|Concept)\b/.test(readFileSync(file, "utf8"))) continue; // a concept may live in a file of its own; main.ts would run the CLI
+  const text = readFileSync(file, "utf8");
+  if (!/\bdefine(Region|Concept)\b/.test(text) || !isSpecFile(file, text)) continue;
   mods.push(await import(pathToFileURL(file).href));
 }
 const concepts = new Map<string, ConceptSpec>();

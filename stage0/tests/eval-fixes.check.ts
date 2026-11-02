@@ -9,6 +9,7 @@
 // 5. Date.parse without 'clock'; scaffold without a clean tsc; COMPILER_VERSION from core/package.json.
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import type { Json } from "open-arc";
 import { runOracle } from "open-arc/harness";
 import type { CompileRequest, Ports } from "../src/types.ts";
@@ -233,4 +234,10 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
 
   assert.equal(engine.COMPILER_VERSION, JSON.parse(readFileSync(`${root}/core/package.json`, "utf8")).version);
 }
-console.log("eval-fixes: context/scope, retry variation, attempts dump, stale/W043, W044, oracle check, Date.parse, scaffold ok");
+// tools/run-examples.ts imports only spec files: src/main.ts mentions defineRegion in a string, and importing it ran the CLI
+// (a usage error on every run, issue #15)
+{
+  const r = spawnSync(process.execPath, ["--no-warnings", "tools/run-examples.ts", "no-such-prefix"], { cwd: root, encoding: "utf8" });
+  assert.deepStrictEqual([r.status, r.stdout.trim(), r.stderr], [0, "0 ok, 0 pending, 0 failing", ""]);
+}
+console.log("eval-fixes: context/scope, retry variation, attempts dump, stale/W043, W044, oracle check, Date.parse, scaffold, run-examples ok");

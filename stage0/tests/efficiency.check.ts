@@ -198,3 +198,25 @@ console.log("efficiency: ok");
   for (const bad of ["null", "[]", "{"]) assert.equal((await go({ ...project(1), ".openarc/failed.json": bad }, ["return n + 1;"])).res.exit, 0, `failed.json ${bad} is ignored`);
   console.log("efficiency: failed-region memory ok");
 }
+
+// ── a spec that fails tsc on its own (issue #15): OARC-E070 spec:TS<code> before any model call (was 3 calls, each E070)
+{
+  const cases: [string, string, string[]][] = [
+    ["a bad type in the signature", SRC.replace("(n: number)", "(n: Nmber)"), ["spec:TS2552"]],
+    ["a mistyped example", SRC.replace('intent: "add one"', 'intent: "add one", examples: [{ args: ["1"], expected: 2 }]'), ["spec:TS2322"]],
+    ["an import that doesn't resolve (only it is reported)", `import { two } from "./nope.ts";\n${SRC.replace("(n: number)", "(n: typeof two)")}`, ["spec:TS2307"]],
+  ];
+  for (const [what, src, details] of cases) {
+    const logs: string[] = [];
+    const fake = fakePorts({ files: { ...project(3), "src/ef.ts": src }, http: [TAGS, ...["return n + 1;", "return n + 2;", "return n + 3;"].map(chat)] });
+    const res = await run({ ...(fake.instance as Ports), log: (l: string) => logs.push(l) }, { ...req, keepGoing: true });
+    assert.equal(res.exit, 1, what);
+    assert.equal(res.modelCalls, 0, `${what}: no model call`);
+    assert.equal(chats(fake.snapshot() as Snap).length, 0, `${what}: no chat request`);
+    const e070 = res.diagnostics.filter((d) => d.code === "OARC-E070");
+    assert.deepStrictEqual(e070.map((d) => [d.id, d.file, d.detail]), details.map((d) => ["ef.inc", "src/ef.ts", d]), `${what}: ${JSON.stringify(res.diagnostics)}`);
+    assert.ok(!res.diagnostics.some((d) => d.code === "OARC-E082"), `${what}: not charged to the model as exhausted attempts`);
+    assert.ok(logs.some((l) => /ef\.inc: tsc errors outside the regions .*no model call/.test(l)), logs.join("\n"));
+  }
+  console.log("efficiency: spec type errors before the model ok");
+}

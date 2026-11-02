@@ -189,6 +189,40 @@ const brief = (fs: Finding[]) => fs.map((f) => `${f.severity} ${f.rule} ${f.id}`
   assert.deepStrictEqual(c.json(), []);
 }
 
+// ── 5. analysis errors: only what compile would stop on (issue #15)
+{
+  const G = (extra: string) => [
+    'import * as arc from "open-arc";',
+    "type G = (n: number) => number;",
+    'export const gSpec = arc.defineRegion<G>({ id: "g.g", intent: "n", examples: [{ args: [0], expected: 0 }, { args: [-1], expected: -1 }, { args: [2], expected: 2 }] });',
+    extra,
+    "",
+  ].join("\n");
+  const rules = async (files: Record<string, string>) => (await lint(["--format", "json"], undefined, files)).json().map((f) => `${f.rule} ${f.message}`);
+  // E011: spec text inside a string literal is not a spec (was a false duplicate id); a real duplicate still is
+  const inString = G(`export const fixture = 'export const xSpec = arc.defineRegion<G>({ id: "g.g", intent: "n" });';`);
+  assert.deepStrictEqual(await rules({ "src/g.ts": inString }), []);
+  const dup = await rules({ "src/g.ts": G(""), "src/h.ts": G("").replace("gSpec", "hSpec") });
+  assert.ok(dup.some((r) => r.startsWith("OARC-E011")), dup.join("\n"));
+  // a tsc error outside the regions (here in the spec's examples) is listed, as compile reports it before the model
+  const bad = await rules({ "src/g.ts": G("").replace("args: [2]", 'args: ["2"]') });
+  assert.ok(bad.some((r) => /^OARC-E070 .*\[spec:TS2322\]/.test(r)), bad.join("\n"));
+  // an import that doesn't resolve (dependencies not installed) is the environment: its fallout inside a sketch (implicit
+  // any parameters) is not a sketch error, and the import itself is not a spec finding (the palette in an uninstalled tree)
+  const sk = [
+    'import * as arc from "open-arc-not-installed";',
+    "type S = (s: string) => string;",
+    'export const sSpec = arc.defineRegion<S>({ id: "g.s", examples: [{ args: [""], expected: "" }, { args: ["a"], expected: "a" }, { args: ["0"], expected: "0" }], sketch: (s) => {',
+    '  return arc.hole<string>("s");',
+    "} });",
+    "// @openarc:begin g.s",
+    'export const s: S = (s) => arc.todo("g.s");',
+    "// @openarc:end g.s",
+    "",
+  ].join("\n");
+  assert.deepStrictEqual((await rules({ "src/s.ts": sk })).filter((r) => r.startsWith("OARC-")), []);
+}
+
 // ── 4. the command: text output, exit codes, selection, usage
 {
   const t = await lint(["a.pick"]);
