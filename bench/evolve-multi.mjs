@@ -15,7 +15,7 @@ import { readFile, writeFile, rm, mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { parseArgs } from "node:util";
 import { EXERCISES, instructions, split, run, heldOut, runTests, prepareTestDir } from "./lib/common.mjs";
-import { specSource, configFor } from "./lib/adapter.mjs";
+import { specSource, configFor, sketchFile } from "./lib/adapter.mjs";
 import { chat, extractCode } from "./lib/baseline.mjs";
 
 const { values: a } = parseArgs({ options: {
@@ -85,13 +85,13 @@ const fileOf = (layout, ex) => Object.keys(layout).find((f) => layout[f].include
 const touched = (st, layout) => [...new Set([...Object.keys(st.add ?? {}), ...(st.intent ? [fileOf(layout, st.intent)] : [])])];
 
 /** OpenArc spec part of one file (specSource per exercise, one open-arc import), intent changes applied. */
-function specs(exs, changed) {
-  let s = exs.map((ex) => specSource(a.dataset, ex, splits[ex]).replace('import * as arc from "open-arc";\n\n', "")).join("");
+function specs(exs, changed, cfg = {}) {
+  let s = exs.map((ex) => specSource(a.dataset, ex, splits[ex], { sketch: cfg.sketch }).replace('import * as arc from "open-arc";\n\n', "")).join("");
   for (const ex of changed) for (const f of fnsOf(ex)) s = s.replace(`"Exercise \\"${ex}\\": implement \`${f}\`."`, `"Exercise \\"${ex}\\": implement \`${f}\`. ${INTENT_CHANGE}"`);
   return `import * as arc from "open-arc";\n\n${s}`;
 }
 /** Keep generated bodies: rebuild the spec part, keep every region already in the file. */
-const respec = (file, exs, changed) => specs(exs, changed) + [...file.matchAll(/\/\/ @openarc:begin [\s\S]*?\/\/ @openarc:end \S+\n/g)].map((m) => m[0]).join("\n");
+const respec = (file, exs, changed, cfg) => specs(exs, changed, cfg) + [...file.matchAll(/\/\/ @openarc:begin [\s\S]*?\/\/ @openarc:end \S+\n/g)].map((m) => m[0]).join("\n");
 const handPresent = (src) => src.replace(/\s+/g, " ").includes(HAND.replace(/\s+/g, " "));
 
 /** held-out per exercise, against its file through a re-export */
@@ -128,7 +128,7 @@ async function armOpenArc(dir, cfg) {
       handApplied = edited !== g;
       await writeFile(path("grid"), edited);
     }
-    if (!st.none) for (const f of touched(st, layout)) await writeFile(path(f), respec(existsSync(path(f)) ? await readFile(path(f), "utf8") : "", layout[f], changed.filter((ex) => layout[f].includes(ex))));
+    if (!st.none) for (const f of touched(st, layout)) await writeFile(path(f), respec(existsSync(path(f)) ? await readFile(path(f), "utf8") : "", layout[f], changed.filter((ex) => layout[f].includes(ex)), cfg));
     const sc = await run([bin, "scaffold"], { cwd: dir, timeoutMs: 120_000 });
     const tc = Date.now();
     const comp = await run([bin, "compile", "--keep-going"], { cwd: dir, timeoutMs: 45 * 60_000 });
@@ -143,12 +143,14 @@ const SYSTEM = "You are an expert TypeScript programmer. Reply with the complete
 const show = (v) => JSON.stringify(v);
 const examplesOf = (ex) => fnsOf(ex).flatMap((f) => splits[ex].examples[f].map((e) => `- ${f}(${e.args.map(show).join(", ")}) returns ${show(e.expected)}`)).join("\n");
 const sigOf = (ex) => { const e = EXERCISES.functions[ex]; return `${e.types ? e.types + "\n\n" : ""}${fnsOf(ex).map((f) => { const [, p, r] = e.fns[f].match(/^\((.*)\) => (.*)$/); return `export function ${f}(${p}): ${r}`; }).join("\n")}`; };
-function changeText(st, f, layout) {
+function changeText(st, f, layout, cfg = {}) {
   const parts = [];
-  for (const ex of st.add?.[f] ?? []) parts.push(`Add ${fnsOf(ex).map((x) => `\`${x}\``).join(" and ")} (exercise "${ex}"):\n\n${instructions(a.dataset, ex)}\n\nSignature:\n\n\`\`\`ts\n${sigOf(ex)}\n\`\`\`\n\nExamples that must hold:\n${examplesOf(ex)}`);
+  for (const ex of st.add?.[f] ?? []) parts.push(`Add ${fnsOf(ex).map((x) => `\`${x}\``).join(" and ")} (exercise "${ex}"):\n\n${instructions(a.dataset, ex)}\n\nSignature:\n\n\`\`\`ts\n${sigOf(ex)}\n\`\`\`\n\nExamples that must hold:\n${examplesOf(ex)}${cfg.sketch ? outline(ex) : ""}`);
   if (st.intent && fileOf(layout, st.intent) === f) parts.push(`Change ${fnsOf(st.intent).map((x) => `\`${x}\``).join(" and ")}: ${INTENT_CHANGE}`);
   return parts.join("\n\n");
 }
+// the C-sketch outline for the plain prompt: the same sketch file, arc.hole("...") read as "fill in: ..."
+const outline = (ex) => { const s = fnsOf(ex).filter((f) => existsSync(sketchFile(ex, f))).map((f) => `\`${f}\` = ${readFileSync(sketchFile(ex, f), "utf8").trim()}`); return s.length ? `\n\nImplementation outline (each arc.hole("...") is a gap you fill as described):\n\n\`\`\`ts\n${s.join("\n\n")}\n\`\`\`` : ""; };
 const publicTests = (f, exs) => {
   const dec = `const d = (v: any): any => v === "$undefined" ? undefined : v === "$NaN" ? NaN : v === "$Infinity" ? Infinity : v === "$-Infinity" ? -Infinity : Array.isArray(v) ? v.map(d) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, d(x)])) : v;\n`;
   let s = `import { it, expect } from '@jest/globals'\nimport * as m from './${f}.ts'\n${dec}`;
@@ -156,7 +158,7 @@ const publicTests = (f, exs) => {
   return s;
 };
 
-async function armD(dir) {
+async function armD(dir, cfg = {}) {
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
   await prepareTestDir(dir);
@@ -169,8 +171,8 @@ async function armD(dir) {
     let attempts = 0, publicPass = true;
     if (!st.none) for (const f of touched(st, layout)) {
       const ask = code[f]
-        ? `Current file \`${f}.ts\`:\n\n\`\`\`ts\n${code[f]}\n\`\`\`\n\n${changeText(st, f, layout)}\n\nKeep everything else unchanged. Return the complete file.`
-        : `Write the TypeScript file \`${f}.ts\`.\n\n${changeText(st, f, layout)}\n\nReturn the complete file.`;
+        ? `Current file \`${f}.ts\`:\n\n\`\`\`ts\n${code[f]}\n\`\`\`\n\n${changeText(st, f, layout, cfg)}\n\nKeep everything else unchanged. Return the complete file.`
+        : `Write the TypeScript file \`${f}.ts\`.\n\n${changeText(st, f, layout, cfg)}\n\nReturn the complete file.`;
       const messages = [{ role: "system", content: SYSTEM }, { role: "user", content: ask }];
       await writeFile(join(dir, `${f}.public.test.ts`), publicTests(f, layout[f]));
       const total = layout[f].reduce((n, ex) => n + fnsOf(ex).reduce((k, fn) => k + splits[ex].examples[fn].length, 0), 0);
@@ -201,7 +203,7 @@ for (const c of configs) {
   const dir = join(a.work, "evolve-multi", `s${seed}`, c);
   const t0 = Date.now();
   let steps;
-  try { steps = cfg.kind === "baseline" ? await armD(dir) : await armOpenArc(dir, cfg); } catch (e) { steps = [{ error: String(e?.stack ?? e).slice(0, 1000) }]; }
+  try { steps = cfg.kind === "baseline" ? await armD(dir, cfg) : await armOpenArc(dir, cfg); } catch (e) { steps = [{ error: String(e?.stack ?? e).slice(0, 1000) }]; }
   steps.forEach((s, i) => {
     if (!s.heldOut) return;
     s.correct = Object.values(s.heldOut).every((h) => h.allPass);

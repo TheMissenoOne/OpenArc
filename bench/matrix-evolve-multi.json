@@ -51,6 +51,16 @@
     "D": {
       "kind": "baseline",
       "label": "plain prompt per file"
+    },
+    "S": {
+      "kind": "openarc",
+      "sketch": true,
+      "label": "OpenArc with sketches"
+    },
+    "DS": {
+      "kind": "baseline",
+      "sketch": true,
+      "label": "plain prompt with the sketch as an outline"
     }
   },
   "runs": [
