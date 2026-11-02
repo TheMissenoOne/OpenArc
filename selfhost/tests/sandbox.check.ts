@@ -95,7 +95,7 @@ try {
       assert.match(g.out, /demo\.inc +F compiler/, g.out);
       console.log(`sandbox.check: ${iso} -> ${want}: doctor ok, compile ok (attempt 1 failed its examples in the sandbox)`);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); // Windows: the sandboxed node can hold a handle briefly (main.ts does the same)
     }
   }
 } finally {
