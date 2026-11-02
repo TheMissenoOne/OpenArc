@@ -140,7 +140,7 @@ for (const calls of ['"engine.parse"', '["engine.parse", 1]', "null"]) {
 {
   assert.deepStrictEqual(presetConfig("openrouter", "qwen/qwen3-coder"), {
     version: 1, backends: { openrouter: { provider: "openrouter" as never, model: "qwen/qwen3-coder", maxContextTokens: 32768 } },
-    compilation: { defaultBackend: "openrouter", maxAttempts: 3, context: { initialLevel: 0, expandOnFailure: true } },
+    compilation: { defaultBackend: "openrouter", maxAttempts: 2, context: { initialLevel: 0, expandOnFailure: true } },
   });
   const local = presetConfig("local", "qwen3.5:9b", "http://127.0.0.1:11434/v1");
   assert.ok(typeof local !== "string" && parseConfig(JSON.stringify(local)).config.backends.local!.ollamaCompat === true);

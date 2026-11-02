@@ -95,7 +95,9 @@ try {
       assert.match(g.out, /demo\.inc +F compiler/, g.out);
       console.log(`sandbox.check: ${iso} -> ${want}: doctor ok, compile ok (attempt 1 failed its examples in the sandbox)`);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      // Windows: the sandboxed node can hold a handle on the temp dir for seconds after it exits (EPERM even after
+      // retries). Cleanup is not what this test checks, so log it there and leave the dir to the OS.
+      try { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); } catch (e) { if (process.platform !== "win32") throw e; console.log(`sandbox.check: note: could not remove ${dir}: ${(e as Error).message}`); }
     }
   }
 } finally {

@@ -12,7 +12,7 @@ The project chooses its agents, the same way `package.json` chooses dependencies
   "compilation": {
     "defaultBackend": "local",
     "fallbackBackend": "big",
-    "maxAttempts": 3,
+    "maxAttempts": 2,
     "context": { "initialLevel": 0, "expandOnFailure": true }
   },
   "regions": {
