@@ -807,21 +807,15 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
   let sameFileLines: string[] = [];
   if (r.kind === "function") {
     // Sibling regions by signature, pending or not, so a caller can be written against a callee that failed or isn't
-    // compiled yet. A pending one carries its intent and a note that its body isn't there; the stable view (fingerprint)
-    // carries every sibling's intent and no note, so a sibling going from pending to implemented doesn't change it.
+    // compiled yet. The prompt shows the signature alone: a "pending" note plus the sibling's intent (0.10.0) cost 21% more
+    // tokens on the evolution benchmark for the same correctness (bench/results/2026-11-02-evolve-multi-context). The
+    // stable view (fingerprint) carries every sibling's intent, so an edited callee intent still re-queues its callers.
     const own = moduleSignatures(sf, checker, { skip: new Set([s.symbol]) });
     const siblings = new Map(p.regions.filter((x) => x.file === r.file && x.kind === "function" && x.id !== r.id && !x.spec.codeFirst?.cls).map((x) => [x.spec.symbol, x]));
-    // a sibling accepted earlier in this run (its body replaced in p.accepted) can be called: no pending note
-    const now = p.accepted.get(r.file);
-    const marks = now ? scanMarkers(now).markers : [];
-    const at = (kind: string, id: string) => marks.find((m) => m.kind === kind && m.id === id)?.line;
-    const accepted = (x: RegionInfo) => at("begin", x.id) !== undefined && linesOf(now!).slice(at("begin", x.id), (at("end", x.id) ?? 0) - 1).join("\n") !== x.bodyLines.join("\n");
     sameFileLines = own.lines.map((l) => {
-      const x = siblings.get(/^(?:const|function) ([\w$]+)/.exec(l)?.[1] ?? "");
-      if (!x || !(opts.stable || (x.pending && !accepted(x)))) return l;
-      const intent = x.spec.intent.replace(/\s+/g, " ").trim();
-      const notes = [...(opts.stable ? [] : ["pending: no body yet (it failed or isn't compiled); call it as its contract says"]), ...(intent ? [`intent: ${intent}`] : [])];
-      return notes.length ? `${l} // ${notes.join("; ")}` : l;
+      const x = opts.stable ? siblings.get(/^(?:const|function) ([\w$]+)/.exec(l)?.[1] ?? "") : undefined;
+      const intent = x?.spec.intent.replace(/\s+/g, " ").trim();
+      return intent ? `${l} // intent: ${intent}` : l;
     });
     typeRoots.push(...own.nodes);
   }

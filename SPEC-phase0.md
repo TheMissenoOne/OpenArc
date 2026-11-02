@@ -568,7 +568,7 @@ A region is compiled the way a unit test isolates code. The model receives a det
 
 | Level | Adds |
 |---|---|
-| L0 contract | the fixed signature; the file's import lines; the signatures of the file's other top-level values (helpers and regions; a pending region, one that failed or isn't compiled yet, is followed by `// pending: no body yet …; intent: <its intent>` so a caller can be written against its contract); the **type closure** of all of these (every project-local type alias or interface reachable from them, verbatim); intent, effects, allowed imports, examples, rules |
+| L0 contract | the fixed signature; the file's import lines; the signatures of the file's other top-level values (helpers and regions, pending or implemented, by signature, so a caller can be written against a callee that failed or isn't compiled yet; the 0.10.0 `// pending: … intent: …` annotation was dropped: 21% more tokens on the evolution benchmark for the same correctness); the **type closure** of all of these (every project-local type alias or interface reachable from them, verbatim); intent, effects, allowed imports, examples, rules |
 | L1 dependencies | exported value signatures of local modules the file imports or the spec lists in `deps`, plus their type closure |
 | L2 source | the region's whole file |
 
