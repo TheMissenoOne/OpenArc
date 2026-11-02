@@ -820,7 +820,9 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
       const x = siblings.get(/^(?:const|function) ([\w$]+)/.exec(l)?.[1] ?? "");
       if (!x || !(opts.stable || (x.pending && !accepted(x)))) return l;
       const intent = x.spec.intent.replace(/\s+/g, " ").trim();
-      const notes = [...(opts.stable ? [] : ["pending: no body yet (it failed or isn't compiled); call it as its contract says"]), ...(intent ? [`intent: ${intent}`] : [])];
+      // the stable view (fingerprint) is the same whatever pendingSiblings says: only the prompt changes
+      const mode = opts.stable ? "intent" : p.config.compilation.context.pendingSiblings ?? "full";
+      const notes = [...(mode === "full" ? ["pending: no body yet (it failed or isn't compiled); call it as its contract says"] : []), ...(intent && mode !== "signature" ? [`intent: ${intent}`] : [])];
       return notes.length ? `${l} // ${notes.join("; ")}` : l;
     });
     typeRoots.push(...own.nodes);
@@ -864,6 +866,11 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
     sections[0]![1] += `\n// ${s.typeText} = ${s.signature}`;
   if (types.length) sections.push([TYPES_HEADING, types.join("\n\n")]);
   if (sameFileLines.length) sections.push([`Already in ${r.file} (call these, don't re-implement them)`, sameFileLines.join("\n")]);
+  // compilation.context.previousBody (experimental): the region's spec changed and it still has the body the old spec
+  // verified; show it as a starting point. Not in the stable view, so it never moves the fingerprint.
+  const was = p.manifest.regions[r.id];
+  const prev = !opts.stable && p.config.compilation.context.previousBody && was && was.specHash !== r.specHash ? currentBody(r) : null;
+  if (prev) sections.push(["Previous body (it passed the previous version of this spec; where they differ, the spec wins)", prev]);
   if (helperLines.length) sections.push(["Helpers you may call", helperLines.join("\n\n")]);
   if (!cf) sections.push(["Intent", s.intent || "(none)"]);
   else if (cf.extraIntent) sections.push(["More intent", cf.extraIntent]); // code-first: the JSDoc is in the contract
@@ -1314,7 +1321,12 @@ export function spliceRegion(text: string, id: string, newBody: string[]): strin
  *  of regionBodyLines, accepted only if it round-trips exactly. null = nothing to keep. */
 function keptBody(p: Project, r: RegionInfo): string | null {
   const m = p.manifest.regions[r.id];
-  if (r.state !== "compiler" || r.pending || r.childSpans.length || !m || m.specHash !== r.specHash) return null;
+  return !m || m.specHash !== r.specHash ? null : currentBody(r);
+}
+
+/** A compiler-owned, implemented region's body as the model would write it, or null when it doesn't round-trip. */
+function currentBody(r: RegionInfo): string | null {
+  if (r.state !== "compiler" || r.pending || r.childSpans.length) return null;
   const plain = r.kind === "block" || !!r.spec.codeFirst;
   const inner = plain ? r.bodyLines : r.bodyLines.slice(1, -1);
   const pad = plain ? r.indent : `${r.indent}  `;

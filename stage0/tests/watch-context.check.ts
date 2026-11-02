@@ -13,6 +13,7 @@ import { memoryFs } from "./fakes/fs.memory.ts";
 import * as engine from "../src/engine.ts";
 import { scanMarkers } from "../src/implicit.ts";
 import { classifyPath } from "../src/watch.ts";
+import { parseConfig } from "../src/config.ts";
 import { createWatcher } from "../src/watcher.ts";
 
 const root = process.cwd(); // the stage0 checkout, so "open-arc" and "typescript" resolve for the type checker
@@ -78,4 +79,41 @@ const caller = async (text: string) => {
   assert.match(edited.context0, /intent: the verse for n bottles, plural\n/, "the next analysis sees the edit");
   assert.notEqual(edited.fingerprint, pending.fingerprint, "the callee's intent is part of the caller's fingerprint");
 }
-console.log("watch-context: .tsx queued, reused analyses see edits, pending siblings by contract ok");
+// ── 4. compilation.context options (experimental): pendingSiblings and previousBody change the prompt, never the fingerprint
+const withCfg = async (text: string, context: object) => {
+  const cfg = { version: 1, backends: { local: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192 } }, compilation: { defaultBackend: "local", context } };
+  const ports = fakePorts({ files: { "src/song.ts": text, "openarc.config.json": JSON.stringify(cfg) }, http: [TAGS] }).instance as Ports;
+  const p = await engine.parse(ports, req, []);
+  await engine.analyze(ports, req, p, []);
+  return p;
+};
+{
+  const at = async (mode: string) => (await withCfg(src(PENDING), { pendingSiblings: mode })).regions.find((r) => r.id === "song.verses")!;
+  const [full, intent, sig] = [await at("full"), await at("intent"), await at("signature")];
+  assert.match(full.context0, /\nconst verse: Verse \/\/ pending: no body yet [^\n]*; intent: the verse for n bottles\n/);
+  assert.match(intent.context0, /\nconst verse: Verse \/\/ intent: the verse for n bottles\n/, "intent: no pending note");
+  assert.match(sig.context0, /\nconst verse: Verse\n/, "signature: the line alone");
+  assert.equal(new Set([full.fingerprint, intent.fingerprint, sig.fingerprint]).size, 1, "the mode is not in the fingerprint");
+
+  // previousBody: a compiler-owned body whose spec changed is shown; an unchanged spec or the option off shows nothing
+  const p = await withCfg(src(DONE), { previousBody: true });
+  const r = p.regions.find((x) => x.id === "song.verse")!;
+  const heading = "Previous body (it passed the previous version";
+  r.state = "compiler";
+  p.manifest.regions[r.id] = { ...p.manifest.regions[r.id], specHash: r.specHash } as never;
+  assert.ok(!engine.buildContext(p, r, 0, p.config.backends.local!).includes(heading), "spec unchanged: no previous body");
+  p.manifest.regions[r.id] = { ...p.manifest.regions[r.id], specHash: "sha256:old" } as never;
+  const shown = engine.buildContext(p, r, 0, p.config.backends.local!);
+  assert.ok(shown.includes(heading) && shown.includes("return `${n} bottles`;"), "spec changed: the old body is shown");
+  assert.ok(!engine.buildContext(p, r, 0, p.config.backends.local!, { stable: true }).includes(heading), "never in the stable view");
+  const off = await withCfg(src(DONE), {});
+  const r2 = off.regions.find((x) => x.id === "song.verse")!;
+  r2.state = "compiler";
+  off.manifest.regions[r2.id] = { specHash: "sha256:old" } as never;
+  assert.ok(!engine.buildContext(off, r2, 0, off.config.backends.local!).includes(heading), "off by default");
+}
+const cfgOf = (context: object) => parseConfig(JSON.stringify({ version: 1, backends: { l: { provider: "ollama", model: "m", maxContextTokens: 8192 } }, compilation: { context } }));
+assert.match(cfgOf({ pendingSiblings: "some" }).error ?? "", /pendingSiblings must be one of full, intent, signature/);
+assert.match(cfgOf({ previousBody: "yes" }).error ?? "", /previousBody must be true or false/);
+assert.deepStrictEqual([cfgOf({}).config.compilation.context.pendingSiblings, cfgOf({}).config.compilation.context.previousBody], ["full", false]);
+console.log("watch-context: .tsx queued, reused analyses see edits, pending siblings by contract, context options ok");

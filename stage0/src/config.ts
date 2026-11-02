@@ -8,6 +8,8 @@ import { ISOLATIONS, type Isolation } from "./isolation.ts";
  *  1 + dependencies: signatures and type closures of helpers in `deps` and of file imports
  *  2 + source: the region's whole file and the source of its local deps */
 export type ContextLevel = 0 | 1 | 2;
+export const PENDING_SIBLINGS = ["full", "intent", "signature"] as const;
+export type PendingSiblings = (typeof PENDING_SIBLINGS)[number];
 
 /** "ollama": local /api/chat. "openai": any OpenAI-compatible Chat Completions endpoint (OpenAI, OpenRouter, Groq,
  *  LM Studio, vLLM, llama.cpp server). "anthropic": the Claude Messages API. */
@@ -57,7 +59,10 @@ export interface OpenArcConfig {
     defaultBackend: string;
     fallbackBackend?: string;
     maxAttempts: number;
-    context: { initialLevel: ContextLevel; expandOnFailure: boolean };
+    // pendingSiblings: how a sibling with no body yet appears in the prompt ("full": signature, pending note and intent;
+    // "intent": signature and intent; "signature": the signature only, as before 0.10.0). previousBody: when a region's
+    // spec changed, show its previous body in the prompt. Both experimental; neither is part of the fingerprint.
+    context: { initialLevel: ContextLevel; expandOnFailure: boolean; pendingSiblings?: PendingSiblings; previousBody?: boolean };
     /** "file" (default): a file's pending, independent function regions share ONE first request (engine.batchReply);
      *  each reply is still verified and committed per region, and retries go region by region. "off": one request per region. */
     batch?: "file" | "off";
@@ -179,6 +184,11 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
   }
   if (c.compilation?.batch !== undefined && !["file", "off"].includes(c.compilation.batch))
     return { config: DEFAULT_CONFIG, error: 'openarc.config.json: compilation.batch must be "file" or "off"' };
+  const cx = c.compilation?.context;
+  if (cx?.pendingSiblings !== undefined && !PENDING_SIBLINGS.includes(cx.pendingSiblings))
+    return { config: DEFAULT_CONFIG, error: `openarc.config.json: compilation.context.pendingSiblings must be one of ${PENDING_SIBLINGS.join(", ")}` };
+  if (cx?.previousBody !== undefined && typeof cx.previousBody !== "boolean")
+    return { config: DEFAULT_CONFIG, error: "openarc.config.json: compilation.context.previousBody must be true or false" };
   const lint = lintProblem(c.lint);
   if (lint) return { config: DEFAULT_CONFIG, error: `openarc.config.json: lint: ${lint}` };
   for (const [id, r] of Object.entries(c.regions ?? {}))
@@ -193,7 +203,12 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
         fallbackBackend: c.compilation?.fallbackBackend,
         maxAttempts: c.compilation?.maxAttempts ?? 3,
         batch: c.compilation?.batch ?? "file",
-        context: { initialLevel: c.compilation?.context?.initialLevel ?? 0, expandOnFailure: c.compilation?.context?.expandOnFailure ?? true },
+        context: {
+          initialLevel: c.compilation?.context?.initialLevel ?? 0,
+          expandOnFailure: c.compilation?.context?.expandOnFailure ?? true,
+          pendingSiblings: c.compilation?.context?.pendingSiblings ?? "full",
+          previousBody: c.compilation?.context?.previousBody ?? false,
+        },
       },
     },
   };

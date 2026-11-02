@@ -97,6 +97,8 @@ Export the key in your shell (`export OPENROUTER_API_KEY=...`) and point `compil
 | `backends.*.host` | Ollama: default `http://127.0.0.1:11434` |
 | `backends.*.outputFormat` | how the model returns a body: `"json"` (default) or `"code"`. See [Output format](#output-format) |
 | `compilation.fallbackBackend` | used on the last attempt |
+| `compilation.context.pendingSiblings` | experimental: how a same-file sibling with no body yet appears in the prompt. `"full"` (default): its signature, a "pending: no body yet" note and its intent. `"intent"`: signature and intent. `"signature"`: the signature alone (before 0.10.0). Changes only the prompt, never the fingerprint |
+| `compilation.context.previousBody` | experimental, default false: when a compiler-owned region's spec changed, the prompt also shows the body the previous spec verified, as a starting point (the spec wins where they differ). Never in the fingerprint |
 | `regions.<id>` | per-region `backend`, starting `contextLevel` and `outputFormat` (wins over the backend's) |
 | `sandbox.nodeBin` | defaults to the running Node's resolved binary (never a version-manager shim) |
 | `ui.dom` | `"jsdom"` (since 0.8.0): opt into UI regions. Their checks render components in the project's own `jsdom`, `react` and `react-dom` (devDependencies). Without it a UI region is `OARC-E092` (`dom:not-configured`). See "UI specs" in [[Writing Specs]] |
