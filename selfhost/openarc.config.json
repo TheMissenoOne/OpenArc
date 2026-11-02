@@ -2,11 +2,11 @@
   "version": 1,
   "backends": {
     "local": {
-      "provider": "ollama",
-      "model": "qwen3.5:9b",
+      "provider": "openai",
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "model": "qwen2.5-coder-7b",
       "maxContextTokens": 8192,
-      "think": false,
-      "keepAlive": "10m"
+      "outputFormat": "json"
     }
   },
   "compilation": {
