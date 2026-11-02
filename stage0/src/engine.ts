@@ -2578,3 +2578,129 @@ export const showDisagreement = (d: { name: string; actual?: Json }): string => 
   const a = (d.actual ?? {}) as { args?: Json; got?: Json; oracle?: Json };
   return `${d.name} args ${showValue(a.args)}: got ${showValue(a.got)}; oracle ${showValue(a.oracle)}`;
 };
+
+// ───────────────────────────── check --mutants ─────────────────────────────
+
+export const MUTANT_OPS = ["trivial", "boundary", "comparison", "constant", "logical"] as const;
+export type MutantOp = (typeof MUTANT_OPS)[number];
+/** One single-change variant of a region's body: `text` replaces the file's [start, end). */
+export interface Mutant { op: MutantOp; line: number; before: string; after: string; start: number; end: number; text: string }
+export interface MutantReport { id: string; skipped?: string; total: number; killed: number; survived: Mutant[]; invalid: number; timeout: number }
+
+const SWAPS: Record<string, [MutantOp, ts.SyntaxKind][]> = {
+  ">=": [["boundary", ts.SyntaxKind.GreaterThanToken], ["comparison", ts.SyntaxKind.LessThanToken]],
+  ">": [["boundary", ts.SyntaxKind.GreaterThanEqualsToken], ["comparison", ts.SyntaxKind.LessThanEqualsToken]],
+  "<=": [["boundary", ts.SyntaxKind.LessThanToken], ["comparison", ts.SyntaxKind.GreaterThanToken]],
+  "<": [["boundary", ts.SyntaxKind.LessThanEqualsToken], ["comparison", ts.SyntaxKind.GreaterThanEqualsToken]],
+  "===": [["comparison", ts.SyntaxKind.ExclamationEqualsEqualsToken]],
+  "!==": [["comparison", ts.SyntaxKind.EqualsEqualsEqualsToken]],
+  "==": [["comparison", ts.SyntaxKind.ExclamationEqualsToken]],
+  "!=": [["comparison", ts.SyntaxKind.EqualsEqualsToken]],
+  "&&": [["logical", ts.SyntaxKind.BarBarToken]],
+  "||": [["logical", ts.SyntaxKind.AmpersandAmpersandToken]],
+};
+const UNUSED = new Set([6133, 6138, 6192, 6196, 6198, 6205]); // a trivial body leaves parameters unused: not a type error of the mutant
+
+/** Deterministic mutants of function region `r` in its file `sf`: trivial bodies first (the return type's zero value,
+ *  the first argument when assignable, a throw), then single operator changes in source order; at most `cap`. */
+export function mutants(r: RegionInfo, sf: ts.SourceFile, checker: ts.TypeChecker, ops: readonly MutantOp[] = MUTANT_OPS, cap = 40): Mutant[] {
+  const text = sf.text, ls = linesOf(text);
+  const b = ls.findIndex((l) => l.trim() === `// @openarc:begin ${r.id}`);
+  const e = ls.findIndex((l, i) => i > b && l.trim() === `// @openarc:end ${r.id}`);
+  if (b < 0 || e < 0) return [];
+  const from = sf.getPositionOfLineAndCharacter(b + 1, 0), to = sf.getPositionOfLineAndCharacter(e, 0);
+  // code-first: the markers sit inside the function (the innermost one around them); classic: the function sits inside them
+  const cf = !!r.spec.codeFirst;
+  let fn: ts.FunctionLikeDeclaration | undefined;
+  const find = (n: ts.Node): void => {
+    if (ts.isFunctionLike(n) && "body" in n && n.body && (cf ? n.getStart() <= from && n.end >= to : !fn && n.getStart() >= from && n.end <= to)) fn = n as ts.FunctionLikeDeclaration;
+    if (cf || !fn) n.forEachChild(find);
+  };
+  find(sf);
+  if (!fn?.body) return [];
+  const [lo, hi] = cf ? [from, to] : [fn.body.getStart(), fn.body.end];
+  const lineAt = (pos: number) => sf.getLineAndCharacterOfPosition(pos).line + 1;
+  const show = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 80);
+  const out: Mutant[] = [];
+  if (ops.includes("trivial")) {
+    const ctx = ts.isArrowFunction(fn) || ts.isFunctionExpression(fn) ? checker.getContextualType(fn)?.getCallSignatures()[0] : undefined;
+    const sig = ctx ?? checker.getSignatureFromDeclaration(fn);
+    let ret = sig ? checker.getReturnTypeOfSignature(sig) : undefined;
+    if (ret && fn.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)) ret = checker.getAwaitedType(ret) ?? ret;
+    const F = ts.TypeFlags, zeros = new Set<string>();
+    for (const t of ret ? (ret.isUnion() ? ret.types : [ret]) : []) {
+      const f = t.flags;
+      zeros.add(f & F.StringLike ? '""' : f & F.NumberLike ? "0" : f & F.BooleanLike ? "false" : f & F.Null ? "null" : f & (F.Undefined | F.Void) ? "undefined"
+        : checker.isArrayType(t) || checker.isTupleType(t) ? "[]" : f & F.Object ? "{}" : "");
+    }
+    zeros.delete("");
+    const p0 = fn.parameters[0];
+    const echo = ret && p0 && ts.isIdentifier(p0.name) && checker.isTypeAssignableTo(checker.getTypeAtLocation(p0), ret) ? [p0.name.text] : [];
+    for (const s of [...[...zeros, ...echo].map((v) => `return ${v};`), 'throw new Error("openarc mutant");'])
+      out.push({ op: "trivial", line: lineAt(lo), before: "body", after: s, start: lo, end: hi, text: cf ? `${r.indent}${s}\n` : `{ ${s} }` });
+  }
+  const at = (op: MutantOp, node: ts.Node, start: number, end: number, rep: string) => {
+    if (!ops.includes(op)) return;
+    const s = node.getStart();
+    out.push({ op, line: lineAt(start), before: show(text.slice(s, node.end)), after: show(text.slice(s, start) + rep + text.slice(end, node.end)), start, end, text: rep });
+  };
+  const walk = (n: ts.Node): void => {
+    if (n.end <= lo || n.getStart() >= hi || ts.isTypeNode(n)) return;
+    if (n.getStart() >= lo && n.end <= hi) {
+      if (ts.isBinaryExpression(n)) for (const [op, kind] of SWAPS[n.operatorToken.getText()] ?? []) at(op, n, n.operatorToken.getStart(), n.operatorToken.end, ts.tokenToString(kind)!);
+      else if (ts.isNumericLiteral(n)) for (const d of [1, -1]) at("constant", ts.isBinaryExpression(n.parent) ? n.parent : n, n.getStart(), n.end, String(Number(n.text) + d)); // shown with its comparison
+      else if (ts.isPrefixUnaryExpression(n) && n.operator === ts.SyntaxKind.ExclamationToken) at("logical", n, n.getStart(), n.operand.getStart(), "");
+    }
+    n.forEachChild(walk);
+  };
+  walk(fn.body);
+  return out.slice(0, cap);
+}
+
+/** `openarc check <id> --mutants`: an implemented function region whose examples/tests pass (the baseline), then each
+ *  mutant through tsc and the same sandbox run. Killed: an example or test fails. No model call; only the stage is written. */
+export async function mutantCheck(ports: Ports, req: CompileRequest, p: Project, id: string, ops: readonly MutantOp[] = MUTANT_OPS): Promise<MutantReport> {
+  const rep: MutantReport = { id, total: 0, killed: 0, survived: [], invalid: 0, timeout: 0 };
+  const skip = (why: string): MutantReport => ({ ...rep, skipped: why });
+  const r = p.regions.find((x) => x.id === id);
+  if (!r || r.kind !== "function") return skip("no function region");
+  if (r.pending || (r.state !== "compiler" && r.state !== "developer")) return skip(`not implemented (${r.pending ? "pending" : r.state})`);
+  if (!hasChecks(p.specs.get(r.root))) return skip("no examples or tests");
+  const base = p.files.get(r.file)!;
+  const run = async (text: string): Promise<string> => {
+    const overlay = new Map(p.files).set(r.file, text);
+    const prog = makeProgram(p, overlay, p.program);
+    const sf = prog.getSourceFile(abs(p, r.file))!;
+    if ([...prog.getSyntacticDiagnostics(sf), ...prog.getSemanticDiagnostics(sf)].some((d) => d.category === ts.DiagnosticCategory.Error && !UNUSED.has(d.code))) return "invalid";
+    const res = await runSandbox(ports, req, p, r.id, overlay);
+    if (res.error?.startsWith("OARC-E091")) return "timeout";
+    if (res.error?.startsWith("OARC-E092")) return res.error; // no sandbox: nothing can be measured
+    return res.error || !res.complete || res.failed.length ? "killed" : "survived";
+  };
+  try {
+    const baseline = await run(base);
+    if (baseline !== "survived") return skip(`baseline does not pass: ${baseline === "killed" ? "an example or test fails" : baseline}`);
+    const sf = p.program!.getSourceFile(abs(p, r.file))!;
+    for (const m of mutants(r, sf, p.program!.getTypeChecker(), ops)) {
+      const v = await run(base.slice(0, m.start) + m.text + base.slice(m.end));
+      rep.total++;
+      if (v === "survived") rep.survived.push(m);
+      else if (v === "killed" || v === "invalid" || v === "timeout") rep[v]++;
+      else return skip(v);
+    }
+    return rep;
+  } finally {
+    if (p.sandboxDir) await ports.fs.remove(p.sandboxDir);
+    p.sandboxDir = undefined;
+  }
+}
+
+/** The report: one summary line per region, then one line per surviving mutant. */
+export function mutantLines(m: MutantReport): string[] {
+  if (m.skipped) return [`mutants ${m.id}: skipped (${m.skipped})`];
+  const scored = m.killed + m.survived.length;
+  return [
+    `mutants ${m.id}: killed ${m.killed}/${scored} (${scored ? Math.round((100 * m.killed) / scored) : 100}%), survived ${m.survived.length}, invalid ${m.invalid}, timeout ${m.timeout}`,
+    ...m.survived.map((s) => `survived ${m.id} line ${s.line}: ${s.before} -> ${s.after}${s.op === "trivial" ? " (the examples pass for a vacuous body)" : ""}`),
+  ];
+}

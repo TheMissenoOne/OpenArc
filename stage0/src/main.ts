@@ -259,7 +259,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc freeze|release <id> | resolve <id> --keep|--regen|--unlink
        openarc extract <file> [--function <name>] [--id <id>] [--style code|region]
        openarc migrate <id>
-       openarc check <id> --oracle <module>#<export>
+       openarc check <id> --oracle <module>#<export> | check <ids...> --mutants [--operators trivial,boundary,comparison,constant,logical]
        openarc doctor
        ${LINT_USAGE}`;
 
@@ -306,6 +306,7 @@ function initConfig(args: string[]): OpenArcConfig | string {
 
 /** `openarc check <id> --oracle <module>#<export>`: differential test against a reference implementation (engine.oracleCheck). */
 async function check(root: string, ports: Ports, args: string[]): Promise<number> {
+  if (args.includes("--mutants")) return mutantsCmd(root, ports, args);
   const [id, flag, oracle] = args;
   if (!id || flag !== "--oracle" || !oracle || args.length !== 3) {
     console.error(`openarc: bad-flag\n\n${USAGE}`);
@@ -323,6 +324,25 @@ async function check(root: string, ports: Ports, args: string[]): Promise<number
   if (res.disagreements.length > 20) console.log(`  … ${res.disagreements.length - 20} more`);
   console.log(`check ${id} against ${oracle}: ${res.agreed}/${res.inputs} inputs agree (seed 1)${res.error ? `; ${res.error}` : ""}`);
   return res.disagreements.length || res.error ? 1 : 0;
+}
+
+/** `openarc check <ids...> --mutants [--operators a,b]`: how many mutants each region's examples/tests kill
+ *  (engine.mutantCheck). A report: exit 0 whatever survives, 2 on a bad flag. */
+async function mutantsCmd(root: string, ports: Ports, args: string[]): Promise<number> {
+  const at = args.indexOf("--operators");
+  const ops = at < 0 ? [...engine.MUTANT_OPS] : (args[at + 1] ?? "").split(",");
+  const ids = args.filter((a, i) => a !== "--mutants" && (at < 0 || (i !== at && i !== at + 1)));
+  if (!ids.length || ids.some((a) => a.startsWith("--")) || ops.some((o) => !(engine.MUTANT_OPS as readonly string[]).includes(o))) {
+    console.error(`openarc: bad-flag\n\n${USAGE}`);
+    return 2;
+  }
+  const project = await analyzeOffline(ports, root, []);
+  if (!isolationNotice(project.config)) return 1;
+  for (const id of ids) {
+    const rep = await engine.mutantCheck(ports, request(root, project, [id]), project, id, ops as engine.MutantOp[]);
+    for (const line of engine.mutantLines(rep)) console.log(line);
+  }
+  return 0;
 }
 
 /** `openarc migrate <id>`: one classic function region to code-first (src/migrate.ts), locked and transactional. */
