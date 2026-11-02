@@ -6,7 +6,7 @@ The project chooses its agents, the same way `package.json` chooses dependencies
 {
   "version": 1,
   "backends": {
-    "local": { "provider": "ollama", "model": "qwen3.5:9b", "maxContextTokens": 8192, "think": false },
+    "local": { "provider": "openai", "baseUrl": "http://127.0.0.1:8080/v1", "model": "qwen2.5-coder-7b", "maxContextTokens": 8192 },
     "big":   { "provider": "ollama", "model": "qwen2.5-coder:14b", "maxContextTokens": 32768 }
   },
   "compilation": {
@@ -79,9 +79,9 @@ Local OpenAI-compatible servers (no key):
 "ollamav1": { "provider": "local", "baseUrl": "http://127.0.0.1:11434/v1", "model": "qwen3.5:9b", "maxContextTokens": 8192 }
 ```
 
-llama.cpp's `llama-server` serves whatever model it was started with, so `model` is only a label there; LM Studio and vLLM need the id they list at `/v1/models`. vLLM rejects a request whose prompt plus `max_tokens` exceeds the window; OpenArc bounds the output cap by the room left after the prompt. For Ollama itself the native `ollama` provider is still the default (`openarc init` without `--backend`); it checks that the model is pulled and records its digest.
+llama.cpp's `llama-server` serves whatever model it was started with, so `model` is only a label there; LM Studio and vLLM need the id they list at `/v1/models`. vLLM rejects a request whose prompt plus `max_tokens` exceeds the window; OpenArc bounds the output cap by the room left after the prompt. llama.cpp's `llama-server` is the recommended local engine and the default (`openarc init` without `--backend`, and the built-in config): on the benchmark machine (Vulkan build) it generated about 10% faster than Ollama (ROCm) on the same model with 1.4 GB less VRAM (see `docs/local-llm-setup.md`). For Ollama, use `openarc init --backend ollama`: the native `ollama` provider checks that the model is pulled and records its digest.
 
-Export the key in your shell (`export OPENROUTER_API_KEY=...`) and point `compilation.defaultBackend` or `fallbackBackend` at the backend. A common setup is a local Ollama default with a hosted model as `fallbackBackend`.
+Export the key in your shell (`export OPENROUTER_API_KEY=...`) and point `compilation.defaultBackend` or `fallbackBackend` at the backend. A common setup is a local llama-server default with a hosted model as `fallbackBackend`.
 
 ## Fields
 

@@ -6,7 +6,7 @@
 |---|---|
 | OS | Linux, macOS or Windows (since 0.7.0) |
 | Node | ≥ 23.6 (runs `.ts` directly); Node 25+ recommended, see below |
-| Models | [Ollama](https://ollama.com), e.g. `ollama pull qwen3.5:9b` |
+| Models | [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` (recommended), e.g. `llama-server -m Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf --port 8080 -c 8192 -fa on --jinja`. Any OpenAI-compatible server or [Ollama](https://ollama.com) also works |
 
 Examples always run in a sandbox. How strong it is depends on the OS (`sandbox.isolation` in [[Configuration]]):
 
@@ -36,7 +36,7 @@ npx openarc init
 
 OpenArc projects are ES modules. Recent npm versions make `npm init -y` write `"type": "commonjs"`, and `tsc` then fails with `TS1295`; that is what `npm pkg set type=module` above fixes. If you skip it, `init` prints a one-line note telling you to run it. It never edits your `package.json` itself.
 
-Plain `init` sets up local Ollama (`qwen3.5:9b`). To start with another backend instead, pass a preset, for example `npx openarc init --backend openrouter --model qwen/qwen3-coder` or `npx openarc init --backend local --model qwen3.5-9b --base-url http://127.0.0.1:8080/v1`. Then `npx openarc backends test` sends one small request and tells you whether the backend works, and why not if it doesn't. See "Connecting providers" in [[Configuration]].
+Plain `init` sets up a local llama.cpp `llama-server` at `http://127.0.0.1:8080/v1` (`qwen2.5-coder-7b`; the name is only a label there). To start with another backend instead, pass a preset, for example `npx openarc init --backend openrouter --model qwen/qwen3-coder` or `npx openarc init --backend ollama` (Ollama, `qwen3.5:9b`). Then `npx openarc backends test` sends one small request and tells you whether the backend works, and why not if it doesn't. See "Connecting providers" in [[Configuration]].
 
 ## Your first region
 

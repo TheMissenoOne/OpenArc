@@ -479,7 +479,7 @@ async function main(argv: string[]): Promise<number> {
       const stale = res.diagnostics.filter((d) => d.code === "OARC-W043").map((d) => d.id);
       if (stale.length) console.error(`stale: ${stale.join(", ")} keep${stale.length === 1 ? "s" : ""} a body that does not satisfy the current spec`);
       if (res.diagnostics.some((d) => d.code === "OARC-E080" && d.detail === "stopped:3-consecutive"))
-        console.error("stopped early: the model backend failed 3 times in a row, so the remaining regions were skipped. Is it running (Ollama OOM-killed?)");
+        console.error("stopped early: the model backend failed 3 times in a row, so the remaining regions were skipped. Is it running (llama-server stopped, or Ollama OOM-killed?)");
       const exit = stale.length ? 1 : res.exit;
       console.error(`done: exit ${exit} · ${res.modelCalls} model call(s) · ${((Date.now() - t0) / 1000).toFixed(1)}s`);
       return exit;

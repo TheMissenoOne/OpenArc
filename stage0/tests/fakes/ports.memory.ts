@@ -12,7 +12,12 @@ type ProcResult = Awaited<ReturnType<ProcPort["run"]>>;
 
 export default defineFake<Ports>((init) => {
   const i = (init ?? {}) as { files?: Record<string, string>; http?: string[]; proc?: ProcResult[]; view?: string[] };
-  const { fs, files } = memoryFs({ files: i.files ?? {} });
+  // The fake model server answers Ollama's /api/chat, so a project with no config gets an Ollama one (the built-in
+  // default is llama-server). A test that passes its own openarc.config.json keeps it.
+  const ollama = '{"version":1,"backends":{"local":{"provider":"ollama","model":"qwen3.5:9b","maxContextTokens":8192,"think":false}},"compilation":{"defaultBackend":"local","maxAttempts":3,"context":{"initialLevel":0,"expandOnFailure":true}}}\n';
+  const { fs, files } = memoryFs({ files: { "openarc.config.json": ollama, ...i.files } });
+  const hideDefault = (j: Json): Json =>
+    Object.fromEntries(Object.entries(j as Record<string, string>).filter(([k, v]) => !(k === "openarc.config.json" && v === ollama && !i.files?.[k])));
   const { http, requests } = stubHttp({ responses: i.http ?? [] });
   const procQueue = [...(i.proc ?? [])];
   const runs: string[][] = [];
@@ -38,5 +43,5 @@ export default defineFake<Ports>((init) => {
     requests: requests.map((r) => r.url),
     runs: runs.map((a) => a[0] ?? ""),
   });
-  return { instance: ports, snapshot: () => (view ? summary(view) : { files: sortedFiles(files), requests, runs }) };
+  return { instance: ports, snapshot: () => (view ? summary(view) : { files: hideDefault(sortedFiles(files)), requests, runs }) };
 });

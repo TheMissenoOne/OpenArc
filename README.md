@@ -69,7 +69,7 @@ npx openarc compile          # or keep it running: npx openarc watch
 | `migrate` | Turn one `defineRegion` region into code-first form, keeping its id, ownership and provenance | [Code First](docs/wiki/Code-First.md#migrating-a-defineregion-region) |
 | `check --oracle` | Compare a compiled region with a reference implementation on seeded inputs | [CLI Reference](docs/wiki/CLI-Reference.md) |
 | `doctor` | Show the sandbox tier on this machine and prove it with one sandboxed example | [Safety Model](docs/wiki/Safety-Model.md) |
-| Providers | Ollama by default; `init --backend openrouter\|openai\|anthropic\|local`; `backends test` sends one request | [Configuration](docs/wiki/Configuration.md) |
+| Providers | local llama.cpp `llama-server` by default (Ollama: `init --backend ollama`); `init --backend openrouter\|openai\|anthropic\|local`; `backends test` sends one request | [Configuration](docs/wiki/Configuration.md) |
 | Output formats | `outputFormat: "json"` (a JSON body) or `"code"` (a fenced code block) per backend or region | [Configuration](docs/wiki/Configuration.md) |
 | Throws examples, token accounting | `{ throws: "message" }` examples; prompt and completion tokens per region in the manifest | [Writing Specs](docs/wiki/Writing-Specs.md#examples-that-throw) |
 
