@@ -61,6 +61,27 @@
       "kind": "baseline",
       "sketch": true,
       "label": "plain prompt with the sketch as an outline"
+    },
+    "Ci": {
+      "kind": "openarc",
+      "context": {
+        "pendingSiblings": "intent"
+      },
+      "label": "pending siblings: intent, no note"
+    },
+    "Cs": {
+      "kind": "openarc",
+      "context": {
+        "pendingSiblings": "signature"
+      },
+      "label": "pending siblings: signature only (pre-#32)"
+    },
+    "Cp": {
+      "kind": "openarc",
+      "context": {
+        "previousBody": true
+      },
+      "label": "previous body on spec change"
     }
   },
   "runs": [

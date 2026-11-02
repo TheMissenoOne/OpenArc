@@ -41,6 +41,32 @@ for (const c of arms) {
 }
 const perSeed = ["", "Per seed: tokens / wall s / correct function-steps", "", `| Arm | ${[...new Set(rows.map((r) => r.seed))].map((s) => `s${s}`).join(" | ")} |`, `|---|${[...new Set(rows.map((r) => r.seed))].map(() => "---").join("|")}|`];
 for (const c of arms) perSeed.push(`| ${c} | ${[...new Set(rows.map((r) => r.seed))].map((s) => { const r = rows.find((x) => x.config === c && x.seed === s); if (!r) return "-"; const p = per(r); return `${p.tokens} / ${f1(p.wall)} / ${p.good}`; }).join(" | ")} |`);
-const out = [...lines, ...perSeed].join("\n") + "\n";
+// ---- function-level bootstrap: resample the functions with replacement; a function's score is its correct steps, mean
+// over seeds. Same resamples for every arm (seeded), so the paired differences line up. ponytail: copied from summarize.mjs.
+let state = 1;
+const rand = () => { state |= 0; state = (state + 0x6d2b79f5) | 0; let t = Math.imul(state ^ (state >>> 15), 1 | state); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+const B = 10000;
+function boot(n, stat) {
+  state = 1;
+  const all = Array.from({ length: n }, (_, i) => i);
+  const xs = [];
+  for (let b = 0; b < B; b++) xs.push(stat(all.map(() => Math.floor(rand() * n))));
+  xs.sort((a, b) => a - b);
+  return [stat(all), xs[Math.floor(0.025 * B)], xs[Math.floor(0.975 * B)]];
+}
+const fns = [...new Set(rows.flatMap((r) => r.steps.flatMap((s) => Object.keys(s.heldOut ?? {}))))].sort();
+/** arm -> per-function correct steps (mean over seeds); strict also needs the function's own public examples */
+const perFn = (c, strict) => fns.map((f) => mean(rows.filter((r) => r.config === c).map((r) => r.steps.filter((s) => s.heldOut?.[f]?.allPass && (!strict || s.heldOut[f].publicPass)).length)));
+const ciTxt = ([p, lo, hi]) => `${f1(p)} [${f1(lo)}, ${f1(hi)}]`;
+const hasStrict = rows.every((r) => r.steps.every((s) => Object.values(s.heldOut ?? {}).every((h) => h.publicPass !== undefined)));
+const cis = ["", `Correct function-steps with 95% bootstrap CIs (${B} resamples of the ${fns.length} functions)${hasStrict ? "" : "; strict needs rows with publicPass"}`, "", "| Arm | Correct | Strict | Correct diff vs A | Strict diff vs A |", "|---|---|---|---|---|"];
+const ref = arms.includes("A") ? "A" : arms[0];
+for (const c of arms) {
+  const g = perFn(c, false), st = perFn(c, true), g0 = perFn(ref, false), st0 = perFn(ref, true);
+  const tot = (v) => (idx) => sum(idx.map((i) => v[i]));
+  const diff = (v, w) => (idx) => sum(idx.map((i) => v[i] - w[i]));
+  cis.push(`| ${c} | ${ciTxt(boot(fns.length, tot(g)))} | ${hasStrict ? ciTxt(boot(fns.length, tot(st))) : "-"} | ${c === ref ? "-" : ciTxt(boot(fns.length, diff(g, g0)))} | ${c === ref || !hasStrict ? "-" : ciTxt(boot(fns.length, diff(st, st0)))} |`);
+}
+const out = [...lines, ...perSeed, ...cis].join("\n") + "\n";
 writeFileSync(join(dir, "summary-table.md"), out);
 console.log(out);

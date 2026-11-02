@@ -7,3 +7,9 @@ Per seed: tokens / wall s / correct function-steps
 | Arm | s1 | s2 | s3 |
 |---|---|---|---|
 | A | 18486 / 88.2 / 12 | 17490 / 93.3 / 14 | 22361 / 111.1 / 12 |
+
+Correct function-steps with 95% bootstrap CIs (10000 resamples of the 9 functions); strict needs rows with publicPass
+
+| Arm | Correct | Strict | Correct diff vs A | Strict diff vs A |
+|---|---|---|---|---|
+| A | 12.7 [0.0, 30.7] | - | - | - |

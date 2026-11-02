@@ -114,6 +114,7 @@ async function armOpenArc(dir, cfg) {
   await run([bin, "init"], { cwd: dir, timeoutMs: 60_000 });
   const config = configFor({ model, level: 0, port, backend, seed });
   if (cfg.strategy) config.compilation.strategy = cfg.strategy;
+  if (cfg.context) Object.assign(config.compilation.context, cfg.context); // pendingSiblings, previousBody (0.10.0+ context-variants)
   await writeFile(join(dir, "openarc.config.json"), JSON.stringify(config, null, 2));
   const path = (f) => join(dir, "src", `${f}.ts`);
   const layout = {}, changed = [], steps = [];

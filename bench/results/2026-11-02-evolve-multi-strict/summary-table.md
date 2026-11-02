@@ -9,3 +9,10 @@ Per seed: tokens / wall s / correct function-steps
 |---|---|---|---|
 | A | 18516 / 96.9 / 12 | 19285 / 93.0 / 14 | 19292 / 100.8 / 12 |
 | D | 16801 / 92.9 / 23 | 16801 / 93.0 / 23 | 16801 / 92.9 / 23 |
+
+Correct function-steps with 95% bootstrap CIs (10000 resamples of the 9 functions)
+
+| Arm | Correct | Strict | Correct diff vs A | Strict diff vs A |
+|---|---|---|---|---|
+| A | 12.7 [0.0, 30.7] | 12.7 [0.0, 30.7] | - | - |
+| D | 23.0 [0.0, 46.0] | 14.0 [0.0, 34.0] | 10.3 [0.0, 28.3] | 1.3 [0.0, 4.0] |
