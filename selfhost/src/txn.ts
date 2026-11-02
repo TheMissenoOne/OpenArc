@@ -27,7 +27,7 @@ export const planJournalSpec = arc.defineRegion<PlanJournal>({
 
 // @openarc:begin txn.planJournal
 export const planJournal: PlanJournal = (txid, files) => {
-  return { txid, entries: files.map((f, i) => ({ target: f.target, staged: f.staged, backup: `.openarc/txn/${txid}/backup/${i}` })) };
+  return { txid, entries: files.map((file, index) => ({ target: file.target, staged: file.staged, backup: `.openarc/txn/${txid}/backup/${index}` })) };
 };
 // @openarc:end txn.planJournal
 
@@ -62,21 +62,17 @@ export const commitSpec = arc.defineRegion<Commit>({
 
 // @openarc:begin txn.commit
 export const commit: Commit = async (fs, journal) => {
-  await fs.write(".openarc/txn/" + journal.txid + "/journal.json", JSON.stringify(journal));
+  await fs.write(`.openarc/txn/${journal.txid}/journal.json`, JSON.stringify(journal));
   for (const entry of journal.entries) {
-    const backupPath = entry.backup;
-    const stagedPath = entry.staged;
-    const targetPath = entry.target;
-    let content: string | null = await fs.read(targetPath);
-    if (content === null) {
-      await fs.write(backupPath, "");
-      await fs.write(backupPath + ".absent", "");
+    const content = await fs.read(entry.target);
+    if (content !== null) {
+      await fs.write(entry.backup, content);
     } else {
-      await fs.write(backupPath, content);
+      await fs.write(`${entry.backup}.absent`, '');
     }
-    await fs.rename(stagedPath, targetPath);
+    await fs.rename(entry.staged, entry.target);
   }
-  await fs.remove(".openarc/txn/" + journal.txid);
+  await fs.remove(`.openarc/txn/${journal.txid}`);
 };
 // @openarc:end txn.commit
 

@@ -81,20 +81,7 @@ export const buildRequestSpec = arc.defineRegion<BuildRequest>({
 
 // @openarc:begin model.buildRequest
 export const buildRequest: BuildRequest = (system, user, cfg, format) => {
-  return {
-      model: cfg.model,
-      stream: false,
-      format: format,
-      options: {
-        temperature: 0,
-        seed: cfg.seed,
-        num_ctx: cfg.numCtx
-      },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user }
-      ]
-    };
+  return { model: cfg.model, stream: false, format, options: { temperature: 0, seed: cfg.seed, num_ctx: cfg.numCtx }, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] };
 };
 // @openarc:end model.buildRequest
 

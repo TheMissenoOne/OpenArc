@@ -72,7 +72,12 @@ export const roundRobinSpec = arc.defineRegion<Strategy>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.roundRobin
-export const roundRobin: Strategy = (backends, keys) => arc.todo("lb.roundRobin");
+export const roundRobin: Strategy = (backends, keys) => {
+  const healthyBackends = backends.filter(b => b.healthy);
+  if (healthyBackends.length === 0) return keys.map(() => null);
+  const n = healthyBackends.length;
+  return keys.map((_, i) => healthyBackends[i % n].id);
+};
 // @openarc:end lb.roundRobin
 
 // ── lb.leastConnections ───────────────────────────────────────── variant
@@ -147,7 +152,18 @@ export const hash32Spec = arc.defineRegion<Hash32>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.hash32
-export const hash32: Hash32 = (text) => arc.todo("lb.hash32");
+export const hash32: Hash32 = (text) => {
+  let h = 2166136261;
+  for (const unit of text.split('').map(c => c.charCodeAt(0))) {
+      h = Math.imul(h ^ unit, 16777619) >>> 0;
+    }
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+};
 // @openarc:end lb.hash32
 
 // ── lb.consistentHash ─────────────────────────────────────────── variant, written as a sketch
@@ -188,7 +204,16 @@ export const consistentHashSpec = arc.defineRegion<Strategy>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.consistentHash
-export const consistentHash: Strategy = (backends, keys) => arc.todo("lb.consistentHash");
+export const consistentHash: Strategy = (backends, keys) => {
+  const ring = backends
+    .filter((b) => b.healthy)
+    .flatMap((b) => Array.from({ length: REPLICAS }, (_, i) => ({ at: hash32(`${b.id}#${i}`), id: b.id })))
+    .sort((x, y) => x.at - y.at || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+  return keys.map((key) => {
+    const h = hash32(key);
+    return (ring.find(entry => entry.at >= h)?.id ?? ring[0]?.id ?? null);
+  });
+};
 // @openarc:end lb.consistentHash
 
 // ── lb.healthCheck ────────────────────────────────────────────── passive health checks, time from a clock port
@@ -295,5 +320,16 @@ export const failoverSpec = arc.defineRegion<Failover>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.failover
-export const failover: Failover = (order, request, upstream, maxAttempts) => arc.todo("lb.failover");
+export const failover: Failover = async (order, request, upstream, maxAttempts) => {
+  let attempts = 0;
+  let lastError = "no backend";
+  for (const backend of order) {
+    if (attempts >= maxAttempts) break;
+    attempts++;
+    const reply: UpstreamReply = await upstream.send(backend, request).catch((e: unknown) => ({ ok: false as const, error: (e instanceof Error ? e.message : String(e)) }));
+    if (reply.ok) return { ok: true, backend, body: reply.body, attempts };
+    lastError = reply.error;
+  }
+  return { ok: false, error: lastError, attempts };
+};
 // @openarc:end lb.failover

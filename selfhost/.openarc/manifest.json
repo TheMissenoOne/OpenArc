@@ -31,7 +31,7 @@
       "symbol": "run",
       "ownership": "developer",
       "hash": "sha256:1ce4bb0a0f4554b498aa1d81355c6dbd66d8f9cafb053fb2d5e346dd93072e4e",
-      "specHash": "sha256:3b8291d3588c47b388eeb61b6d34c579ca90b11ccec5effcb43e09a26a3401d4",
+      "specHash": "sha256:387012a56187a2bebb9ac90a72f1a5cddbb55f9d58d3a44d26e05a1472d048a9",
       "fingerprint": null,
       "provenance": {
         "source": "extracted",
@@ -44,13 +44,15 @@
       "file": "src/ids.ts",
       "symbol": "isValidId",
       "ownership": "compiler",
-      "hash": "sha256:c3bd46160478b24a0f8ee2c39d7a16f2516094b84eef61650e9e003e907a8edb",
+      "hash": "sha256:ae254029b17e089094dca68cb9ba8cf8b39e05698a959464597beedd0ec36d53",
       "specHash": "sha256:8c4fdfff046c98c5b5e45d8f5bccb832be6f16f45c6b6f0ed8f685deb8fe55a2",
-      "fingerprint": "sha256:84c8a9d445858c73fc1e5c2049d4a28fd0d9947f0512c417f12e2cb65ec44f8a",
+      "fingerprint": "sha256:0cee4713902b2b7815a0154d2450b84c85aa62b688771abd3ab9d45e78f1711e",
       "provenance": {
         "source": "generated",
         "backend": "local",
-        "model": "qwen3.5:9b",
+        "model": "qwen2.5-coder-7b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen2.5-coder-7b",
+        "outputFormat": "json",
         "contextLevel": 0,
         "attempts": 1,
         "verifiedBy": [
@@ -58,7 +60,15 @@
           "static",
           "examples:9/9"
         ],
-        "at": "2026-10-31T19:45:08.431Z"
+        "batch": [
+          "ids.isValidId",
+          "ids.findDuplicateIds"
+        ],
+        "tokens": {
+          "prompt": 463,
+          "completion": 135
+        },
+        "at": "2026-11-02T22:26:46.291Z"
       }
     },
     "ids.findDuplicateIds": {
@@ -67,21 +77,31 @@
       "file": "src/ids.ts",
       "symbol": "findDuplicateIds",
       "ownership": "compiler",
-      "hash": "sha256:9546f70a786653d3676fda6e4677f097795a15910bc0228520e1c434783546ca",
+      "hash": "sha256:10eca2e3eb71939b7cdc90bcbac2ac6cc3e2a07ac046d548584b21253ff85403",
       "specHash": "sha256:1a063e28a84dd6a6ec760c166e9c4bb0034335a840c123fe75dc430f9a23c8af",
-      "fingerprint": "sha256:8e02b23d5ac84e33243b39034e785f9661c350257f71eddfb1c833ca010affd4",
+      "fingerprint": "sha256:9c39437f5f7e6f3c8f5bd062241d360722fafafa521488bf36a50b4fdb758782",
       "provenance": {
         "source": "generated",
         "backend": "local",
-        "model": "qwen3.5:9b",
+        "model": "qwen2.5-coder-7b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen2.5-coder-7b",
+        "outputFormat": "json",
         "contextLevel": 0,
-        "attempts": 1,
+        "attempts": 2,
         "verifiedBy": [
           "tsc",
           "static",
           "examples:3/3"
         ],
-        "at": "2026-10-31T19:45:08.431Z"
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
+        },
+        "tokens": {
+          "prompt": 1245,
+          "completion": 278
+        },
+        "at": "2026-11-02T22:26:46.291Z"
       }
     },
     "model.buildRequest": {
@@ -90,21 +110,31 @@
       "file": "src/model.ts",
       "symbol": "buildRequest",
       "ownership": "compiler",
-      "hash": "sha256:bf6f19409cf8d9412797e3ebf5216d9fc677f2650434d5ba786fc207125312d9",
+      "hash": "sha256:c056105a9bccf7d88b9ff42851a45590e0927db51d88cbb06368dd43a817bd0b",
       "specHash": "sha256:dfe36e3c1603646e753511ffd6153470466b9fdf6b40770fa44313ee81cff1dd",
-      "fingerprint": "sha256:c12bff3eac6b3fec3eebbfa33125fa71205fb8864bb1182843babf3512abff7f",
+      "fingerprint": "sha256:1b182472bc11b848b6a7cd1acbe9d190a9ae68670b0167b30279ab446d24bed2",
       "provenance": {
         "source": "generated",
         "backend": "local",
-        "model": "qwen3.5:9b",
+        "model": "qwen2.5-coder-7b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen2.5-coder-7b",
+        "outputFormat": "json",
         "contextLevel": 0,
-        "attempts": 1,
+        "attempts": 2,
         "verifiedBy": [
           "tsc",
           "static",
           "examples:1/1"
         ],
-        "at": "2026-10-31T19:45:08.431Z"
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
+        },
+        "tokens": {
+          "prompt": 2264,
+          "completion": 221
+        },
+        "at": "2026-11-02T22:26:46.291Z"
       }
     },
     "model.call": {
@@ -153,6 +183,207 @@
         "at": "2026-10-31T19:45:08.431Z"
       }
     },
+    "lb.roundRobin": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/loadBalancer.ts",
+      "symbol": "roundRobin",
+      "ownership": "compiler",
+      "hash": "sha256:1fba594734ec474009b17844eb9b40092ee184a53c8a065081a36e921153382e",
+      "specHash": "sha256:5d253db514f86159d2b169432eefb7a9ed7a1dca176e8177eb910a1de6c372a1",
+      "fingerprint": "sha256:1fdfad66f66af4c3cd87e07819e22f7dcef7a20e1b481d914fdedb1f45852b14",
+      "provenance": {
+        "source": "generated",
+        "backend": "local",
+        "model": "qwen2.5-coder-7b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen2.5-coder-7b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:7/7"
+        ],
+        "batch": [
+          "lb.roundRobin",
+          "lb.leastConnections",
+          "lb.weighted",
+          "lb.hash32"
+        ],
+        "tokens": {
+          "prompt": 785,
+          "completion": 149
+        },
+        "at": "2026-11-02T22:26:46.291Z"
+      }
+    },
+    "lb.hash32": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/loadBalancer.ts",
+      "symbol": "hash32",
+      "ownership": "compiler",
+      "hash": "sha256:dce28440a5727a4df2e40a8fb1d1c9bbdefdd62ee1d6577df00fdf36412c69c3",
+      "specHash": "sha256:ed867cca38b50a4fcf5344896305b51ed90f5a29de7fec1b2c8989e3612f3712",
+      "fingerprint": "sha256:c391e0143b6b38a12ebb8f213c0bce531efc65ec8779fd1b7bfa91094b08ce73",
+      "provenance": {
+        "source": "generated",
+        "backend": "local",
+        "model": "qwen2.5-coder-7b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen2.5-coder-7b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:3/3"
+        ],
+        "batch": [
+          "lb.roundRobin",
+          "lb.leastConnections",
+          "lb.weighted",
+          "lb.hash32"
+        ],
+        "tokens": {
+          "prompt": 784,
+          "completion": 148
+        },
+        "at": "2026-11-02T22:26:46.291Z"
+      }
+    },
+    "lb.consistentHash": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/loadBalancer.ts",
+      "symbol": "consistentHash",
+      "ownership": "compiler",
+      "hash": "sha256:5818edc38109b29cc67a0a2ffbc312de6eed24c2d7389e99023fbb2950f9ba90",
+      "specHash": "sha256:a792e46e3a468d640b000f1bb64980d94a18654cfb2b1b7c3d0cdfff592194ec",
+      "fingerprint": "sha256:1f332f51af76a85240324574470aa4170e3cedd1de1f28823b63b02aef80c998",
+      "provenance": {
+        "source": "generated",
+        "backend": "local",
+        "model": "qwen2.5-coder-7b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen2.5-coder-7b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:6/6"
+        ],
+        "tokens": {
+          "prompt": 1592,
+          "completion": 43
+        },
+        "waived": {
+          "equal backends share requests evenly": "hashing pins each key to a backend, so the spread is statistical, not even per batch"
+        },
+        "at": "2026-11-02T22:26:46.291Z"
+      }
+    },
+    "lb.failover": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/loadBalancer.ts",
+      "symbol": "failover",
+      "ownership": "compiler",
+      "hash": "sha256:6bbeaf785660b67ea1f103a3508c409d24e695e919b0ca96df324aaf57c664d7",
+      "specHash": "sha256:df4da0db19e66b370090a3dab31fb8a8211ad5756bebdc9193fdc081189258ea",
+      "fingerprint": "sha256:7a7340c9924662f7f982b7193c13404eaf007786d627258b7cbc0839d43d01d6",
+      "provenance": {
+        "source": "generated",
+        "backend": "local",
+        "model": "qwen2.5-coder-7b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen2.5-coder-7b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:4/4"
+        ],
+        "tokens": {
+          "prompt": 1317,
+          "completion": 34
+        },
+        "at": "2026-11-02T22:26:46.291Z"
+      }
+    },
+    "p2p.encodeLengthPrefixed": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/p2p.ts",
+      "symbol": "encodeLengthPrefixed",
+      "ownership": "compiler",
+      "hash": "sha256:f677896bcab92d80d0939307b7a08780dbc8702ef5bbdbaf34fea84a40c3490c",
+      "specHash": "sha256:69a5fdf779317a0662da8b3dde18f4bbfbb38d42cf44edffca34a9131178e1fd",
+      "fingerprint": "sha256:eef7f1435546f5ff21e10827b56cd7149beed12c7cbc24aab2fb59132563d509",
+      "provenance": {
+        "source": "generated",
+        "backend": "local",
+        "model": "qwen2.5-coder-7b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen2.5-coder-7b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:3/3"
+        ],
+        "batch": [
+          "p2p.encodeLengthPrefixed",
+          "p2p.decodeLengthPrefixed",
+          "p2p.encodeVarint",
+          "p2p.decodeVarint"
+        ],
+        "tokens": {
+          "prompt": 727,
+          "completion": 179
+        },
+        "at": "2026-11-02T22:26:46.291Z"
+      }
+    },
+    "p2p.peerTable": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/p2p.ts",
+      "symbol": "peerTable",
+      "ownership": "compiler",
+      "hash": "sha256:079b6e9062a4b6dd7ee7ecc175b4044134f31c823b68929f48cdcccd0992e4a1",
+      "specHash": "sha256:af82c6619d9c2efe93f44e02e36c756c19fd0374aa7e2e070e9e255da49d4b58",
+      "fingerprint": "sha256:e81b8e080aeada727732f375d62598a435db44d9a7dfa9592bc10f5debeaae4f",
+      "provenance": {
+        "source": "generated",
+        "backend": "local",
+        "model": "qwen2.5-coder-7b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen2.5-coder-7b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:5/5"
+        ],
+        "batch": [
+          "p2p.handshake",
+          "p2p.peerTable",
+          "p2p.onGossip",
+          "p2p.broadcast"
+        ],
+        "tokens": {
+          "prompt": 868,
+          "completion": 225
+        },
+        "at": "2026-11-02T22:26:46.291Z"
+      }
+    },
     "sandbox.buildArgv": {
       "kind": "function",
       "parent": null,
@@ -182,13 +413,15 @@
       "file": "src/txn.ts",
       "symbol": "planJournal",
       "ownership": "compiler",
-      "hash": "sha256:457fed34c73dec2bd661b3856f3e3c5656f3fd6d8c5315e4a8a5613c9834a5a2",
+      "hash": "sha256:4abccd4a7f6bbb187f3c925fa5d87c9d768be227bf2d4cf4889e4075df17674a",
       "specHash": "sha256:0e1bbc7f5c2f78af998f59201c1b298916e96aecd8c02e7e742604f82d74849b",
-      "fingerprint": "sha256:5905385f0f95cfeeaa0f86bfc5175c51b68dc4d0fd9578e464280e9d3a61a475",
+      "fingerprint": "sha256:f090e6d53ad38bfdead56caab6fedbeabc1e0a27ef22bf7358287a3e335e9032",
       "provenance": {
         "source": "generated",
         "backend": "local",
-        "model": "qwen3.5:9b",
+        "model": "qwen2.5-coder-7b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen2.5-coder-7b",
+        "outputFormat": "json",
         "contextLevel": 0,
         "attempts": 1,
         "verifiedBy": [
@@ -196,7 +429,16 @@
           "static",
           "examples:2/2"
         ],
-        "at": "2026-10-31T19:45:08.431Z"
+        "batch": [
+          "txn.planJournal",
+          "txn.commit",
+          "txn.recover"
+        ],
+        "tokens": {
+          "prompt": 549,
+          "completion": 157
+        },
+        "at": "2026-11-02T22:26:46.291Z"
       }
     },
     "txn.commit": {
@@ -205,21 +447,31 @@
       "file": "src/txn.ts",
       "symbol": "commit",
       "ownership": "compiler",
-      "hash": "sha256:b8e01341a984b21c9c3597312021d459c6f0b9ab6db339a34baccc5ff5ae4a4c",
+      "hash": "sha256:91f6ee5ccd8a3137e35dd303daf28fd035f6aec95427776e90e6879d0f34cf55",
       "specHash": "sha256:7cec40b2df589239724d039326410384222dc5fb9ac014b076af30c2cf93c44f",
-      "fingerprint": "sha256:0d5cf8ffd23d4ef3b859a4b7b49f4508afee0cea98cf7817810c539f8c8628c3",
+      "fingerprint": "sha256:a9e0646a5b2f0861048ddde918af6d67e28b45356d9293fa62fd98485eb26123",
       "provenance": {
         "source": "generated",
         "backend": "local",
-        "model": "qwen3.5:9b",
-        "contextLevel": 0,
-        "attempts": 1,
+        "model": "qwen2.5-coder-7b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen2.5-coder-7b",
+        "outputFormat": "json",
+        "contextLevel": 1,
+        "attempts": 3,
         "verifiedBy": [
           "tsc",
           "static",
           "examples:1/1"
         ],
-        "at": "2026-10-31T19:45:08.431Z"
+        "sampling": {
+          "temperature": 0.7,
+          "seed": 3
+        },
+        "tokens": {
+          "prompt": 2612,
+          "completion": 417
+        },
+        "at": "2026-11-02T22:26:46.291Z"
       }
     },
     "watch.enqueue": {

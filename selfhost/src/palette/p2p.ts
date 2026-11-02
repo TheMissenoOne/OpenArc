@@ -48,7 +48,17 @@ export const encodeLengthPrefixedSpec = arc.defineRegion<Encode>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin p2p.encodeLengthPrefixed
-export const encodeLengthPrefixed: Encode = (message) => arc.todo("p2p.encodeLengthPrefixed");
+export const encodeLengthPrefixed: Encode = (message) => {
+  const encoder = new TextEncoder();
+  const messageBytes = encoder.encode(message);
+  const length = messageBytes.length;
+  const lengthBytes = new Uint8Array(4);
+  lengthBytes[0] = (length >> 24) & 0xFF;
+  lengthBytes[1] = (length >> 16) & 0xFF;
+  lengthBytes[2] = (length >> 8) & 0xFF;
+  lengthBytes[3] = length & 0xFF;
+  return [...lengthBytes, ...messageBytes];
+};
 // @openarc:end p2p.encodeLengthPrefixed
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
@@ -175,7 +185,19 @@ export const peerTableSpec = arc.defineRegion<PeerTable>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin p2p.peerTable
-export const peerTable: PeerTable = (peers, event, maxPeers) => arc.todo("p2p.peerTable");
+export const peerTable: PeerTable = (peers, event, maxPeers) => {
+  if (event.type === "connected") {
+    if (!peers.includes(event.peer) && peers.length < maxPeers) {
+      return [...peers, event.peer].sort();
+    } else {
+      return [...peers].sort();
+    }
+  } else if (event.type === "disconnected") {
+    return peers.filter(p => p !== event.peer).sort();
+  } else {
+    return [...peers].sort();
+  }
+};
 // @openarc:end p2p.peerTable
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
