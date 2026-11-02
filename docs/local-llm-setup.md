@@ -2,7 +2,7 @@
 
 Measured on 2026-10-31. Everything below was measured on this machine, not taken from other people's benchmarks.
 
-**Status (2026-11-02):** applied. `llama-server.service` (user unit, qwen2.5-coder 7B) has served every benchmark since 2026-11-01, including the multi-file evolution benchmark (`bench/results/2026-11-02-evolve-multi*` on the `bench-ablations` branch). `ollama.service` is still enabled with the one-model drop-in; keep the two from holding models at the same time (see [Memory-safety settings](#memory-safety-settings-the-oom-earlier-today-was-two-models-resident)).
+**Status (2026-11-02):** applied. `llama-server.service` (user unit, qwen2.5-coder 7B) has served every benchmark since 2026-11-01, including the multi-file evolution benchmark (`bench/results/2026-11-02-evolve-multi*` on the `bench-ablations` branch). `ollama.service` no longer starts automatically (disabled 2026-11-02, kept as a fallback: `systemctl --user start ollama`); if you run both, keep them from holding models at the same time (see [Memory-safety settings](#memory-safety-settings-the-oom-earlier-today-was-two-models-resident)).
 
 ## Summary
 

@@ -189,4 +189,13 @@ const strictSchema = { ...schemaWith(["from", "names", "default"], { type: ["str
   const extra = (b: Json) => ({ keep_alive: (b as { keep_alive?: string }).keep_alive, reasoning_effort: (b as { reasoning_effort?: string }).reasoning_effort });
   assert.deepStrictEqual(seen.map((q) => extra(q.body)), [{ keep_alive: "2m", reasoning_effort: "none" }, { keep_alive: "10m", reasoning_effort: "none" }, { keep_alive: undefined, reasoning_effort: undefined }]);
 }
-console.log("backends: request shapes, truncation retry, ollama /v1 ok");
+// no openarc.config.json: the built-in default is a local llama-server, no key sent
+{
+  const { config } = parseConfig(null);
+  const b = config.backends[config.compilation.defaultBackend]!;
+  assert.deepStrictEqual([b.provider, b.baseUrl, b.model], ["openai", "http://127.0.0.1:8080/v1", "qwen2.5-coder-7b"]);
+  const { ports, seen } = fake(openaiReply);
+  assert.equal(await complete(ports, b, "S", "U", env), OUT);
+  assert.deepStrictEqual([seen[0]!.url, seen[0]!.headers?.authorization], ["http://127.0.0.1:8080/v1/chat/completions", undefined]);
+}
+console.log("backends: request shapes, truncation retry, ollama /v1, llama-server default ok");

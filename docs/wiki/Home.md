@@ -19,7 +19,7 @@ The hypothesis behind it:
 - [[Code First]]: the main way since 0.9.0: pending bodies in functions and classes, JSDoc intent, `arc.test`, hidden tests, laws
 - [[Writing Specs]]: code first in brief, then `defineRegion`, examples, blocks, sketches, concepts, TSX UI specs
 - [[Your own palette|Palette]]: build your own reusable concepts: laws, variants, sketches, code-first classes and tests (the bundled palette is deprecated and frozen since 0.9.0)
-- [[Configuration]]: `openarc.config.json`; local Ollama or APIs (OpenAI, OpenRouter, Anthropic…) per region
+- [[Configuration]]: `openarc.config.json`; local llama.cpp `llama-server` (recommended), Ollama, or APIs (OpenAI, OpenRouter, Anthropic…) per region
 - [[Context Packages]]: how much the model sees, and when that grows
 - [[Safety Model]]: what the model can and cannot touch, enforced in code
 - [[Fakes]]: testing functions with effects

@@ -69,7 +69,7 @@ npx openarc compile          # or keep it running: npx openarc watch
 | `migrate` | Turn one `defineRegion` region into code-first form, keeping its id, ownership and provenance | [Code First](docs/wiki/Code-First.md#migrating-a-defineregion-region) |
 | `check --oracle` | Compare a compiled region with a reference implementation on seeded inputs | [CLI Reference](docs/wiki/CLI-Reference.md) |
 | `doctor` | Show the sandbox tier on this machine and prove it with one sandboxed example | [Safety Model](docs/wiki/Safety-Model.md) |
-| Providers | Ollama by default; `init --backend openrouter\|openai\|anthropic\|local`; `backends test` sends one request | [Configuration](docs/wiki/Configuration.md) |
+| Providers | local llama.cpp `llama-server` by default (Ollama: `init --backend ollama`); `init --backend openrouter\|openai\|anthropic\|local`; `backends test` sends one request | [Configuration](docs/wiki/Configuration.md) |
 | Output formats | `outputFormat: "json"` (a JSON body) or `"code"` (a fenced code block) per backend or region | [Configuration](docs/wiki/Configuration.md) |
 | Throws examples, token accounting | `{ throws: "message" }` examples; prompt and completion tokens per region in the manifest | [Writing Specs](docs/wiki/Writing-Specs.md#examples-that-throw) |
 
@@ -138,7 +138,7 @@ cd ../selfhost && npm i && npx openarc compile --keep-going                  # O
 
 ## Requirements
 
-Linux, macOS or Windows, Node 23.6 or later (25+ recommended), and a model: local via [Ollama](https://ollama.com), or any API (OpenAI-compatible such as OpenAI, OpenRouter, Groq and vLLM, or Anthropic). Keys are read from environment variables named in `openarc.config.json`; see [Configuration](docs/wiki/Configuration.md).
+Linux, macOS or Windows, Node 23.6 or later (25+ recommended), and a model: local via llama.cpp's `llama-server` (the default; [Ollama](https://ollama.com) with `init --backend ollama`), or any API (OpenAI-compatible such as OpenAI, OpenRouter, Groq and vLLM, or Anthropic). Keys are read from environment variables named in `openarc.config.json`; see [Configuration](docs/wiki/Configuration.md).
 
 Tests and examples always run sandboxed; how strongly depends on the OS (`sandbox.isolation`, default `"auto"`):
 

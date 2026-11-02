@@ -880,7 +880,7 @@ The configuration sits at the project root, like `package.json`, and selects the
 {
   "version": 1,
   "backends": {
-    "local": { "provider": "ollama", "model": "qwen3.5:9b", "maxContextTokens": 8192, "think": false },
+    "local": { "provider": "openai", "baseUrl": "http://127.0.0.1:8080/v1", "model": "qwen2.5-coder-7b", "maxContextTokens": 8192 },
     "big":   { "provider": "ollama", "model": "qwen2.5-coder:14b", "maxContextTokens": 32768 }
   },
   "compilation": {

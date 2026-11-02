@@ -138,7 +138,8 @@ function lintProblem(l: LintConfig | undefined): string | null {
 export const DEFAULT_CONFIG: OpenArcConfig = {
   version: 1,
   backends: {
-    local: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, think: false },
+    // llama.cpp's llama-server (`llama-server -m <gguf> --port 8080`); model is only a label there
+    local: { provider: "openai", baseUrl: "http://127.0.0.1:8080/v1", model: "qwen2.5-coder-7b", maxContextTokens: 8192 },
   },
   compilation: {
     defaultBackend: "local",
@@ -226,7 +227,7 @@ export function presetConfig(preset: string, model?: string, baseUrl?: string): 
   if (preset !== "ollama" && !model) return `--backend ${preset} needs --model <id>`;
   if (preset === "local" && !baseUrl) return `--backend local needs --base-url <url>, e.g. http://127.0.0.1:8080/v1 (llama-server), :1234/v1 (LM Studio), :8000/v1 (vLLM)`;
   const b: BackendConfig = preset === "ollama"
-    ? { ...DEFAULT_CONFIG.backends.local!, ...(model ? { model } : {}), ...(baseUrl ? { host: baseUrl } : {}) }
+    ? { provider: "ollama", model: model ?? "qwen3.5:9b", maxContextTokens: 8192, think: false, ...(baseUrl ? { host: baseUrl } : {}) }
     : { provider: preset as Provider, model: model!, maxContextTokens: preset === "local" ? 8192 : 32768, ...(baseUrl ? { baseUrl } : {}) };
   return { ...DEFAULT_CONFIG, backends: { [preset]: b }, compilation: { ...DEFAULT_CONFIG.compilation, defaultBackend: preset } };
 }
