@@ -19,12 +19,13 @@ export const classifyPathSpec = arc.defineRegion<ClassifyPath>({
   id: "watch.classifyPath",
   intent: [
     "path is project-relative POSIX. 'openarc.config.json' -> config.",
-    "Files ending in .ts under src/ -> source; under tests/fakes/ -> fakes.",
+    "Files ending in .ts or .tsx under src/ -> source; under tests/fakes/ -> fakes.",
     "Anything under node_modules/, .openarc/, build/ or dist/ at any depth -> ignore. Everything else -> ignore.",
   ],
   examples: [
     { args: ["src/tasks.ts"], expected: "source" },
     { args: ["src/deep/a/b.ts"], expected: "source" },
+    { args: ["src/ui/LoginPage.spec.tsx"], expected: "source" },
     { args: ["tests/fakes/fs.memory.ts"], expected: "fakes" },
     { args: ["openarc.config.json"], expected: "config" },
     { args: [".openarc/manifest.json"], expected: "ignore" },

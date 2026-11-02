@@ -63,8 +63,8 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
   assert.equal(res.exit, 0, JSON.stringify(res.diagnostics));
   const prompt = chats(snap)[0]!.messages[1]!.content;
   assert.match(prompt, /## Imports already in the file\nimport \* as arc from "open-arc";\nimport type \{ Entry \} from "\.\/fx-types\.ts";\nimport \{ twice \} from "\.\/fx-lib\.ts";/, "L0 shows the file's imports");
-  assert.match(prompt, /## Already in src\/fx\.ts \(call these, don't re-implement them\)\nconst helper: \(e: Entry\) => boolean\nconst total: Total/, "L0 shows implemented same-file values");
-  assert.match(prompt, /const total: Total\n\n## Intent/, "pending regions and the region itself are not offered");
+  assert.match(prompt, /## Already in src\/fx\.ts \(call these, don't re-implement them\)\nconst later: Later \/\/ pending: [^\n]*; intent: not written yet\nconst helper: \(e: Entry\) => boolean\nconst total: Total/, "L0 shows same-file values, a pending region with its intent");
+  assert.match(prompt, /const total: Total\n\n## Intent/, "the region itself is not offered");
   assert.match(prompt, /\/\/ Side: not in scope; the compiler adds import type \{ Side \} from "\.\/fx-types\.ts" if you use it\nexport type Side/);
   assert.doesNotMatch(prompt, /\/\/ Entry: not in scope/, "Entry is imported");
   const out = snap.files["src/fx.ts"]!;
