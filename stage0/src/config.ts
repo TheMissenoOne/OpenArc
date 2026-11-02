@@ -143,7 +143,7 @@ export const DEFAULT_CONFIG: OpenArcConfig = {
   },
   compilation: {
     defaultBackend: "local",
-    maxAttempts: 3,
+    maxAttempts: 2, // dev set 2026-11-02: attempt 2 verified +10 of 57 regions for +23 calls, attempt 3 +2 for +11
     context: { initialLevel: 0, expandOnFailure: true },
   },
 };
@@ -191,7 +191,7 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
       compilation: {
         defaultBackend: c.compilation?.defaultBackend ?? names[0]!,
         fallbackBackend: c.compilation?.fallbackBackend,
-        maxAttempts: c.compilation?.maxAttempts ?? 3,
+        maxAttempts: c.compilation?.maxAttempts ?? 2,
         batch: c.compilation?.batch ?? "file",
         context: { initialLevel: c.compilation?.context?.initialLevel ?? 0, expandOnFailure: c.compilation?.context?.expandOnFailure ?? true },
       },

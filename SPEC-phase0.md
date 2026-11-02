@@ -458,7 +458,7 @@ One `openarc compile [id…]` run is a single **transaction**. The disk stays un
 
 ```
 PARSE → ANALYZE → VALIDATE → PLAN → ┬→ GENERATE → STATIC → SANDBOX ┬→ STAGE → COMMIT → DONE
-                                    └───────── (per node, ≤ 3 attempts) ┘
+                                    └───────── (per node, ≤ maxAttempts, default 2)┘
 any state ──error──> ABORT (no writes; diagnostics printed; exit code 1)
 ```
 
@@ -886,7 +886,7 @@ The configuration sits at the project root, like `package.json`, and selects the
   "compilation": {
     "defaultBackend": "local",
     "fallbackBackend": "big",
-    "maxAttempts": 3,
+    "maxAttempts": 2,
     "context": { "initialLevel": 0, "expandOnFailure": true }
   },
   "regions": { "payments.process": { "backend": "big", "contextLevel": 2 } },
