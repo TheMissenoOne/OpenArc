@@ -2,6 +2,8 @@
 
 Measured on 2026-10-31. Everything below was measured on this machine, not taken from other people's benchmarks.
 
+**Status (2026-11-02):** applied. `llama-server.service` (user unit, qwen2.5-coder 7B) has served every benchmark since 2026-11-01, including the multi-file evolution benchmark (`bench/results/2026-11-02-evolve-multi*` on the `bench-ablations` branch). `ollama.service` is still enabled with the one-model drop-in; keep the two from holding models at the same time (see [Memory-safety settings](#memory-safety-settings-the-oom-earlier-today-was-two-models-resident)).
+
 ## Summary
 
 - **Recommended stack:** llama.cpp `llama-server` with the **Vulkan** backend (built from source, tag b12023), serving one GGUF model on `127.0.0.1:8080`. OpenArc talks to it through the `local` preset. **Model: qwen2.5-coder 7B Instruct Q4_K_M with `outputFormat: "json"`**, chosen by a quality screen on OpenArc tasks (see [Model choice](#model-choice)). With the recommended flags it does an OpenArc request in 7.5 s (TTFT 1.7 s, 54 tok/s, 10/10 valid JSON, 6.1 GiB VRAM, 0.4 GiB RSS).
@@ -240,7 +242,7 @@ No `fallbackBackend` pointing at a second local model: a fallback request would 
 
 | path | what |
 |---|---|
-| `/mnt/data/tools/llm-setup/apply.sh` | switch script (not applied) |
+| `/mnt/data/tools/llm-setup/apply.sh` | switch script (applied 2026-11-01: `llama-server.service` and the Ollama drop-in are live) |
 | `/mnt/data/tools/llm-setup/bench_openarc.py` | OpenArc-shaped request benchmark (TTFT, tok/s, JSON validity, VRAM, RSS) |
 | `/mnt/data/tools/llm-setup/measure-llama.sh`, `measure-ollama.sh`, `gate.sh` | measurement drivers; `gate.sh` enforces "no other model job, 7 GB free" |
 | `/mnt/data/tools/llm-setup/build-llama.sh`, `Containerfile.build` | source builds |
