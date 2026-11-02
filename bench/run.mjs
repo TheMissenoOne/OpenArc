@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // OpenArc benchmark runner. One task at a time; see README.md.
-// node run.mjs --dataset <ts-bench clone> [--pilot | --exercises a,b] [--out results/<dir>] [--work <dir>] [--oa <tgz>] [--models m1,m2] [--matrix <file>] [--configs A,D] [--seed n]
+// node run.mjs --dataset <ts-bench clone> [--pilot | --set dev|test | --exercises a,b] [--out results/<dir>] [--work <dir>] [--oa <tgz>] [--models m1,m2] [--matrix <file>] [--configs A,D] [--seed n]
 import { createServer } from "node:http";
 import { readFileSync, readdirSync, existsSync, appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 
@@ -13,7 +13,7 @@ import { runBaseline } from "./lib/baseline.mjs";
 
 const { values: a } = parseArgs({ options: {
   dataset: { type: "string", default: process.env.TS_BENCH_DIR }, work: { type: "string", default: join(tmpdir(), "openarc-bench") },
-  out: { type: "string" }, oa: { type: "string" }, pilot: { type: "boolean" }, exercises: { type: "string" }, models: { type: "string" },
+  out: { type: "string" }, oa: { type: "string" }, pilot: { type: "boolean" }, exercises: { type: "string" }, set: { type: "string" }, models: { type: "string" },
   configs: { type: "string" }, matrix: { type: "string", default: join(BENCH, "matrix.json") }, port: { type: "string", default: "18435" }, seed: { type: "string", default: "1" },
 } });
 if (!a.dataset) throw new Error("--dataset <ts-bench clone> (or TS_BENCH_DIR) is required; see fetch-dataset.sh");
@@ -26,7 +26,7 @@ const backendFor = (r) => ({ ...matrix.backend, ...r.backend, openarc: { ...matr
 const isOllama = (b) => b.provider === "ollama" || b.info?.engine === "ollama";
 let backend = backendFor(matrix.runs[0]);
 const upstream = () => new URL(backend.baseUrl).origin;
-const exercises = a.exercises ? a.exercises.split(",") : a.pilot ? matrix.pilot : matrix.exercises ?? Object.keys(EXERCISES.functions);
+const exercises = a.exercises ? a.exercises.split(",") : a.set ? (EXERCISES.sets[a.set] ?? (() => { throw new Error(`unknown set ${a.set}`); })()) : a.pilot ? matrix.pilot : matrix.exercises ?? Object.keys(EXERCISES.functions);
 const port = +a.port;
 const seed = +a.seed; // backend seed for every arm (OpenArc config `seed`, baseline request `seed`); part of the resume key
 
@@ -46,7 +46,7 @@ if (!existsSync(join(oaDir, "node_modules/.bin/openarc"))) {
 const oaModules = join(oaDir, "node_modules");
 
 const date = new Date().toISOString().slice(0, 10);
-const out = a.out ?? join(BENCH, "results", `${date}${a.pilot ? "-pilot" : ""}`);
+const out = a.out ?? join(BENCH, "results", `${date}${a.pilot ? "-pilot" : a.set ? `-${a.set}` : ""}`);
 mkdirSync(out, { recursive: true });
 const jsonl = join(out, "tasks.jsonl");
 const done = new Set(existsSync(jsonl) ? readFileSync(jsonl, "utf8").split("\n").filter(Boolean).map((l) => { const j = JSON.parse(l); return `${j.exercise}|${j.config}|${j.model}|${j.seed ?? 1}`; }) : []);

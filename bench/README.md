@@ -12,7 +12,8 @@ Requirements: Linux, Node >= 23.6 (tests run with `--experimental-transform-type
 cd bench && npm i                                    # installs jest's `expect` (matchers only)
 ./fetch-dataset.sh /path/to/ts-bench                 # pinned ts-bench + exercism-typescript
 node run.mjs --dataset /path/to/ts-bench --pilot     # 5 exercises, every config/model in matrix.json
-node run.mjs --dataset /path/to/ts-bench             # all 12 function exercises
+node run.mjs --dataset /path/to/ts-bench             # every exercise in exercises.json
+node run.mjs --dataset /path/to/ts-bench --set dev   # dev split (tune here); --set test is held out for the final check
 node summarize.mjs results/<dir>                     # writes results/<dir>/tables.md
 ```
 
