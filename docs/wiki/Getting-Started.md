@@ -92,7 +92,7 @@ npx openarc compile
 The log looks like this (illustrative: the timings and sizes depend on the model and machine):
 
 ```
-  hello.friendlyGreeter.greet: attempt 1 via local (qwen3.5:9b), context L0 2012 chars, 1.4s
+  hello.friendlyGreeter.greet: attempt 1 via local (qwen2.5-coder-7b), context L0 2012 chars, 1.4s
   hello.friendlyGreeter.greet: ✓ tsc, static, tests:2/2
 done: exit 0 · 1 model call(s) · 2.3s
 ```
