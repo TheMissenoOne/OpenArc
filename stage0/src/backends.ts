@@ -72,6 +72,10 @@ export async function completeWithUsage(ports: Ports, b: BackendConfig, system: 
   const done = () => ({ text: r.text, tokens });
   while (r.truncated) {
     const cap = cur.outputReserveTokens!;
+    if (looping(r.text)) { // a repetition loop only gets longer with more room (a 7B on a retry: 11k tokens, 210 s)
+      ports.log(`  backend ${b.provider} ${b.model}: output truncated at ${cap} tokens in a repetition loop; not retrying with more`);
+      return done();
+    }
     const next = Math.min(cap * 2, room);
     if (next <= cap) {
       ports.log(`  backend ${b.provider} ${b.model}: output truncated at ${cap} tokens; no room left in the ${b.maxContextTokens}-token context`);
@@ -90,6 +94,8 @@ export async function completeWithUsage(ports: Ports, b: BackendConfig, system: 
   return done();
 }
 const MIN_OUTPUT = 256;
+/** The reply's last 300 characters already occur earlier in it: a degenerate repetition loop. */
+export const looping = (t: string): boolean => t.length >= 1200 && t.slice(0, -300).includes(t.slice(-300));
 
 /** One request; on a connection error, wait `retryDelayMs` and retry ONCE (Ollama restarts after an OOM kill). */
 async function withReconnect(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined>, retryDelayMs: number): Promise<Reply> {

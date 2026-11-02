@@ -44,7 +44,7 @@ async function compile(http: string[], opts: { maxAttempts?: number; other?: boo
   const snap = fake.snapshot() as Snap;
   const chats = snap.requests.filter((q) => q.url.endsWith("/api/chat")).map((q) => q.body as unknown as Chat);
   const manifest = JSON.parse(snap.files[M]!) as { regions: Record<string, { fingerprint: string; provenance: { [k: string]: Json } }> };
-  return { res, chats, prompts: chats.map((c) => c.messages[1]!.content), file: snap.files["src/bt.ts"]!, manifest };
+  return { res, chats, prompts: chats.map((c) => c.messages[1]!.content), file: snap.files["src/bt.ts"]!, manifest, files: snap.files };
 }
 const count = (s: string, sub: string) => s.split(sub).length - 1;
 
@@ -145,6 +145,17 @@ const count = (s: string, sub: string) => s.split(sub).length - 1;
   assert.ok(second.includes('## A previous attempt failed\nOARC-E090 example "#1" failed: got 3; expected 2'), second);
   assert.ok(!second.includes("return n + 2") && !second.includes("Previous body"), "the failed body is not resent");
   assert.deepStrictEqual(chats.map((c) => [c.options.temperature, c.options.seed]), [[0, 1], [0.4, 2]], "and sampled differently");
+}
+
+// ── a sibling that failed before with the same fingerprint (failed-region memory) is left out of the batch
+{
+  const first = await compile([both("return n + 1;", 'return "x";')]);
+  const failed = first.files[".openarc/failed.json"]!;
+  assert.ok(JSON.parse(failed)["bt.dbl"]);
+  const { res, prompts } = await compile([one("return n + 1;")], { files: { ".openarc/failed.json": failed } });
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0]!, /^Implement exactly one OpenArc region/, "bt.inc alone, not batched with the skipped bt.dbl");
+  assert.deepStrictEqual(res.diagnostics.filter((d) => d.code === "OARC-E082").map((d) => d.id), ["bt.dbl"]);
 }
 
 console.log("batch: request shape, partial failure, write scope, code format, off, resample ok");

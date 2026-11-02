@@ -176,6 +176,7 @@ export interface CompileRequest {
   ids: string[];
   keepGoing?: boolean; // commit the targets that passed; failed ones stay pending
   timings?: boolean; // --timings: log each attempt's stage times (issue #19 latency)
+  retryFailed?: boolean; // --retry-failed: also retry regions that exhausted their attempts on the same fingerprint
   model: ModelConfig;
   sandbox: Omit<SandboxConfig, "stageDir" | "regionId" | "extraReadPaths"> & {
     isolation?: SandboxTier; // absent: bwrap (sandbox.buildArgv)
