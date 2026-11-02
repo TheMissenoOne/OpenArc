@@ -40,5 +40,4 @@ state where every function passes, in any arm). Means over seeds:
 
 ## Next
 
-Fix the first two causes in OpenArc (remember failed regions across compiles until their spec or context changes;
-don't double the output cap for a repetitive truncated reply), then rerun A and D.
+Fixed on the `retry-memory` branch; see `../2026-11-02-evolve-multi-fixed/summary.md` (A: 60k -> 21k tokens, 387 -> 100 s).
