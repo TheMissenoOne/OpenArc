@@ -235,7 +235,7 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
 // tools/run-examples.ts imports only spec files: src/main.ts mentions defineRegion in a string, and importing it ran the CLI
 // (a usage error on every run, issue #15)
 {
-  const r = spawnSync(process.execPath, ["tools/run-examples.ts", "no-such-prefix"], { cwd: root, encoding: "utf8" });
+  const r = spawnSync(process.execPath, ["--no-warnings", "tools/run-examples.ts", "no-such-prefix"], { cwd: root, encoding: "utf8" });
   assert.deepStrictEqual([r.status, r.stdout.trim(), r.stderr], [0, "0 ok, 0 pending, 0 failing", ""]);
 }
 console.log("eval-fixes: context/scope, retry variation, attempts dump, stale/W043, W044, oracle check, Date.parse, scaffold, run-examples ok");
