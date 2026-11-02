@@ -44,7 +44,7 @@ A relevant change marks the project dirty. Once the worker is idle, OpenArc anal
 | `openarc.config.json` (e.g. a new model) | regions whose fingerprint changed are queued; failed regions get another try |
 | `tests/fakes/*.ts` | re-analysed; failed regions get another try. Compiled regions are queued only if their fingerprint changed |
 | a hand edit inside a region | the region becomes `developer` and is **not** queued (your edit wins) |
-| OpenArc's own write of a compiled file | re-analysed, finds nothing: `src/x.ts changed: nothing new to compile`. A region's fingerprint covers its siblings' signatures, never their bodies, so compiling one region doesn't re-queue the others in its file |
+| OpenArc's own write of a compiled file | re-analysed, finds nothing: `src/x.ts changed: nothing new to compile`. A region's fingerprint covers its siblings' signatures, never their bodies, so compiling one region doesn't re-queue the others in its file. When its body changes, that same compile re-runs its callers' checks against it (no model call unless one fails) |
 
 Analysis asks Ollama for `/api/tags` (the model digest is part of the fingerprint). That's a list call: it never loads a model. When the backend is down, analysis falls back to comparing spec hashes, so edited specs are still noticed; type and config changes are picked up once the backend answers again.
 

@@ -105,6 +105,7 @@ export interface RegionInfo {
   scope: string[]; // blocks: "let x: T" lines in scope
   context0: string; // the initial context package (its hash is part of the fingerprint)
   kept?: string | null; // analyze: the current body to re-verify before any model call (keptBody), when the backend that made it is this one
+  recheck?: boolean; // generate: not stale, queued to re-verify its kept body because a callee's body changed this run
   contextMs?: number; // time to build context0 (attempt 1's "context" timing)
   typeImports: Map<string, string>; // closure types shown in context but not in scope in the file: name -> import specifier
 }
@@ -715,6 +716,24 @@ function resolveLocal(p: Project, fromRel: string, spec: string): string | null 
   return p.files.has(rel) ? rel : null;
 }
 
+/** The function regions of other project files that `rel` imports (by name, or all of a module imported as a
+ *  namespace), with the local name each is bound to there. */
+function importedRegions(p: Project, rel: string): { r: RegionInfo; local: string }[] {
+  const out: { r: RegionInfo; local: string }[] = [];
+  for (const d of p.program?.getSourceFile(abs(p, rel))?.statements.filter(ts.isImportDeclaration) ?? []) {
+    const from = resolveLocal(p, rel, (d.moduleSpecifier as ts.StringLiteral).text);
+    const nb = d.importClause?.namedBindings;
+    if (!from || !nb) continue;
+    const callable = p.regions.filter((x) => x.file === from && x.kind === "function" && !x.spec.codeFirst?.cls);
+    if (ts.isNamespaceImport(nb)) out.push(...callable.map((r) => ({ r, local: nb.name.text })));
+    else for (const e of nb.elements) {
+      const r = callable.find((x) => x.spec.symbol === (e.propertyName ?? e.name).text);
+      if (r) out.push({ r, local: e.name.text });
+    }
+  }
+  return out;
+}
+
 /** The import declaration most often used for package `spec` across the project (value imports only), or null. */
 function canonicalImport(p: Project, spec: string): string | null {
   const counts = new Map<string, number>();
@@ -879,6 +898,13 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
   } else {
     sections.push(["Allowed new imports", allowedImports(p, s.deps)]);
     sections.push(["Enclosing function (your block is at <<<HERE>>>)", enclosingSource(p, r)]);
+  }
+  if (opts.stable) { // fingerprint only: the contracts of the regions the file imports (and of its local deps' regions),
+    // so a callee's signature or intent edited in another file re-queues its callers at every level (issue #14)
+    const deps = new Set(s.deps.flatMap((d) => resolveLocal(p, r.file, d) ?? []));
+    const xs = [...new Set([...importedRegions(p, r.file).map((x) => x.r), ...p.regions.filter((x) => deps.has(x.file) && x.kind === "function" && !x.spec.codeFirst?.cls)])];
+    const lines = xs.map((x) => `${x.file} ${x.spec.symbol}: ${x.spec.signature} // intent: ${x.spec.intent.replace(/\s+/g, " ").trim()}`).sort();
+    if (lines.length) sections.push(["Imported regions", lines.join("\n")]);
   }
   if (level >= 2 && !opts.stable) { // ponytail: holds sibling bodies, so not in the fingerprint
     // a hidden test in the region's own file stays out of the package here too (SPEC §8.5)
@@ -1555,7 +1581,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     return { candidate: null, modelCalls: 0 };
   }
   const cachePath = cachePathOf(r);
-  let cached = await ports.fs.read(cachePath);
+  let cached = r.recheck ? null : await ports.fs.read(cachePath);
   // Spec unchanged, only the context moved (a sibling added or changed, issue #19 evolution run): the region's own body
   // goes through verification first, like a cache hit, and the model is asked only if it fails.
   const kept = !cached ? (r.kept ?? null) : null;
@@ -1630,7 +1656,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     const code = backend.outputFormat === "code";
     if (attempt === 1 && cached) {
       ({ body, imports, sampling = null, tokens: cachedTokens = null } = JSON.parse(cached) as { body: string; imports: ImportDecl[]; sampling?: { temperature: number; seed: number }; tokens?: Tokens });
-      ports.log(`  ${id}: ${kept !== null ? "spec unchanged, re-verifying the current body" : "cache hit"}`);
+      ports.log(`  ${id}: ${r.recheck ? "a callee changed, re-verifying the current body" : kept !== null ? "spec unchanged, re-verifying the current body" : "cache hit"}`);
     } else {
       if (p.e080Streak >= 3 && !p.batched?.has(id)) return giveUp(); // a queued batch share needs no model call
       const digest = await modelDigest(ports, p, backend, diagnostics);
@@ -1737,6 +1763,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       } else if (result.verifiedBy.includes("unreached")) ports.log(`  ${id}: provisional: ${result.verifiedBy.join(", ")} (no passing example reaches it while siblings are pending; the joint check decides)`);
       else ports.log(`  ${id}: ✓ ${result.verifiedBy.join(", ")}`);
       if (failed[id]) { const { [id]: _, ...rest } = await readFailed(ports); await writeFailed(ports, rest); }
+      if (body !== keptBody(p, r)) recheckCallers(p, r);
       return { candidate: { id, body, imports, verifiedBy: result.verifiedBy }, modelCalls };
     }
     ports.log(`  ${id}: ✗ ${result.problems[0]?.slice(0, 160)}`);
@@ -1751,6 +1778,24 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     if (c.context.expandOnFailure && result.missingContext && level < (r.spec.sketch ? 1 : 2)) level = (level + 1) as ContextLevel;
   }
   return exhausted(previous?.problems[0] ?? "");
+}
+
+/** A body changed this run: queue the compiler-owned, implemented, not stale regions that call it (same file, or a file
+ *  importing it) to re-verify their current body, like a kept one (no model call unless it fails). Appended to
+ *  p.targets, the array compile.run iterates, so they run after it in the same transaction (issue #14).
+ *  ponytail: "calls" = the caller's body names the symbol (or the namespace it is imported through). */
+function recheckCallers(p: Project, r: RegionInfo): void {
+  const sym = p.specs.get(r.root)!.symbol;
+  const names = (x: RegionInfo, local: string) => new RegExp(`(?<![\\w$])${local.replace(/\$/g, "\\$")}(?![\\w$])`).test(x.bodyLines.join("\n"));
+  const callers = p.regions.filter((x) => x.file === r.file && x.root !== r.root && names(x, sym));
+  for (const x of p.regions) if (x.file !== r.file && importedRegions(p, x.file).some((i) => i.r.root === r.root && names(x, i.local))) callers.push(x);
+  for (const x of callers) {
+    if (x.stale || x.state !== "compiler" || p.targets?.includes(x.id)) continue;
+    x.kept = keptBody(p, x);
+    if (x.kept === null) continue;
+    x.recheck = true;
+    p.targets?.push(x.id);
+  }
 }
 
 /** Regions whose attempts were exhausted (E082), with the fingerprint they failed on (generate). */

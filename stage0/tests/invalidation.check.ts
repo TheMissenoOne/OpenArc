@@ -7,8 +7,8 @@
 //   2. dependency contract      6. developer-owned body
 //   3. generated sibling body   7. failed generation
 //   4. region's examples        8. identical rerun
-// Two GAPs are asserted as today's behaviour (search "GAP (#14)"): a cross-file caller is not re-fingerprinted by its
-// callee's contract (case 2), and a callee regenerated under an unchanged contract doesn't re-run its callers (case 9).
+// Both former GAPs (#14) are closed: a cross-file caller is re-fingerprinted by its callee's contract (case 2), and a
+// callee regenerated under an unchanged contract re-runs its callers with their current bodies (case 9).
 import assert from "node:assert/strict";
 import type { Json } from "open-arc";
 import type { CompileRequest, Diagnostic, Ports } from "../src/types.ts";
@@ -73,13 +73,9 @@ const DEPS: Record<string, string[]> = {
   "use.quad": ["spec:use.quad", "contract:geo.sq", "model"],
   "other.neg": ["spec:other.neg", "model"],
 };
-// GAP (#14): at the default context level 0 a function region's fingerprint holds its same-file siblings' contracts but
-// not those of the regions it imports from another file ("Helpers you may call" is level 1+), so a change to geo.sq's
-// signature or intent leaves use.quad's fingerprint alone: it is not re-verified (soundness). The matrix asserts today's
-// stale set: the closure without these edges. Drop an edge here when it is fingerprinted.
-const CROSS_FILE_GAP: Record<string, string[]> = { "use.quad": ["contract:geo.sq"] };
-const expected = (touched: string[], gaps: Record<string, string[]> = {}) =>
-  Object.keys(DEPS).filter((id) => DEPS[id]!.some((d) => touched.includes(d) && !gaps[id]?.includes(d))).sort();
+// (#14) the stable view holds the contracts of the regions a file imports from other files at every context level, so
+// use.quad's fingerprint follows geo.sq's signature and intent like a same-file sibling's.
+const expected = (touched: string[]) => Object.keys(DEPS).filter((id) => DEPS[id]!.some((d) => touched.includes(d))).sort();
 
 async function compile(files: Record<string, string>, http: string[], proc: { code: number; stdout: string; timedOut: boolean }[] = []) {
   const fake = fakePorts({ files, http, proc });
@@ -123,11 +119,12 @@ const cases: [string, Record<string, string>, string[], string?][] = [
 for (const [name, files, touched, digest] of cases) {
   const { stale, kept } = await analyzed(files, digest);
   if (touched.includes("contract:geo.sq")) assert.ok(expected(touched).includes("use.quad"), "the closure reaches the cross-file caller");
-  assert.deepStrictEqual(stale, expected(touched, CROSS_FILE_GAP), `${name}: stale set (soundness and precision)`);
+  assert.deepStrictEqual(stale, expected(touched), `${name}: stale set (soundness and precision)`);
   if (name.startsWith("5")) assert.deepStrictEqual(Object.values(kept), [null, null, null, null], `${name}: regenerated, not kept`);
   // spec changed: regenerate; spec unchanged, only the context moved (same backend): re-verify the current body first
   if (name.startsWith("4") || name.startsWith("2b") || name.startsWith("2c")) assert.equal(kept["geo.sq"], null, `${name}: sq's spec moved, regenerated`);
   if (name.startsWith("2")) assert.deepStrictEqual(kept["geo.norm2"], "return sq(p.x) + sq(p.y);", `${name}: norm2's spec is unchanged, its body is re-verified first`);
+  if (name.startsWith("2b") || name.startsWith("2c")) assert.deepStrictEqual(kept["use.quad"], "return sq(sq(n));", `${name}: quad (another file) is kept and re-verified`);
 }
 
 // ── 3. a generated sibling's body changes (its spec doesn't): the caller is not stale. Same project, sq committed with
@@ -184,23 +181,36 @@ for (const [name, files, touched, digest] of cases) {
 }
 
 // ── 4 + 9 (full compile). sq gains an example its old body would fail: a spec change, so sq is regenerated (not kept).
-//    Its contract (signature + intent) is unchanged, so norm2's fingerprint doesn't move and norm2's examples are not
-//    re-run against the new callee.
+//    Its contract (signature + intent) is unchanged, so its callers' fingerprints don't move, but its body did: the
+//    callers are re-verified with their current bodies in the same run (#14), no model call. norm2 re-runs its examples;
+//    quad has none (type check only).
+const ex4 = edit("src/geo.ts", "{ args: [3], expected: 9 }", "{ args: [3], expected: 9 }, { args: [-2], expected: 4 }");
 {
-  const files = edit("src/geo.ts", "{ args: [3], expected: 9 }", "{ args: [3], expected: 9 }, { args: [-2], expected: 4 }");
-  const r = await compile(files, [tags(), chat("return n * n;")], [CP, harness(true, true)]);
+  const r = await compile(ex4, [tags(), chat("return n * n;")], [CP, harness(true, true), CP, harness(true)]);
   assert.equal(r.res.exit, 0, JSON.stringify(r.res.diagnostics));
-  assert.equal(r.calls, 1, "4. regenerated");
+  assert.equal(r.calls, 1, "4. regenerated; 9. callers re-verified without a model call");
   assert.ok(r.files["src/geo.ts"]!.includes("return n * n;") && !r.files["src/geo.ts"]!.includes(SQ_OLD), "4. the new body is committed");
-  assert.equal(r.runs, 2, "9. sandbox runs: sq's examples (cp + harness); none for norm2");
-  // GAP (#14): a callee body regenerated under an unchanged contract does not re-run its callers' examples. norm2 is not
-  // stale after the commit, so nothing re-verifies it: a green callee is not proven to keep a green suite. When this is
-  // closed, norm2 should be in this run's verification (r.runs 4) and this assertion flips.
-  assert.deepStrictEqual((await analyzed(r.files)).stale, [], "9. after the commit nothing is stale: norm2 never re-ran");
+  assert.equal(r.runs, 4, "9. sandbox runs: sq's examples, then norm2's against the new sq (cp + harness each)");
+  assert.ok(r.files["src/geo.ts"]!.includes("return sq(p.x) + sq(p.y);") && r.files["src/use.ts"] === B["src/use.ts"], "9. the callers' bodies are kept");
+  assert.deepStrictEqual((await analyzed(r.files)).stale, [], "9. after the commit nothing is stale");
   // and a rerun of the result is clean: 0 calls, byte-identical
   const again = await compile(r.files, [tags()]);
   assert.deepStrictEqual([again.res.exit, again.calls, again.runs], [0, 0, 0]);
   assert.deepStrictEqual(again.files, r.files);
 }
 
-console.log(`invalidation: matrix (unrelated, contract, sibling body, examples, model, developer, failed, rerun, callee regen; 2 GAPs) ok in ${Math.round(performance.now() - t0)} ms`);
+// ── 9b. a caller fails its re-verification against the regenerated callee: like any failed target, it goes on to the
+//    model (repair) and the repaired body is committed with the callee's, in one transaction
+{
+  const r = await compile(ex4, [tags(), chat("return n * n;"), chat("return sq(p.x) + sq(p.y) + 0;")], [CP, harness(true, true), CP, harness(false), CP, harness(true)]);
+  assert.equal(r.res.exit, 0, JSON.stringify(r.res.diagnostics));
+  assert.deepStrictEqual([r.calls, r.runs], [2, 6], "9b. sq generated; norm2 re-verified, failed, repaired");
+  assert.ok(r.files["src/geo.ts"]!.includes("return n * n;") && r.files["src/geo.ts"]!.includes("return sq(p.x) + sq(p.y) + 0;"));
+  // without a repair the run fails and writes nothing (the callee's new body included)
+  const f = await compile(ex4, [tags(), chat("return n * n;"), BAD, BAD], [CP, harness(true, true), CP, harness(false)]);
+  assert.equal(f.res.exit, 1);
+  assert.deepStrictEqual(f.res.diagnostics.filter((x) => x.code.startsWith("OARC-E")).map((x) => `${x.code} ${x.id}`), ["OARC-E082 geo.norm2"]);
+  assert.equal(f.files["src/geo.ts"], ex4["src/geo.ts"], "9b. nothing written");
+}
+
+console.log(`invalidation: matrix (unrelated, contract, sibling body, examples, model, developer, failed, rerun, callee regen, caller repair) ok in ${Math.round(performance.now() - t0)} ms`);
