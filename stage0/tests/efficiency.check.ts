@@ -195,5 +195,6 @@ console.log("efficiency: ok");
   assert.equal((await go(first.files, ["return n + 1;"], { retryFailed: true })).calls, 1, "--retry-failed retries it");
   const edited = { ...first.files, "src/ef.ts": first.files["src/ef.ts"]!.replace('"add one"', '"add one to n"') };
   assert.equal((await go(edited, ["return n + 1;"])).calls, 1, "a spec change retries it");
+  for (const bad of ["null", "[]", "{"]) assert.equal((await go({ ...project(1), ".openarc/failed.json": bad }, ["return n + 1;"])).res.exit, 0, `failed.json ${bad} is ignored`);
   console.log("efficiency: failed-region memory ok");
 }

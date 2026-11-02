@@ -1424,7 +1424,7 @@ const batchSchema = (ids: string[]): { loose: Json; strict: Json } => {
  *  and backend, no cache hit, none naming another in `calls`) is ONE request. Returns this region's share and keeps
  *  the siblings' for their own generate; null = no batch (one request per region, as before). Each share then goes
  *  through the usual parse, repeat, verify and commit of its region; only failed regions retry, one by one. */
-async function batchReply(ports: Ports, p: Project, r: RegionInfo, backend: BackendConfig & { name: string }): Promise<BatchShare | null> {
+async function batchReply(ports: Ports, req: CompileRequest, p: Project, r: RegionInfo, backend: BackendConfig & { name: string }): Promise<BatchShare | null> {
   const mine = p.batched?.get(r.id);
   if (mine) {
     p.batched!.delete(r.id);
@@ -1434,11 +1434,13 @@ async function batchReply(ports: Ports, p: Project, r: RegionInfo, backend: Back
   const none = (): null => (lap(p, "context", tb0), null);
   if (p.config.compilation.batch === "off" || !batchable(r) || !p.targets) return none();
   let group = [r];
+  const failed = await readFailed(ports);
   for (const id of p.targets.slice(p.targets.indexOf(r.id) + 1)) {
     const x = p.regions.find((y) => y.id === id)!;
     const b = backendFor(p, id, 0);
     if (x.file !== r.file || !batchable(x) || b.name !== backend.name || b.outputFormat !== backend.outputFormat) continue;
     if ((await ports.fs.read(cachePathOf(x))) !== null || x.kept) continue; // a cache hit or a kept body needs no model call
+    if (skipsFailed(failed, req, x)) continue; // generate skips it, so its share of a batch would be wasted
     group.push(x);
     if (group.length === 4) break; // ponytail: bounded lookahead, so an over-budget file never rescans every sibling
   }
@@ -1538,7 +1540,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
   // and every compile paid up to maxAttempts calls for it (multi-file evolution benchmark). Naming the id, or
   // --retry-failed, retries it.
   const failed = await readFailed(ports);
-  if (cached === null && r.fingerprint && failed[id]?.fingerprint === r.fingerprint && !req.retryFailed && !req.ids.includes(id)) {
+  if (cached === null && skipsFailed(failed, req, r)) {
     ports.log(`  ${id}: failed before with this spec and context; skipped (name it, or pass --retry-failed, to try again)`);
     diagnostics.push(err("OARC-E082", { id, detail: `failed before: ${failed[id]!.detail}`.slice(0, 200) }));
     return giveUp();
@@ -1576,7 +1578,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       let shared: BatchShare | null;
       const cx0 = p.timings?.context ?? 0;
       try {
-        shared = attempt === 1 ? await batchReply(ports, p, r, backend) : null;
+        shared = attempt === 1 ? await batchReply(ports, req, p, r, backend) : null;
       } catch (e) {
         diagnostics.push(err("OARC-E080", { id, detail: (e as Error).message.slice(0, 120) }));
         return backendDown();
@@ -1692,11 +1694,14 @@ const FAILED = ".openarc/failed.json";
 type Failed = Record<string, { fingerprint: string; detail: string }>;
 async function readFailed(ports: Ports): Promise<Failed> {
   try {
-    return JSON.parse((await ports.fs.read(FAILED)) ?? "{}") as Failed;
+    const v: unknown = JSON.parse((await ports.fs.read(FAILED)) ?? "{}");
+    return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Failed) : {};
   } catch {
     return {};
   }
 }
+const skipsFailed = (f: Failed, req: CompileRequest, x: RegionInfo) =>
+  !!x.fingerprint && f[x.id]?.fingerprint === x.fingerprint && !req.retryFailed && !req.ids.includes(x.id);
 const writeFailed = (ports: Ports, f: Failed) => ports.fs.write(FAILED, JSON.stringify(f, null, 2) + "\n");
 
 interface Verified {
