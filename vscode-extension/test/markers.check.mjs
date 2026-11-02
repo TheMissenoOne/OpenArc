@@ -10,32 +10,32 @@ const specs = (p) => p.specs.map((s) => [s.id, s.kind, s.line + 1, s.examples]);
 
 const compile = load("compile.ts");
 assert.deepEqual(pairs(compile), [
-  ["compile.run", 78, 142, null, false],
-  ["compile.run.lock", 90, 92, "compile.run", true],
-  ["compile.run.recover", 96, 98, "compile.run", true],
-  ["compile.run.parse", 100, 102, "compile.run", true],
-  ["compile.run.analyze", 105, 107, "compile.run", true],
-  ["compile.run.plan", 110, 112, "compile.run", true],
-  ["compile.run.generate", 117, 119, "compile.run", true],
-  ["compile.run.stage", 127, 129, "compile.run", true],
-  ["compile.run.commit", 132, 134, "compile.run", true],
-  ["compile.run.unlock", 137, 139, "compile.run", true],
+  ["compile.run", 119, 183, null, false],
+  ["compile.run.lock", 131, 133, "compile.run", true],
+  ["compile.run.recover", 137, 139, "compile.run", true],
+  ["compile.run.parse", 141, 143, "compile.run", true],
+  ["compile.run.analyze", 146, 148, "compile.run", true],
+  ["compile.run.plan", 151, 153, "compile.run", true],
+  ["compile.run.generate", 158, 160, "compile.run", true],
+  ["compile.run.stage", 168, 170, "compile.run", true],
+  ["compile.run.commit", 173, 175, "compile.run", true],
+  ["compile.run.unlock", 178, 180, "compile.run", true],
 ]);
 assert.deepEqual(specs(compile), [
-  ["compile.run", "function", 17, 2],
+  ["compile.run", "function", 17, 3],
   ...["lock", "recover", "parse", "analyze", "plan", "generate", "stage", "commit", "unlock"]
-    .map((s, i) => [`compile.run.${s}`, "block", 42 + 4 * i, 0]),
+    .map((s, i) => [`compile.run.${s}`, "block", 74 + 5 * i, 0]),
 ]);
 assert.deepEqual(compile.problems, []);
 
 const ids = load("ids.ts");
-assert.deepEqual(pairs(ids), [["ids.isValidId", 24, 26, null, true], ["ids.findDuplicateIds", 51, 64, null, false]]);
-assert.deepEqual(specs(ids), [["ids.isValidId", "function", 8, 9], ["ids.findDuplicateIds", "function", 32, 3]]);
+assert.deepEqual(pairs(ids), [["ids.isValidId", 24, 28, null, false], ["ids.findDuplicateIds", 53, 66, null, false]]);
+assert.deepEqual(specs(ids), [["ids.isValidId", "function", 8, 9], ["ids.findDuplicateIds", "function", 34, 3]]);
 assert.deepEqual(ids.problems, []);
 
 // markers.ts: its examples hold marker text inside strings, which must be ignored.
 const markers = load("markers.ts");
-assert.deepEqual(pairs(markers).map((p) => p.slice(0, 3)), [["markers.scanMarkers", 51, 53], ["markers.buildRegionTree", 103, 105]]);
+assert.deepEqual(pairs(markers).map((p) => p.slice(0, 3)), [["markers.scanMarkers", 63, 65], ["markers.buildRegionTree", 115, 117]]);
 assert.deepEqual(markers.problems, []);
 
 // id offsets point at the id text, for go-to-definition.

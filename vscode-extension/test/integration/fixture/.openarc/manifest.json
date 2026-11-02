@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "regions": {
+    "math.sub": { "kind": "function", "ownership": "compiler", "provenance": { "model": "qwen2.5-coder:7b", "attempts": 1 } }
+  }
+}

@@ -1,12 +1,17 @@
 {
   "name": "openarc-vscode",
   "displayName": "OpenArc",
-  "description": "Navigation, CodeLens, diagnostics and region tinting for OpenArc specs and regions.",
+  "description": "Navigation, CodeLens, diagnostics, live watch status and region tinting for OpenArc specs and regions.",
   "version": "0.1.0",
   "publisher": "openarc",
   "license": "MIT",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Programming Languages", "Linters"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
   "main": "./out/extension.js",
   "activationEvents": [
     "workspaceContains:openarc.config.json",
@@ -14,31 +19,137 @@
   ],
   "contributes": {
     "commands": [
-      { "command": "openarc.compile", "title": "Compile", "category": "OpenArc" },
-      { "command": "openarc.graph", "title": "Graph", "category": "OpenArc" },
-      { "command": "openarc.release", "title": "Release region", "category": "OpenArc" },
-      { "command": "openarc.freeze", "title": "Freeze region", "category": "OpenArc" }
+      {
+        "command": "openarc.compile",
+        "title": "Compile",
+        "category": "OpenArc"
+      },
+      {
+        "command": "openarc.watch",
+        "title": "Watch (continuous compilation)",
+        "category": "OpenArc"
+      },
+      {
+        "command": "openarc.graph",
+        "title": "Graph",
+        "category": "OpenArc"
+      },
+      {
+        "command": "openarc.release",
+        "title": "Release region",
+        "category": "OpenArc"
+      },
+      {
+        "command": "openarc.freeze",
+        "title": "Freeze region",
+        "category": "OpenArc"
+      },
+      {
+        "command": "openarc.peek",
+        "title": "Peek spec, body and attempts",
+        "category": "OpenArc",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "openarc.extract",
+        "title": "Extract regions from this file",
+        "category": "OpenArc"
+      },
+      {
+        "command": "openarc.checkOracle",
+        "title": "Check region against an oracle",
+        "category": "OpenArc"
+      },
+      {
+        "command": "openarc.backendsTest",
+        "title": "Test backend",
+        "category": "OpenArc"
+      },
+      {
+        "command": "openarc.doctor",
+        "title": "Doctor",
+        "category": "OpenArc"
+      }
     ],
     "colors": [
-      { "id": "openarc.pendingBackground", "description": "Background of pending OpenArc regions.",
-        "defaults": { "dark": "#80808014", "light": "#80808014", "highContrast": "#00000000" } },
-      { "id": "openarc.compilerBackground", "description": "Background of compiler-owned OpenArc regions.",
-        "defaults": { "dark": "#3794ff12", "light": "#0066bf0d", "highContrast": "#00000000" } },
-      { "id": "openarc.developerBackground", "description": "Background of developer-owned OpenArc regions.",
-        "defaults": { "dark": "#89d18512", "light": "#3880360d", "highContrast": "#00000000" } },
-      { "id": "openarc.conflictedBackground", "description": "Background of conflicted OpenArc regions.",
-        "defaults": { "dark": "#f4877126", "light": "#e5140014", "highContrast": "#00000000" } }
-    ]
+      {
+        "id": "openarc.pendingBackground",
+        "description": "Background of pending OpenArc regions.",
+        "defaults": {
+          "dark": "#80808014",
+          "light": "#80808014",
+          "highContrast": "#00000000"
+        }
+      },
+      {
+        "id": "openarc.compilerBackground",
+        "description": "Background of compiler-owned OpenArc regions.",
+        "defaults": {
+          "dark": "#3794ff12",
+          "light": "#0066bf0d",
+          "highContrast": "#00000000"
+        }
+      },
+      {
+        "id": "openarc.developerBackground",
+        "description": "Background of developer-owned OpenArc regions.",
+        "defaults": {
+          "dark": "#89d18512",
+          "light": "#3880360d",
+          "highContrast": "#00000000"
+        }
+      },
+      {
+        "id": "openarc.conflictedBackground",
+        "description": "Background of conflicted OpenArc regions.",
+        "defaults": {
+          "dark": "#f4877126",
+          "light": "#e5140014",
+          "highContrast": "#00000000"
+        }
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "openarc.status",
+          "name": "OpenArc",
+          "icon": "$(symbol-namespace)",
+          "when": "openarc.hasProject"
+        }
+      ]
+    },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "openarc.peek",
+          "when": "view == openarc.status && viewItem == region",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "OpenArc",
+      "properties": {
+        "openarc.cliPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The `openarc` CLI to run, relative to the project root or absolute. A `.js`/`.mjs`/`.cjs`/`.ts` file runs with `node`. Empty: `npx --no openarc`, the project's own install."
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "tsc -p .",
     "vscode:prepublish": "npm run compile",
-    "test": "tsc -p . && node test/markers.check.mjs"
+    "test": "tsc -p . && node test/markers.check.mjs && node test/records.check.mjs",
+    "test:integration": "tsc -p . && node test/integration/run.mjs"
   },
   "dependencies": {
     "typescript": "~5.9.3"
   },
   "devDependencies": {
-    "@types/vscode": "~1.85.0"
+    "@types/vscode": "~1.85.0",
+    "@vscode/test-electron": "^3.1.0"
   }
 }
