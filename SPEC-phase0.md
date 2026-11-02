@@ -277,6 +277,7 @@ A function region's spec may carry its body as a **sketch**: `sketch: async (a, 
 - **PLAN** orders a sketch's callees (project regions it calls) before it, so its examples run against compiled callees.
 - **Coverage (§8.10):** the sandbox copy carries a probe in every hole (`id#n`). A hole that no passing example reaches is unverified: `OARC-W045` (detail `hole:<id>#<n>`), the candidate is neither cached nor committed, and the region stays pending.
 - **Sketch versus example (`OARC-E100`):** when an example fails and its run reached no hole, its result is decided by the developer's code (the sketch and its callees), so no fill can fix it. The compiler reports E100 (detail = the example name) and stops that region's attempts. A failure that ends in a pending callee is inconclusive, not E100.
+- **Pending callees:** when every failing outcome of a function region ends in a still-pending region (its callee was not compiled in this run, or failed), the result is inconclusive, not `OARC-E090`: no body can change it, so the region's attempts stop there (`OARC-W042`, detail `waiting:<pending ids>`), nothing is cached or committed, and the region stays pending until its callees exist. This applies to every function region (it is most common with a sketch, whose callees are fixed); blocks and code-first groups keep the rules of §8.10.
 - **Hashing:** the spec hash covers the sketch through the §4.1 normalisation (whitespace-insensitive, comments count) plus the fills-protocol version.
 - A sketch never escalates to L2 (whole file); a context failure escalates to L1 at most.
 
@@ -441,7 +442,7 @@ Code-first regions (§3.8): while pending, the id is derived from the declaratio
 
 Static rules are applied to the owned text of each **candidate** body, and to the whole staged program for tsc. They are best-effort. The sandbox (§9.2) is the security boundary.
 
-1. `tsc --noEmit` on the staged program, with the project tsconfig, MUST produce zero errors (`OARC-E070`).
+1. `tsc --noEmit` on the staged program, with the project tsconfig, MUST produce zero errors (`OARC-E070`). A tsc error in the region's file (or its spec's file) that lies outside every region's markers, on the analysed program where pending bodies are placeholders, is the spec's, not the body's: no body can fix it. It is reported before the region's first model call as `OARC-E070` (detail `spec:TS<code>`, at its line) and the region gets no attempt. Unused-name errors don't count (a placeholder doesn't use its parameters yet). When an import does not resolve (TS2307, TS2792: dependencies not installed), only those errors are reported, and sketch errors (§3.7) in that file are not: they are its fallout.
 2. Imports: every requested import `{from, names, default?}` MUST name a specifier in `spec.deps`, `openarc`, or a module the file already imports; or be a type-only import of closure types the context package marked "not in scope", from the file that declares them (§8.8) (`OARC-E071`). Dynamic `import()` and `require` are always rejected (`OARC-E072`, `OARC-E073`); the `require` message tells the model to use `imports` instead.
 3. Forbidden free identifiers, unless allowed by `effects`: `process`, `globalThis`, `global`, `window`, `self`, `eval`, `Function`, `fetch`, `XMLHttpRequest`, `WebSocket`, `Deno`, `Bun`, `setTimeout`, `setInterval`, `queueMicrotask` (`OARC-E073`).
 4. Effect-gated identifiers: `Date`, `performance` need `clock`; `Math.random` and `crypto.getRandomValues`, `crypto.randomUUID`, `crypto.randomBytes` need `random`; `console` needs `log` (`OARC-E074`). Any other use of `crypto` is pure: `createHash` on `crypto` imported from `node:crypto` needs no effect. A name the file binds (its imports and top-level declarations, **plus the candidate's requested imports**) is not the global of the same name. Before 0.6.3 the requested imports were not counted, so `import crypto from "node:crypto"` requested by the model still read as the global and `hash.sha256Tagged` failed three times with `'crypto' requires effect 'random'`. The pure uses of `Date` are exempt: `Date.parse(…)`, `Date.UTC(…)`, `new Date(<at least one argument>)`, and `Date` as a type. `Date.now()` and `new Date()` with no argument read the clock and stay gated.
@@ -701,7 +702,7 @@ At PLAN, a function target whose examples are fewer than 3 (`OARC-W044`, detail 
 
 `openarc lint [--strict | --profile recommended|strict] [--fail-on-warnings] [--format text|json] [ids or files…]` runs PARSE and ANALYZE offline (no fingerprints, no model call, no sandbox run, no network request) and then checks each function region's spec against the rules below. It writes nothing and changes nothing in compile: the diagnostics compile emits, its exit codes and the fingerprint are the same with or without a `lint` block.
 
-Rules (severity in `recommended` / `strict`): `spec/contradictory-examples` (error/error: equal canonical-JSON `args`, different `expected` or `throws`), `spec/duplicate-test-names` (warn/error: example names, or kind and name of the tests that run for the region), `spec/require-tests` (warn/error: no example, `arc.test` or `arc.law`), `spec/require-intent` (warn/warn: empty intent, unless a sketch, `ui` or `concept` is present), `spec/thin-examples` (warn/warn: the §9.5 condition, reported only when the region has checks), `spec/boundary-cases` (off/warn: a `number`, `string` or array parameter that no example argument, nor any literal in its tests, sets to `0`/negative, `""`, `[]`, or `null`/`undefined` when the type admits it), `spec/return-union-coverage` (off/warn: a literal union return type, or one including `null`/`undefined`, with a literal/`null`/`undefined` member that is no example's `expected`; regions with tests are skipped), `spec/undeclared-effects` (warn/error: an effect keyword in the intent for an effect not in `effects`), `spec/explicit-deps` (off/warn: the intent names one of the spec file's value imports as code while `deps` and `calls` are both absent), `spec/suppression-reason` (error/error). Severities come from the `lint` block (§13). Spec errors from ANALYZE (`E010`–`E013`, `E020`, `E022`, `E041`, `E064`, `E070`) are listed as error findings under their code.
+Rules (severity in `recommended` / `strict`): `spec/contradictory-examples` (error/error: equal canonical-JSON `args`, different `expected` or `throws`), `spec/duplicate-test-names` (warn/error: example names, or kind and name of the tests that run for the region), `spec/require-tests` (warn/error: no example, `arc.test` or `arc.law`), `spec/require-intent` (warn/warn: empty intent, unless a sketch, `ui` or `concept` is present), `spec/thin-examples` (warn/warn: the §9.5 condition, reported only when the region has checks), `spec/boundary-cases` (off/warn: a `number`, `string` or array parameter that no example argument, nor any literal in its tests, sets to `0`/negative, `""`, `[]`, or `null`/`undefined` when the type admits it), `spec/return-union-coverage` (off/warn: a literal union return type, or one including `null`/`undefined`, with a literal/`null`/`undefined` member that is no example's `expected`; regions with tests are skipped), `spec/undeclared-effects` (warn/error: an effect keyword in the intent for an effect not in `effects`), `spec/explicit-deps` (off/warn: the intent names one of the spec file's value imports as code while `deps` and `calls` are both absent), `spec/suppression-reason` (error/error). Severities come from the `lint` block (§13). Spec errors from ANALYZE (`E010`–`E013`, `E020`, `E022`, `E041`, `E064`, `E070`) are listed as error findings under their code, and so are the `E070 spec:TS<code>` errors compile would report before the first model call (§7 rule 1), except an import that does not resolve: that is the environment (dependencies not installed), not the spec.
 
 A comment `// openarc-lint-disable-next-line <rule>[, <rule>…] -- <reason>` on the line directly above a spec (its `defineRegion` statement, its code-first declaration including the JSDoc, or a method's class) suppresses those rules for that region. Without a reason it suppresses nothing and is itself a `spec/suppression-reason` finding.
 
@@ -763,7 +764,7 @@ A diagnostic is `{code, id?, file?, line?, detail?}`. It has **no message field*
 | E035 | unsupported construct in a block region |
 | W040 | block region verified indirectly |
 | W041 | block region has no behavioral verification (parent has no examples) |
-| W042 | block held back: its function can't be verified until all its blocks exist (§8.10) |
+| W042 | held back: a block whose function can't be verified until all its blocks exist (§8.10), or a function region whose failing outcomes all end in pending callees (detail `waiting:<ids>`, §3.7) |
 | W043 | region keeps a body that does not satisfy its current spec (its compile failed; displayed `stale`, §6.3.1) |
 | W044 | thin examples: fewer than 3, or none with an edge case (§9.5); `tests:0` for a code-first region with neither tests nor examples |
 | W045 | block, code-first region or sketch hole unverified: no passing example or test reaches it (§8.10; detail `unreached:<function id>`, `unreached:<id>` or `hole:<id>#<n>`) |
@@ -774,7 +775,7 @@ A diagnostic is `{code, id?, file?, line?, detail?}`. It has **no message field*
 | E062 | region markers removed |
 | E063 | region moved to a different parent |
 | E064 | `@arc id` disagrees with the markers inside a code-first body (§3.8, §6.4) |
-| E070 | type error |
+| E070 | type error; details `sketch:TS<code>` (§3.7), `test:TS<code>` (§2.7), `spec:TS<code>` (outside the regions, before any model call, §7 rule 1) |
 | E071 | import not in `deps` |
 | E072 | dynamic import / require |
 | E073 | forbidden global |
@@ -865,6 +866,9 @@ Required cases (minimum):
 | 042 | a class member no passing test reaches | W045 `unreached:<id>`, W042 for its siblings, nothing committed |
 | 043 | a test registered at runtime outside the static plan | E090 `test-registry:…`, the region stops |
 | 044 | `openarc migrate` of a compiler-owned region | code-first form; same id, ownership and provenance; no W060 or E061 |
+| 045 | a spec whose signature or examples fail tsc on their own | E070 `spec:TS<code>`, no model call |
+| 046 | a sketch region whose callee is still pending | W042 `waiting:<callee>` after one attempt, no E090 |
+| 047 | a string literal containing a `defineRegion` call with an existing id | no E011 (only real calls are specs) |
 
 ---
 

@@ -261,6 +261,11 @@ export async function lintCommand(ports: Ports, req: CompileRequest, args: strin
   const diagnostics: Diagnostic[] = [];
   const project = await engine.parse(ports, req, diagnostics);
   await engine.analyze(ports, req, project, diagnostics, { offline: true }); // no model, no sandbox
+  // what compile would find before the first model call: tsc errors outside the regions (a sketch's or test's own E070 is
+  // not repeated). An import that doesn't resolve is the environment (dependencies not installed), not the spec.
+  for (const f of new Set(project.regions.filter((r) => r.kind === "function").flatMap((r) => [r.file, r.spec.file])))
+    for (const d of engine.specTypeErrors(project, f))
+      if (!/^spec:TS(2307|2792)$/.test(d.detail!) && !diagnostics.some((x) => x.code === d.code && x.file === d.file && x.line === d.line)) diagnostics.push(d);
   const unknown = only.filter((o) => !project.regions.some((r) => r.id === o || r.file === o || r.spec.file === o));
   if (unknown.length) {
     io.err(`openarc lint: no region or spec file ${unknown.join(", ")}`);
