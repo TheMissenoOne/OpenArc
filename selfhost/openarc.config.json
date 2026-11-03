@@ -39,12 +39,6 @@
     }
   },
   "regions": {
-    "cli.parseArgv": {
-      "backend": "seed"
-    },
-    "hash.canonicalJson": {
-      "backend": "seed"
-    },
     "hash.sha256Tagged": {
       "backend": "seed"
     },
@@ -69,9 +63,6 @@
     "p2p.onGossip": {
       "backend": "seed"
     },
-    "plan.selectTargets": {
-      "backend": "seed"
-    },
     "watch.takeNext": {
       "backend": "seed"
     },
@@ -79,9 +70,6 @@
       "backend": "qwen35"
     },
     "lb.weighted": {
-      "backend": "qwen35"
-    },
-    "sandbox.readHarnessOutput": {
       "backend": "qwen35"
     },
     "watch.classifyPath": {

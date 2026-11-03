@@ -4,7 +4,7 @@
 set -u -o pipefail
 trap 'systemctl --user stop oa-screen 2>/dev/null; systemctl --user start llama-server.service 2>/dev/null' EXIT # any exit leaves the default server up
 S=/tmp/claude-1000/-mnt-data-projetos/0a52dddd-ec03-4d58-8441-c8ccfe4d6411/scratchpad
-WT=/mnt/data/projetos/openarc-wt-cascade; OUT=$WT/cascade-results; mkdir -p "$OUT"
+WT=/mnt/data/projetos/openarc-wt-cascade; OUT=${OUT:-$WT/cascade-results}; mkdir -p "$OUT" # OUT, IDS (a file of ids): optional
 BIN=/mnt/data/tools/llama.cpp/build-vulkan/bin/llama-server; G=/mnt/data/models/gguf
 avail() { awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo; }
 cd "$WT/selfhost"
@@ -15,7 +15,7 @@ for name,model in [("seed","seed-coder-8b"),("qwen35","qwen3.5-9b"),("q14","qwen
 c.setdefault("regions",{}); json.dump(c,open(f,"w"),indent=2); open(f,"a").write("\n")
 PY
 remaining() { node --no-warnings ../stage0/src/main.ts graph 2>/dev/null | awk '$3=="pending"||$3=="stale"{print $1}'; }
-remaining > "$OUT/ids-0.txt" || { echo "graph failed" >&2; exit 1; }
+if [ -n "${IDS:-}" ]; then cp "$IDS" "$OUT/ids-0.txt"; else remaining > "$OUT/ids-0.txt" || { echo "graph failed" >&2; exit 1; }; fi
 pass=0
 for spec in "seed seed-coder-8b $G/Seed-Coder-8B-Instruct-Q4_K_M.gguf" "qwen35 qwen3.5-9b $G/Qwen3.5-9B-Q4_K_M.gguf" "q14 qwen2.5-coder-14b-iq3m $G/Qwen2.5-Coder-14B-Instruct-IQ3_M.gguf -ctk q8_0 -ctv q8_0"; do
   set -- $spec; be=$1; alias=$2; gguf=$3; shift 3; pass=$((pass+1))
