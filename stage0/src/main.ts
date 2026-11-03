@@ -5,6 +5,8 @@ import { existsSync, watch } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import * as http from "node:http";
+import * as https from "node:https";
 import type { CompileRequest, Diagnostic, Ports } from "./types.ts";
 import { parseArgv } from "./cli.ts";
 import { run } from "./compile.ts";
@@ -122,10 +124,24 @@ export function realPorts(root: string): Ports {
       },
     },
     http: {
+      // node:http, not fetch: fetch drops a request whose response headers take over 300 s (undici headersTimeout),
+      // and a non-streamed completion sends none until it is done, so a slow model (~8 tokens/s, e.g. a 14B partly on
+      // the CPU) failed every long reply as "fetch failed". No client timeout here; a dead server still fails fast.
       async postJson(url, body, headers) {
-        const r = await fetch(url, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(body) });
-        const text = await r.text();
-        if (!r.ok) throw new Error(`HTTP ${r.status}: ${text.slice(0, 200)}`);
+        const data = JSON.stringify(body);
+        const u = new URL(url);
+        const { status, text } = await new Promise<{ status: number; text: string }>((ok, no) => {
+          const req = (u.protocol === "https:" ? https : http).request(u, { method: "POST", headers: { ...headers, "content-type": "application/json", "content-length": Buffer.byteLength(data) } }, (res) => {
+            let t = "";
+            res.setEncoding("utf8");
+            res.on("data", (c: string) => (t += c));
+            res.on("end", () => ok({ status: res.statusCode ?? 0, text: t }));
+            res.on("error", no);
+          });
+          req.on("error", no);
+          req.end(data);
+        });
+        if (status < 200 || status > 299) throw new Error(`HTTP ${status}: ${text.slice(0, 200)}`);
         return text;
       },
       async get(url) {
