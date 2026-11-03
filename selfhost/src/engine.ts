@@ -713,18 +713,27 @@ function resolveLocal(p: Project, fromRel: string, spec: string): string | null 
     else if (seg !== ".") parts.push(seg);
   }
   const rel = parts.join("/");
-  return p.files.has(rel) ? rel : null;
+  if (p.files.has(rel)) return rel;
+  const ts_ = rel.replace(/\.js$/, ".ts"); // nodenext: "./a.js" names a.ts
+  return ts_ !== rel && p.files.has(ts_) ? ts_ : null;
 }
 
-/** The function regions of other project files that `rel` imports (by name, or all of a module imported as a
- *  namespace), with the local name each is bound to there. */
+/** The function regions of other project files that `rel` imports (by name, as the default export, or all of a module
+ *  imported as a namespace), with the local name each is bound to there. */
 function importedRegions(p: Project, rel: string): { r: RegionInfo; local: string }[] {
   const out: { r: RegionInfo; local: string }[] = [];
   for (const d of p.program?.getSourceFile(abs(p, rel))?.statements.filter(ts.isImportDeclaration) ?? []) {
     const from = resolveLocal(p, rel, (d.moduleSpecifier as ts.StringLiteral).text);
     const nb = d.importClause?.namedBindings;
-    if (!from || !nb) continue;
+    const dflt = d.importClause?.name;
+    if (!from || (!nb && !dflt)) continue;
     const callable = p.regions.filter((x) => x.file === from && x.kind === "function" && !x.spec.codeFirst?.cls);
+    if (dflt) {
+      const name = defaultExportName(p.program?.getSourceFile(abs(p, from)));
+      const r = callable.find((x) => x.spec.symbol === name);
+      if (r) out.push({ r, local: dflt.text });
+    }
+    if (!nb) continue;
     if (ts.isNamespaceImport(nb)) out.push(...callable.map((r) => ({ r, local: nb.name.text })));
     else for (const e of nb.elements) {
       const r = callable.find((x) => x.spec.symbol === (e.propertyName ?? e.name).text);
@@ -732,6 +741,15 @@ function importedRegions(p: Project, rel: string): { r: RegionInfo; local: strin
     }
   }
   return out;
+}
+
+/** The name a module's default export is declared under: `export default function f`, or `export default f;`. */
+function defaultExportName(sf: ts.SourceFile | undefined): string | undefined {
+  for (const st of sf?.statements ?? []) {
+    if (ts.isFunctionDeclaration(st) && st.name && st.modifiers?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword)) return st.name.text;
+    if (ts.isExportAssignment(st) && !st.isExportEquals && ts.isIdentifier(st.expression)) return st.expression.text;
+  }
+  return undefined;
 }
 
 /** The import declaration most often used for package `spec` across the project (value imports only), or null. */
@@ -1785,17 +1803,22 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
  *  p.targets, the array compile.run iterates, so they run after it in the same transaction (issue #14).
  *  ponytail: "calls" = the caller's body names the symbol (or the namespace it is imported through). */
 function recheckCallers(p: Project, r: RegionInfo): void {
-  const sym = p.specs.get(r.root)!.symbol;
-  const names = (x: RegionInfo, local: string) => new RegExp(`(?<![\\w$])${local.replace(/\$/g, "\\$")}(?![\\w$])`).test(x.bodyLines.join("\n"));
-  const callers = p.regions.filter((x) => x.file === r.file && x.root !== r.root && names(x, sym));
-  for (const x of p.regions) if (x.file !== r.file && importedRegions(p, x.file).some((i) => i.r.root === r.root && names(x, i.local))) callers.push(x);
-  for (const x of callers) {
+  for (const x of callersOf(p, r)) {
     if (x.stale || x.state !== "compiler" || p.targets?.includes(x.id)) continue;
     x.kept = keptBody(p, x);
     if (x.kept === null) continue;
     x.recheck = true;
     p.targets?.push(x.id);
   }
+}
+
+/** The regions whose body names function region `r`: in its file, or through an import of it. */
+function callersOf(p: Project, r: RegionInfo): RegionInfo[] {
+  const sym = p.specs.get(r.root)!.symbol;
+  const names = (x: RegionInfo, local: string) => new RegExp(`(?<![\\w$])${local.replace(/\$/g, "\\$")}(?![\\w$])`).test(x.bodyLines.join("\n"));
+  const callers = p.regions.filter((x) => x.file === r.file && x.root !== r.root && names(x, sym));
+  for (const x of p.regions) if (x.file !== r.file && importedRegions(p, x.file).some((i) => i.r.root === r.root && names(x, i.local))) callers.push(x);
+  return callers;
 }
 
 /** Regions whose attempts were exhausted (E082), with the fingerprint they failed on (generate). */
@@ -2208,6 +2231,38 @@ export async function stage(ports: Ports, req: CompileRequest, p: Project, candi
       for (const r of mine)
         if (!unreached.includes(r.id)) diagnostics.push(err("OARC-W042", { id: r.id, detail: `unreached:${unreached.join(",")}` }));
         else if (!diagnostics.some((d) => d.code === "OARC-W045" && d.id === r.id)) diagnostics.push(err("OARC-W045", { id: r.id, detail: `unreached:${r.id}` }));
+    }
+  }
+  // Callers against the final bodies (#14). generate() re-verifies a caller queued after its callee passed; this catches
+  // the rest: a caller verified BEFORE its callee changed (an earlier target), one recheckCallers can't keep (nested
+  // blocks, or it failed under --keep-going), and one verified against a callee held back above. A failure aborts, or
+  // under --keep-going holds back the callee (and the caller, if it was generated this run).
+  // ponytail: one pass; a callee held here doesn't re-check the callers already passed against it.
+  const order = new Map(candidates.map((c, i) => [c.id, i]));
+  for (const c of candidates) {
+    const callee = regionOf(c.id);
+    if (callee.kind !== "function" || c.body === keptBody(p, callee)) continue;
+    const roots = new Set<string>();
+    for (const x of callersOf(p, callee)) {
+      const root = regionOf(x.root);
+      if (root.state !== "compiler" || root.stale && !order.has(root.id) || !hasChecks(p.specs.get(root.id))) continue;
+      if (p.regions.some((y) => y.root === root.id && y.pending && (!order.has(y.id) || held.has(y.id)))) continue; // not implemented yet
+      const xi = order.get(x.id);
+      const need = held.has(c.id) ? xi !== undefined && xi > order.get(c.id)! && !held.has(x.id) : xi === undefined || xi < order.get(c.id)!;
+      if (need) roots.add(root.id);
+    }
+    for (const rootId of roots) {
+      const res = await runSandbox(ports, req, p, rootId, overlay);
+      if (!res.error && !res.failed.length && res.complete) continue;
+      const code = res.error?.startsWith("OARC-E092") ? "OARC-E092" : "OARC-E090";
+      diagnostics.push(err(code, { id: rootId, detail: `callee:${c.id}:${res.error ?? res.failed.map((f) => f.name).join(",")}` }));
+      if (!req.keepGoing) return [];
+      for (const id of [c.id, ...p.regions.filter((y) => y.root === rootId && order.has(y.id)).map((y) => y.id)]) {
+        const y = regionOf(id);
+        held.add(id);
+        overlay.set(y.file, spliceRegion(overlay.get(y.file)!, id, y.bodyLines));
+      }
+      if (held.has(c.id)) break;
     }
   }
   if (p.sandboxDir) await ports.fs.remove(p.sandboxDir);

@@ -77,9 +77,9 @@ const DEPS: Record<string, string[]> = {
 // use.quad's fingerprint follows geo.sq's signature and intent like a same-file sibling's.
 const expected = (touched: string[]) => Object.keys(DEPS).filter((id) => DEPS[id]!.some((d) => touched.includes(d))).sort();
 
-async function compile(files: Record<string, string>, http: string[], proc: { code: number; stdout: string; timedOut: boolean }[] = []) {
+async function compile(files: Record<string, string>, http: string[], proc: { code: number; stdout: string; timedOut: boolean }[] = [], keepGoing = false) {
   const fake = fakePorts({ files, http, proc });
-  const res = await run(fake.instance as Ports, req);
+  const res = await run(fake.instance as Ports, { ...req, keepGoing });
   const s = fake.snapshot() as Snap;
   return { res, files: s.files, calls: s.requests.filter((q) => q.url.endsWith("/api/chat")).length, runs: s.runs.length };
 }
@@ -213,4 +213,29 @@ const ex4 = edit("src/geo.ts", "{ args: [3], expected: 9 }", "{ args: [3], expec
   assert.equal(f.files["src/geo.ts"], ex4["src/geo.ts"], "9b. nothing written");
 }
 
-console.log(`invalidation: matrix (unrelated, contract, sibling body, examples, model, developer, failed, rerun, callee regen, caller repair) ok in ${Math.round(performance.now() - t0)} ms`);
+// ── 9c. a caller verified BEFORE its callee changed (norm2 now precedes sq in the file, so it is the earlier target):
+//    the final check at STAGE re-runs it against sq's new body. A failure aborts; under --keep-going both are held back.
+{
+  const g = ex4["src/geo.ts"]!;
+  const n2 = /\/\/ @openarc:begin geo\.norm2\n[^]*?\/\/ @openarc:end geo\.norm2\n/.exec(g)![0];
+  const swapped = { ...ex4, "src/geo.ts": g.replace(n2, "").replace("// @openarc:begin geo.sq", `${n2}// @openarc:begin geo.sq`).replace("using sq", "via sq") };
+  const runs = [CP, harness(true), CP, harness(true, true), CP, harness(false)]; // norm2 generated, sq generated, norm2 at STAGE
+  const http = [tags(), chat("return sq(p.x) + sq(p.y);"), chat("return n * n;")];
+  const r = await compile(swapped, http, runs);
+  assert.deepStrictEqual([r.res.exit, r.runs], [1, 6], JSON.stringify(r.res.diagnostics));
+  assert.deepStrictEqual(r.res.diagnostics.filter((x) => x.code.startsWith("OARC-E")).map((x) => `${x.code} ${x.id} ${x.detail}`), ["OARC-E090 geo.norm2 callee:geo.sq:#1"]);
+  assert.equal(r.files["src/geo.ts"], swapped["src/geo.ts"], "9c. nothing written");
+  const k = await compile(swapped, http, runs, true);
+  assert.ok(!k.files["src/geo.ts"]!.includes("return n * n;"), "9c. --keep-going: sq's new body is held back");
+}
+
+// ── 9d. a default import through a nodenext ".js" specifier is still a cross-file caller: quad follows sq's contract
+{
+  const v = await compile({ ...B, "src/geo.ts": `${B["src/geo.ts"]}export default sq;\n`, "src/use.ts": B["src/use.ts"]!.replace('import { sq } from "./geo.ts";', 'import sq from "./geo.js";') }, [tags()]);
+  assert.equal(v.res.exit, 0, JSON.stringify(v.res.diagnostics));
+  assert.deepStrictEqual((await analyzed(v.files)).stale, [], "9d. the variant is clean");
+  const c = { ...v.files, "src/geo.ts": v.files["src/geo.ts"]!.replace('"n squared"', '"the square of n"') };
+  assert.ok((await analyzed(c)).stale.includes("use.quad"), "9d. sq's intent moved: its default-import caller is stale");
+}
+
+console.log(`invalidation: matrix (unrelated, contract, sibling body, examples, model, developer, failed, rerun, callee regen, caller repair, caller order, default import) ok in ${Math.round(performance.now() - t0)} ms`);
