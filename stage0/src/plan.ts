@@ -55,6 +55,17 @@ export const selectTargetsSpec = arc.defineRegion<SelectTargets>({
       args: [[{ id: "a", parent: null, state: "pending", stale: true }], ["zzz", "a"]],
       expected: { targets: ["a"], skipped: [] },
     },
+    {
+      name: "developer not stale is left alone; conflicted is skipped even when stale",
+      args: [
+        [
+          { id: "a", parent: null, state: "developer", stale: false },
+          { id: "b", parent: null, state: "conflicted", stale: true },
+        ],
+        [],
+      ],
+      expected: { targets: [], skipped: [{ code: "OARC-E061", id: "b" }] },
+    },
   ],
 });
 

@@ -140,7 +140,12 @@ function linkedPackages(nm: string): string[] {
  *  Idempotent; a stage that isn't on disk (in-memory ports) is left alone. */
 export function bwrapReadPaths(root: string, stageDir: string): string[] {
   const nm = join(root, "node_modules");
-  if (!existsSync(nm)) return [];
+  // a root the harness may not read (an example's in-memory "/p" under --permission): existsSync throws there, not false
+  try {
+    if (!existsSync(nm)) return [];
+  } catch {
+    return [];
+  }
   const rootReal = real(root);
   const outside = (p: string) => !inside(rootReal, real(p));
   // A symlinked node_modules is copied as the link itself; inside the real directory, relative links already resolve.

@@ -27,6 +27,14 @@ export const checkRestrictionsSpec = arc.defineRegion<CheckRestrictions>({
     { name: "this through arrow", args: ["const g = () => this;", false, []], expected: [{ code: "OARC-E035", detail: "this" }] },
     { name: "binding used later", args: ["const y = 2;", false, ["y"]], expected: [{ code: "OARC-E035", detail: "binding:y" }] },
     { name: "binding not used later", args: ["const y = 2; x = y;", false, ["z"]], expected: [] },
+    {
+      name: "function expressions, methods, accessors and classes are opaque",
+      args: ["const o = { m() { return this; }, get v() { return this; }, set v(x) { this.x = x; } }; const f = function () { return arguments; }; class C { y = this; }", false, []],
+      expected: [],
+    },
+    { name: "continue: labeled, or outside any loop", args: ["while (a) { continue outer; }\ncontinue;", false, []], expected: [{ code: "OARC-E035", detail: "continue" }, { code: "OARC-E035", detail: "continue" }] },
+    { name: "arguments object (not a property named arguments)", args: ["x = arguments.length;", false, []], expected: [{ code: "OARC-E035", detail: "arguments" }] },
+    { name: "new.target", args: ["if (!new.target) throw e;", false, []], expected: [{ code: "OARC-E035", detail: "new.target" }] },
   ],
 });
 

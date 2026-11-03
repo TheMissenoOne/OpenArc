@@ -120,6 +120,7 @@ export const parseOutputSpec = arc.defineRegion<ParseOutput>({
     },
     { args: ["not json"], expected: { ok: false, diagnostic: { code: "OARC-E081", detail: "invalid-json" } } },
     { args: ["[1]"], expected: { ok: false, diagnostic: { code: "OARC-E081", detail: "not-object" } } },
+    { args: ["null"], expected: { ok: false, diagnostic: { code: "OARC-E081", detail: "not-object" } } },
     { args: ["{\"body\":1}"], expected: { ok: false, diagnostic: { code: "OARC-E081", detail: "body-not-string" } } },
     {
       args: ["{\"body\":\"x\",\"extra\":true}"],
@@ -129,6 +130,7 @@ export const parseOutputSpec = arc.defineRegion<ParseOutput>({
       args: ["{\"body\":\"x\",\"imports\":[{\"from\":\"a\"}]}"],
       expected: { ok: false, diagnostic: { code: "OARC-E081", detail: "bad-imports" } },
     },
+    { args: ["{\"body\":\"x\",\"imports\":[null]}"], expected: { ok: false, diagnostic: { code: "OARC-E081", detail: "bad-imports" } } },
   ],
 });
 

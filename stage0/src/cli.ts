@@ -37,6 +37,7 @@ export const parseArgvSpec = arc.defineRegion<ParseArgv>({
     { args: [["watch", "--debounce", "50"]], expected: { cmd: "watch", debounceMs: 50 } },
     { args: [["watch", "--debounce"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["watch", "--debounce", "soon"]], expected: { cmd: "usage", reason: "bad-flag" } },
+    { args: [["watch", "--debounce", "-5"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["watch", "--debounce", "99999999999999999999"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["watch", "--bogus", "1"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["watch", "--debounce", "50", "--bogus"]], expected: { cmd: "usage", reason: "bad-flag" } },

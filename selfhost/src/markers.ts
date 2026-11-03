@@ -72,7 +72,7 @@ export const buildRegionTreeSpec = arc.defineRegion<BuildRegionTree>({
   intent: [
     "Pair markers with a stack. On the FIRST structural error, stop and return roots: [] and that single diagnostic:",
     "an end whose id differs from the open begin but which matches an outer open begin -> OARC-E031 at the end's line with that end's id;",
-    "an end with no matching open begin, or a begin still open at the end -> OARC-E030 at that marker's line with its id.",
+    "an end with no matching open begin, or a begin still open at the end (the innermost one) -> OARC-E030 at that marker's line with its id.",
     "Children are in source order.",
   ],
   examples: [
@@ -98,6 +98,31 @@ export const buildRegionTreeSpec = arc.defineRegion<BuildRegionTree>({
       name: "stray end",
       args: [[{ kind: "end", id: "a", line: 4 }]],
       expected: { roots: [], diagnostics: [{ code: "OARC-E030", id: "a", line: 4 }] },
+    },
+    {
+      name: "end matching no open begin, inside an open region",
+      args: [[{ kind: "begin", id: "a", line: 1 }, { kind: "end", id: "b", line: 2 }]],
+      expected: { roots: [], diagnostics: [{ code: "OARC-E030", id: "b", line: 2 }] },
+    },
+    {
+      name: "two begins left open: the innermost is reported",
+      args: [[{ kind: "begin", id: "a", line: 1 }, { kind: "begin", id: "a.b", line: 2 }]],
+      expected: { roots: [], diagnostics: [{ code: "OARC-E030", id: "a.b", line: 2 }] },
+    },
+    {
+      name: "three levels",
+      args: [[
+        { kind: "begin", id: "a", line: 1 },
+        { kind: "begin", id: "a.b", line: 2 },
+        { kind: "begin", id: "a.b.c", line: 3 },
+        { kind: "end", id: "a.b.c", line: 4 },
+        { kind: "end", id: "a.b", line: 5 },
+        { kind: "end", id: "a", line: 6 },
+      ]],
+      expected: {
+        roots: [{ id: "a", beginLine: 1, endLine: 6, children: [{ id: "a.b", beginLine: 2, endLine: 5, children: [{ id: "a.b.c", beginLine: 3, endLine: 4, children: [] }] }] }],
+        diagnostics: [],
+      },
     },
     {
       name: "crossed",
