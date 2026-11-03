@@ -1,0 +1,326 @@
+diff --git a/selfhost/src/palette/auth.ts b/selfhost/src/palette/auth.ts
+index 3706dc5..022fd0e 100644
+--- a/selfhost/src/palette/auth.ts
++++ b/selfhost/src/palette/auth.ts
+@@ -105,7 +105,14 @@ export const splitTokenSpec = arc.defineRegion<SplitToken>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin auth.splitToken
+-export const splitToken: SplitToken = (token) => arc.todo("auth.splitToken");
++export const splitToken: SplitToken = (token) => {
++  if (token.indexOf('.') === -1) return null;
++  const dotIndex = token.indexOf('.');
++  const id = token.slice(0, dotIndex);
++  const secret = token.slice(dotIndex + 1);
++  if (id.length === 0 || secret.length === 0) return null;
++  return [id, secret];
++};
+ // @openarc:end auth.splitToken
+ 
+ // ── auth.password ─────────────────────────────────────────────── variant, written as a sketch
+@@ -149,7 +156,18 @@ export const passwordSpec = arc.defineRegion<Strategy<PasswordCred>>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin auth.password
+-export const password: Strategy<PasswordCred> = (cred, ports) => arc.todo("auth.password");
++export const password: Strategy<PasswordCred> = async (cred, ports) => {
++  const email = (cred.email.trim().toLowerCase());
++  const user = await ports.users.findByEmail(email);
++  const stored = user?.passwordHash ?? ports.hasher.dummyHash;
++  const match = ports.hasher.equal(await ports.hasher.hash(cred.password, stored), stored);
++  if (user === null || !match) {
++    if (user) await ports.users.recordFailure(user.id)
++    return { ok: false, reason: "invalid" };
++  }
++  if ((user.lockedUntil !== null && user.lockedUntil > ports.clock.now())) return { ok: false, reason: "locked" };
++  return { ok: true, userId: user.id };
++};
+ // @openarc:end auth.password
+ 
+ // ── auth.apiKey ───────────────────────────────────────────────── variant, written as prose
+@@ -231,5 +249,14 @@ export const magicLinkSpec = arc.defineRegion<Strategy<MagicLinkCred>>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin auth.magicLink
+-export const magicLink: Strategy<MagicLinkCred> = (cred, ports) => arc.todo("auth.magicLink");
++export const magicLink: Strategy<MagicLinkCred> = async (cred, ports) => {
++  const [tokenId, secret] = splitToken(cred.token) ?? ["", ""];
++  const link = tokenId ? await ports.users.findMagicLink(tokenId) : null;
++  const stored = link !== null && !link.used ? link.secretHash : ports.hasher.dummyHash;
++  const match = ports.hasher.equal(await ports.hasher.hash(secret, stored), stored);
++  if (link === null || link.used || !match) return { ok: false, reason: "invalid" };
++  if ((link.expiresAt < ports.clock.now())) return { ok: false, reason: "expired" };
++  if (!(await ports.users.consumeMagicLink(tokenId))) return { ok: false, reason: "invalid" }; // the atomic claim: one sign-in per link
++  return { ok: true, userId: link.userId };
++};
+ // @openarc:end auth.magicLink
+diff --git a/selfhost/src/palette/loadBalancer.ts b/selfhost/src/palette/loadBalancer.ts
+index 42f9645..0389799 100644
+--- a/selfhost/src/palette/loadBalancer.ts
++++ b/selfhost/src/palette/loadBalancer.ts
+@@ -102,7 +102,31 @@ export const leastConnectionsSpec = arc.defineRegion<Strategy>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin lb.leastConnections
+-export const leastConnections: Strategy = (backends, keys) => arc.todo("lb.leastConnections");
++export const leastConnections: Strategy = (backends, keys) => {
++  const healthy = backends.filter(b => b.healthy);
++  const totalWeight = healthy.reduce((sum, b) => sum + b.weight, 0);
++  const results: (string | null)[] = [];
++  for (const key of keys) {
++    if (healthy.length === 0) {
++      results.push(null);
++      continue;
++    }
++    let minConn = Infinity;
++    let candidates: Backend[] = [];
++    for (const b of healthy) {
++      if (b.connections < minConn) {
++        minConn = b.connections;
++        candidates = [b];
++      } else if (b.connections === minConn) {
++        candidates.push(b);
++      }
++    }
++    const picked = candidates[0];
++    results.push(picked.id);
++    picked.connections++;
++  }
++  return results;
++};
+ // @openarc:end lb.leastConnections
+ 
+ // ── lb.weighted ───────────────────────────────────────────────── variant
+@@ -130,7 +154,29 @@ export const weightedSpec = arc.defineRegion<Strategy>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin lb.weighted
+-export const weighted: Strategy = (backends, keys) => arc.todo("lb.weighted");
++export const weighted: Strategy = (backends, keys) => {
++  const healthyBackends = backends.filter(b => b.healthy);
++  if (healthyBackends.length === 0) return keys.map(() => null);
++  const totalWeight = healthyBackends.reduce((sum, b) => sum + b.weight, 0);
++  const current = healthyBackends.map(() => 0);
++  const result = [] as (string | null)[];
++  for (const _ of keys) {
++    for (let i = 0; i < healthyBackends.length; i++) {
++      current[i] += healthyBackends[i].weight;
++    }
++    let max = -1;
++    let pick = 0;
++    for (let i = 0; i < healthyBackends.length; i++) {
++      if (current[i] > max) {
++        max = current[i];
++        pick = i;
++      }
++    }
++    result.push(healthyBackends[pick].id);
++    current[pick] -= totalWeight;
++  }
++  return result;
++};
+ // @openarc:end lb.weighted
+ 
+ // ── lb.hash32 ─────────────────────────────────────────────────── the hash consistentHash places keys with
+diff --git a/selfhost/src/palette/p2p.ts b/selfhost/src/palette/p2p.ts
+index f129e1e..c2b35b0 100644
+--- a/selfhost/src/palette/p2p.ts
++++ b/selfhost/src/palette/p2p.ts
+@@ -99,7 +99,21 @@ export const encodeVarintSpec = arc.defineRegion<Encode>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin p2p.encodeVarint
+-export const encodeVarint: Encode = (message) => arc.todo("p2p.encodeVarint");
++export const encodeVarint: Encode = (message) => {
++  const encoder = new TextEncoder();
++  const bytes = encoder.encode(message);
++  const result: number[] = [];
++  let val = bytes.length;
++  while (val > 0x7f) {
++    result.push((val & 0x7f) | 0x80);
++    val >>>= 7;
++  }
++  result.push(val);
++  for (const byte of bytes) {
++    result.push(byte);
++  }
++  return result;
++};
+ // @openarc:end p2p.encodeVarint
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+@@ -162,7 +176,51 @@ export const handshakeSpec = arc.defineRegion<Handshake>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin p2p.handshake
+-export const handshake: Handshake = (state, event, supported) => arc.todo("p2p.handshake");
++export const handshake: Handshake = (state, event, supported) => {
++  const { phase, version, error } = state;
++  const { type } = event;
++  const send: HsMessage[] = [];
++  if (phase === 'idle') {
++    if (type === 'start') {
++      return { state: { phase: 'sent', version: null, error: null }, send: [{ type: 'hello', versions: supported }] };
++    }
++    if (type === 'hello') {
++      const common = event.versions.filter(v => supported.includes(v)).sort((a, b) => b - a);
++      if (common.length > 0) {
++        return { state: { phase: 'ready', version: common[0], error: null }, send: [{ type: 'ack', version: common[0] }] };
++      }
++      return { state: { phase: 'failed', version: null, error: 'version-mismatch' }, send: [{ type: 'reject', reason: 'version-mismatch' }] };
++    }
++    if (type === 'ack') {
++      return { state: { phase: 'ready', version: event.version, error: null }, send: [] };
++    }
++    if (type === 'reject') {
++      return { state: { phase: 'failed', version: null, error: event.reason }, send: [] };
++    }
++  }
++  if (phase === 'sent') {
++    if (type === 'hello') {
++      const common = event.versions.filter(v => supported.includes(v)).sort((a, b) => b - a);
++      if (common.length > 0) {
++        return { state: { phase: 'ready', version: common[0], error: null }, send: [{ type: 'ack', version: common[0] }] };
++      }
++      return { state: { phase: 'failed', version: null, error: 'version-mismatch' }, send: [{ type: 'reject', reason: 'version-mismatch' }] };
++    }
++    if (type === 'ack') {
++      if (supported.includes(event.version)) {
++        return { state: { phase: 'ready', version: event.version, error: null }, send: [] };
++      }
++      return { state: { phase: 'failed', version: null, error: 'version-mismatch' }, send: [{ type: 'reject', reason: 'version-mismatch' }] };
++    }
++    if (type === 'reject') {
++      return { state: { phase: 'failed', version: null, error: event.reason }, send: [] };
++    }
++  }
++  if (phase === 'ready' || phase === 'failed') {
++    return { state: { phase, version, error }, send: [] };
++  }
++  return { state: { phase, version, error }, send: [] };
++};
+ // @openarc:end p2p.handshake
+ 
+ // ───────────────────────────── peer table and gossip ─────────────────────────────
+@@ -254,7 +312,29 @@ export const onGossipSpec = arc.defineRegion<OnGossip>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin p2p.onGossip
+-export const onGossip: OnGossip = (state, from, msg, fanout) => arc.todo("p2p.onGossip");
++export const onGossip: OnGossip = (state, from, msg, fanout) => {
++  const seenSet = new Set(state.seen);
++  if (seenSet.has(msg.id)) {
++    return { state, deliver: false, forward: [] };
++  }
++  const newSeen = [...state.seen, msg.id];
++  if (newSeen.length > SEEN_LIMIT) {
++    newSeen.shift();
++  }
++  const deliver = true;
++  const forward: { to: string; msg: Gossip }[] = [];
++  if (msg.ttl > 0) {
++    const candidates = state.peers.filter(p => p !== from && p !== msg.origin && p !== state.self);
++    const sum = msg.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
++    const rotation = sum % candidates.length;
++    const rotated = [...candidates].slice(rotation).concat(candidates.slice(0, rotation));
++    const limit = Math.min(fanout, rotated.length);
++    for (let i = 0; i < limit; i++) {
++      forward.push({ to: rotated[i], msg: { ...msg, ttl: msg.ttl - 1 } });
++    }
++  }
++  return { state: { ...state, seen: newSeen }, deliver, forward };
++};
+ // @openarc:end p2p.onGossip
+ 
+ /** The network as one peer process sees it: send to a linked peer; receive the next delivery (null when quiet).
+diff --git a/selfhost/src/sandbox.ts b/selfhost/src/sandbox.ts
+index 85bb8ca..0bca153 100644
+--- a/selfhost/src/sandbox.ts
++++ b/selfhost/src/sandbox.ts
+@@ -1,5 +1,6 @@
+ import * as arc from "open-arc";
+ import type { HarnessSummary, SandboxConfig } from "./types.ts";
++import type { ExampleOutcome } from "./types.ts";
+ 
+ // ── sandbox.buildArgv ─────────────────────────────────────────── spec §9.2
+ // The expected argv was run for real on the target machine (Fedora 43, bwrap, Node 25.9.0):
+@@ -110,5 +111,39 @@ export const readHarnessOutputSpec = arc.defineRegion<ReadHarnessOutput>({
+ });
+ 
+ // @openarc:begin sandbox.readHarnessOutput
+-export const readHarnessOutput: ReadHarnessOutput = (stdout) => arc.todo("sandbox.readHarnessOutput");
++export const readHarnessOutput: ReadHarnessOutput = (stdout) => {
++  const lines = stdout.split('\n').filter(line => line.trim() !== '');
++  const outcomes: ExampleOutcome[] = [];
++  let complete = false;
++  let expectedDone = 0;
++  for (const line of lines) {
++    const trimmed = line.trim();
++    if (trimmed === '') continue;
++    try {
++      const obj = JSON.parse(trimmed);
++      if (obj.done !== undefined) {
++        complete = true;
++        expectedDone = obj.done;
++      } else {
++        outcomes.push({
++          name: obj.name ?? '<unparseable>',
++          ok: obj.ok ?? false,
++          actual: obj.actual
++        });
++      }
++    } catch {
++      outcomes.push({
++        name: '<unparseable>',
++        ok: false,
++        actual: line
++      });
++    }
++  }
++  const passed = outcomes.filter(o => o.ok).length;
++  const failed = outcomes.filter(o => !o.ok);
++  if (complete && outcomes.length === expectedDone) {
++    return { complete: true, passed, failed };
++  }
++  return { complete: false, passed, failed };
++};
+ // @openarc:end sandbox.readHarnessOutput
+diff --git a/selfhost/src/watch.ts b/selfhost/src/watch.ts
+index acb6550..084d048 100644
+--- a/selfhost/src/watch.ts
++++ b/selfhost/src/watch.ts
+@@ -36,7 +36,33 @@ export const classifyPathSpec = arc.defineRegion<ClassifyPath>({
+ });
+ 
+ // @openarc:begin watch.classifyPath
+-export const classifyPath: ClassifyPath = (path) => arc.todo("watch.classifyPath");
++export const classifyPath: ClassifyPath = (path) => {
++  const isIgnore = (path: string): boolean => {
++    if (path.includes("node_modules/")) return true;
++    if (path.includes(".openarc/")) return true;
++    if (path.includes("build/")) return true;
++    if (path.includes("dist/")) return true;
++    return false;
++  };
++
++  if (isIgnore(path)) {
++    return "ignore";
++  }
++
++  if (path === "openarc.config.json") {
++    return "config";
++  }
++
++  if (path.startsWith("src/") && (path.endsWith(".ts") || path.endsWith(".tsx"))) {
++    return "source";
++  }
++
++  if (path.startsWith("tests/fakes/") && (path.endsWith(".ts") || path.endsWith(".tsx"))) {
++    return "fakes";
++  }
++
++  return "ignore";
++};
+ // @openarc:end watch.classifyPath
+ 
+ // ── watch.enqueue ──────────────────────────────────────────────── spec §15

@@ -1,0 +1,2 @@
+alias=seed-coder-8b exit=1 seconds=946 checkmarks=10 e082=22 states_of_38:      10 compiler      27 pending       1 stale  | done: exit 1 · 72 model call(s) · 944.0s
+ 7 files changed, 210 insertions(+), 42 deletions(-)

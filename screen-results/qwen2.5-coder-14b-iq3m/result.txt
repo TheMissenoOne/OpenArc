@@ -1,0 +1,2 @@
+alias=qwen2.5-coder-14b-iq3m exit=1 seconds=4665 checkmarks=11 e082=16 states_of_38:      10 compiler      27 pending       1 stale  | done: exit 1 · 57 model call(s) · 4661.7s
+ 6 files changed, 265 insertions(+), 11 deletions(-)
