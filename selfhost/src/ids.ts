@@ -23,7 +23,12 @@ export const isValidIdSpec = arc.defineRegion<IsValidId>({
 
 // @openarc:begin ids.isValidId
 export const isValidId: IsValidId = (id) => {
-  return id === '' ? false : /^[a-z][a-zA-Z0-9]*(?:\.[a-z][a-zA-Z0-9]*)*$/.test(id);
+  if (id === '') return false;
+  const segments = id.split('.');
+  for (const segment of segments) {
+      if (!/^[a-z][a-zA-Z0-9]*$/.test(segment)) return false;
+    }
+  return true;
 };
 // @openarc:end ids.isValidId
 
@@ -52,15 +57,19 @@ export const findDuplicateIdsSpec = arc.defineRegion<FindDuplicateIds>({
 
 // @openarc:begin ids.findDuplicateIds
 export const findDuplicateIds: FindDuplicateIds = (occurrences) => {
-  const seen = new Map<string, string>();
-  return occurrences.reduce((diagnostics, occurrence) => {
-    const { id, file } = occurrence;
-    if (seen.has(id)) {
-      diagnostics.push({ code: "OARC-E011", file, id });
-    } else {
-      seen.set(id, file);
+  const seenIds = new Set<string>();
+  const diagnostics: Diagnostic[] = [];
+  for (const occurrence of occurrences) {
+      if (seenIds.has(occurrence.id)) {
+        diagnostics.push({
+          code: 'OARC-E011',
+          id: occurrence.id,
+          file: occurrence.file,
+        });
+      } else {
+        seenIds.add(occurrence.id);
+      }
     }
-    return diagnostics;
-  }, [] as Diagnostic[]);
+  return diagnostics;
 };
 // @openarc:end ids.findDuplicateIds

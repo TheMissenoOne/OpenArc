@@ -1,0 +1,1 @@
+{"body":"let h = 2166136261;\nfor (const unit of text.split('').map(c => c.charCodeAt(0))) {\n    h = Math.imul(h ^ unit, 16777619) >>> 0;\n  }\nh ^= h >>> 16;\nh = Math.imul(h, 0x85ebca6b);\nh ^= h >>> 13;\nh = Math.imul(h, 0xc2b2ae35);\nh ^= h >>> 16;\nreturn h >>> 0;","imports":[],"tokens":{"prompt":784,"completion":148}}

@@ -1,0 +1,346 @@
+  block.checkRestrictions: attempt 1 via local (qwen2.5-coder-7b), context L0 3131 chars, 17.3s
+  block.checkRestrictions: ✗ OARC-E073 'require' is forbidden in regions: put the module in "imports" instead (names the file already imports are already in scope)
+  backend openai qwen2.5-coder-7b: output truncated at 3072 tokens in a repetition loop; not retrying with more
+  block.checkRestrictions: attempt 2 via local (qwen2.5-coder-7b), context L0 3131 chars (retry sampling: temperature 0.4, seed 2), 57.8s
+  block.checkRestrictions: ✗ output was not valid: invalid-json (13231 chars, ends "sion\", \"isSuperExpression\", \"isNewTarget")
+  backend openai qwen2.5-coder-7b: output truncated at 3072 tokens in a repetition loop; not retrying with more
+  block.checkRestrictions: attempt 3 via local (qwen2.5-coder-7b), context L0 3131 chars (retry sampling: temperature 0.7, seed 3), 57.8s
+  block.checkRestrictions: ✗ output was not valid: invalid-json (13537 chars, ends "terationStateType\", \"ArrayIterationState")
+  cli.parseArgv: attempt 1 via local (qwen2.5-coder-7b), context L0 4011 chars, 17.4s
+  cli.parseArgv: ✗ OARC-E070 TS2322 line 43: Type '(argv: string[]) => { cmd: "usage"; reason: "unknown-command"; ids?: undefined; id?: undefined; mode?: undefined; file?: undefin
+  cli.parseArgv: attempt 2 via local (qwen2.5-coder-7b), context L0 4011 chars (retry sampling: temperature 0.4, seed 2), 17.4s
+  cli.parseArgv: ✗ OARC-E090 example "#13" failed: got {"cmd":"usage","reason":"bad-flag"}; expected {"cmd":"extract","file":"src/a.ts","fn":"f","id":"a.g"}
+  cli.parseArgv: attempt 3 via local (qwen2.5-coder-7b), context L0 4011 chars (retry sampling: temperature 0.7, seed 3), 13.3s
+  cli.parseArgv: ✗ OARC-E070 TS2322 line 43: Type '(argv: string[]) => { cmd: "init"; ids?: undefined; id?: undefined; mode?: undefined; file?: undefined; fn?: undefined; debounce
+  txn.planJournal, txn.commit, txn.recover: one batched request via local (qwen2.5-coder-7b), context 5318 chars, 10.2s
+  txn.planJournal: attempt 1 via local (qwen2.5-coder-7b), context L0 5318 chars, batched with 2 other regions, 10.2s
+  txn.planJournal: ✓ tsc, static, examples:2/2
+  txn.commit: attempt 1 via local (qwen2.5-coder-7b), context L0 5318 chars, batched with 2 other regions, 0.0s
+  txn.commit: ✗ OARC-E071 import "fs" is not allowed (allowed: open-arc, ./types.ts, or a type shown as not in scope from its own file)
+  txn.commit: attempt 2 via local (qwen2.5-coder-7b), context L0 2856 chars (retry sampling: temperature 0.4, seed 2), 3.4s
+  txn.commit: ✗ OARC-E070 TS2339 line 67: Property 'exists' does not exist on type 'FsPort'.
+    > if (await fs.exists(entry.target)) {
+  txn.commit: attempt 3 via local (qwen2.5-coder-7b), context L1 2856 chars (retry sampling: temperature 0.7, seed 3), 2.7s
+  txn.commit: ✓ tsc, static, examples:1/1
+  txn.recover: attempt 1 via local (qwen2.5-coder-7b), context L0 5318 chars, batched with 2 other regions, 0.0s
+  txn.recover: ✗ OARC-E071 import "fs" is not allowed (allowed: open-arc, ./types.ts, or a type shown as not in scope from its own file)
+  txn.recover: attempt 2 via local (qwen2.5-coder-7b), context L0 3262 chars (retry sampling: temperature 0.4, seed 2), 4.7s
+  txn.recover: ✗ OARC-E070 TS2339 line 112: Property 'sort' does not exist on type 'Promise<string[]>'.
+    > const txids = await fs.list('.openarc/txn').sort();
+  txn.recover: attempt 3 via local (qwen2.5-coder-7b), context L1 3262 chars (retry sampling: temperature 0.7, seed 3), 3.9s
+  txn.recover: ✗ OARC-E070 TS2345 line 117: Argument of type 'string | null' is not assignable to parameter of type 'string'.
+  Type 'null' is not assignable to type 'string'.
+ 
+  compile.run.lock: attempt 1 via local (qwen2.5-coder-7b), context L1 24970 chars, 7.7s
+  compile.run.lock: ✓ tsc, static, examples:1/3 (2 inconclusive: sibling blocks pending), via:compile.run
+  compile.run.recover: attempt 1 via local (qwen2.5-coder-7b), context L1 24938 chars, 7.9s
+  compile.run.recover: provisional: tsc, static, examples:1/3 (2 inconclusive: sibling blocks pending), via:compile.run, unreached (no passing example reaches it while siblings are pending; the joint check decides)
+  compile.run.parse: attempt 1 via local (qwen2.5-coder-7b), context L1 24890 chars, 7.3s
+  compile.run.parse: provisional: tsc, static, examples:1/3 (2 inconclusive: sibling blocks pending), via:compile.run, unreached (no passing example reaches it while siblings are pending; the joint check decides)
+  compile.run.analyze: attempt 1 via local (qwen2.5-coder-7b), context L1 24917 chars, 7.3s
+  compile.run.analyze: provisional: tsc, static, examples:1/3 (2 inconclusive: sibling blocks pending), via:compile.run, unreached (no passing example reaches it while siblings are pending; the joint check decides)
+  compile.run.plan: attempt 1 via local (qwen2.5-coder-7b), context L1 24908 chars, 8.1s
+  compile.run.plan: ✗ OARC-E071 import "engine" is not allowed (allowed: open-arc, ./types.ts, ./engine.ts, ./txn.ts, or a type shown as not in scope from its own file)
+  compile.run.plan: attempt 2 via local (qwen2.5-coder-7b), context L1 24908 chars (retry sampling: temperature 0.4, seed 2), 0.9s
+  compile.run.plan: provisional: tsc, static, examples:1/3 (2 inconclusive: sibling blocks pending), via:compile.run, unreached (no passing example reaches it while siblings are pending; the joint check decides)
+  compile.run.generate: attempt 1 via local (qwen2.5-coder-7b), context L1 25051 chars, 7.7s
+  compile.run.generate: provisional: tsc, static, examples:1/3 (2 inconclusive: sibling blocks pending), via:compile.run, unreached (no passing example reaches it while siblings are pending; the joint check decides)
+  compile.run.stage: attempt 1 via local (qwen2.5-coder-7b), context L1 24940 chars, 7.5s
+  compile.run.stage: provisional: tsc, static, examples:1/3 (2 inconclusive: sibling blocks pending), via:compile.run, unreached (no passing example reaches it while siblings are pending; the joint check decides)
+  compile.run.commit: attempt 1 via local (qwen2.5-coder-7b), context L1 24974 chars, 7.9s
+  compile.run.commit: provisional: tsc, static, examples:1/3 (2 inconclusive: sibling blocks pending), via:compile.run, unreached (no passing example reaches it while siblings are pending; the joint check decides)
+  compile.run.unlock: attempt 1 via local (qwen2.5-coder-7b), context L1 24878 chars, 7.3s
+  compile.run.unlock: provisional: tsc, static, examples:1/3 (2 inconclusive: sibling blocks pending), via:compile.run, unreached (no passing example reaches it while siblings are pending; the joint check decides)
+  backend openai qwen2.5-coder-7b: output truncated at 3072 tokens in a repetition loop; not retrying with more
+  hash.canonicalJson, hash.normalizeOwnedText, hash.sha256Tagged: one batched request via local (qwen2.5-coder-7b), context 4976 chars, 59.4s
+  hash.canonicalJson: attempt 1 via local (qwen2.5-coder-7b), context L0 4976 chars, batched with 2 other regions, 59.4s
+  hash.canonicalJson: ✗ output was not valid: invalid-json (10007 chars, ends "word\", \"isIsKeyword\", \"isAsKeyword\", \"is")
+  hash.canonicalJson: attempt 2 via local (qwen2.5-coder-7b), context L0 2096 chars (retry sampling: temperature 0.4, seed 2), 1.6s
+  hash.canonicalJson: ✗ OARC-E090 example "#1" failed: got "{\"b\":1,\"a\":[true,null,\"x\"]}"; expected "{\"a\":[true,null,\"x\"],\"b\":1}"
+  hash.canonicalJson: attempt 3 via local (qwen2.5-coder-7b), context L0 2096 chars (retry sampling: temperature 0.7, seed 3), 1.0s
+  hash.canonicalJson: ✗ OARC-E090 example "#1" failed: got "{\"b\":1,\"a\":[true,null,\"x\"]}"; expected "{\"a\":[true,null,\"x\"],\"b\":1}"
+  hash.normalizeOwnedText: attempt 1 via local (qwen2.5-coder-7b), context L0 4976 chars, batched with 2 other regions, 0.0s
+  hash.normalizeOwnedText: ✗ output was not valid: invalid-json (10007 chars, ends "word\", \"isIsKeyword\", \"isAsKeyword\", \"is")
+  backend openai qwen2.5-coder-7b: output truncated at 3072 tokens in a repetition loop; not retrying with more
+  hash.normalizeOwnedText: attempt 2 via local (qwen2.5-coder-7b), context L0 3149 chars (retry sampling: temperature 0.4, seed 2), 59.0s
+  hash.normalizeOwnedText: ✗ output was not valid: invalid-json (12925 chars, ends "lateExpression\", \"isTypeOfExpression\", \"")
+  backend openai qwen2.5-coder-7b: output truncated at 3072 tokens in a repetition loop; not retrying with more
+  hash.normalizeOwnedText: attempt 3 via local (qwen2.5-coder-7b), context L0 3149 chars (retry sampling: temperature 0.7, seed 3), 57.8s
+  hash.normalizeOwnedText: ✗ output was not valid: invalid-json (10829 chars, ends ", \"isMappedType\", \"isLiteralType\", \"isIn")
+  hash.sha256Tagged: attempt 1 via local (qwen2.5-coder-7b), context L0 4976 chars, batched with 2 other regions, 0.0s
+  hash.sha256Tagged: ✗ output was not valid: invalid-json (10007 chars, ends "word\", \"isIsKeyword\", \"isAsKeyword\", \"is")
+  hash.sha256Tagged: attempt 2 via local (qwen2.5-coder-7b), context L0 2133 chars (retry sampling: temperature 0.4, seed 2), 3.6s
+  hash.sha256Tagged: ✗ OARC-E070 TS1232 line 81: An import declaration can only be used at the top level of a namespace or module.
+    > import { createHash } from 'node:crypto';
+  hash.sha256Tagged: attempt 3 via local (qwen2.5-coder-7b), context L0 2133 chars (retry sampling: temperature 0.7, seed 3), 2.0s
+  hash.sha256Tagged: ✗ the reply repeats an earlier attempt; stopping
+  ids.isValidId, ids.findDuplicateIds: one batched request via local (qwen2.5-coder-7b), context 2919 chars, 5.8s
+  ids.isValidId: attempt 1 via local (qwen2.5-coder-7b), context L0 2919 chars, batched with 1 other region, 5.8s
+  ids.isValidId: ✓ tsc, static, examples:9/9
+  ids.findDuplicateIds: attempt 1 via local (qwen2.5-coder-7b), context L0 2919 chars, batched with 1 other region, 0.0s
+  ids.findDuplicateIds: ✗ OARC-E090 example "#3" failed: got [{"code":"OARC-E011","id":"a","file":"y.ts","detail":"Duplicate id found in y.ts"},{"code":"OARC-E011","id":"a","file":"z.ts"
+  ids.findDuplicateIds: attempt 2 via local (qwen2.5-coder-7b), context L0 2079 chars (retry sampling: temperature 0.4, seed 2), 3.5s
+  ids.findDuplicateIds: ✓ tsc, static, examples:3/3
+  markers.scanMarkers, markers.buildRegionTree: one batched request via local (qwen2.5-coder-7b), context 5404 chars, 16.0s
+  markers.scanMarkers: attempt 1 via local (qwen2.5-coder-7b), context L0 5404 chars, batched with 1 other region, 16.0s
+  markers.scanMarkers: ✗ OARC-E073 'require' is forbidden in regions: put the module in "imports" instead (names the file already imports are already in scope)
+  markers.scanMarkers: attempt 2 via local (qwen2.5-coder-7b), context L0 3768 chars (retry sampling: temperature 0.4, seed 2), 8.5s
+  markers.scanMarkers: ✗ the reply repeats an earlier attempt; stopping
+  markers.buildRegionTree: attempt 1 via local (qwen2.5-coder-7b), context L0 5404 chars, batched with 1 other region, 0.0s
+  markers.buildRegionTree: ✗ OARC-E090 example "crossed" failed: got {"roots":[],"diagnostics":[{"code":"OARC-E031","id":"a","line":3},{"code":"OARC-E031","id":"b","line":4}]}; expected {"r
+  markers.buildRegionTree: attempt 2 via local (qwen2.5-coder-7b), context L0 3157 chars (retry sampling: temperature 0.4, seed 2), 9.7s
+  markers.buildRegionTree: ✗ OARC-E070 TS2339 line 142: Property 'children' does not exist on type '{ id: string; line: number; }'.
+    > stack.pop()!.children.push({
+  markers.buildRegionTree: attempt 3 via local (qwen2.5-coder-7b), context L1 3157 chars (retry sampling: temperature 0.7, seed 3), 8.9s
+  markers.buildRegionTree: ✗ OARC-E090 example "nested" failed: got {"roots":[{"id":"a.b","beginLine":3,"endLine":5,"children":[{"id":"a","beginLine":1,"endLine":5,"children":[]}]}],"diagno
+  model.renderTemplate, model.buildRequest, model.parseOutput, model.call: one batched request via local (qwen2.5-coder-7b), context 10955 chars, 14.1s
+  model.renderTemplate: attempt 1 via local (qwen2.5-coder-7b), context L0 10955 chars, batched with 3 other regions, 14.1s
+  model.renderTemplate: ✗ OARC-E090 example "no recursion" failed: got {"ok":true,"text":"!"}; expected {"ok":true,"text":"{{b}}"}
+  model.renderTemplate: attempt 2 via local (qwen2.5-coder-7b), context L0 4922 chars (retry sampling: temperature 0.4, seed 2), 4.2s
+  model.renderTemplate: ✗ OARC-E090 example "no recursion" failed: got {"ok":true,"text":"!"}; expected {"ok":true,"text":"{{b}}"}
+  model.renderTemplate: attempt 3 via local (qwen2.5-coder-7b), context L0 4922 chars (retry sampling: temperature 0.7, seed 3), 2.6s
+  model.renderTemplate: ✗ OARC-E070 TS7034 line 57: Variable 'missing' implicitly has type 'any[]' in some locations where its type cannot be determined.
+    > const missing = [];
+  model.buildRequest: attempt 1 via local (qwen2.5-coder-7b), context L0 10955 chars, batched with 3 other regions, 0.0s
+  model.buildRequest: ✗ OARC-E090 example "#1" failed: got {"model":"qwen2.5-coder:14b","stream":false,"format":{"type":"object"},"options":{"temperature":0,"seed":7,"num_ctx":8192,"nu
+  model.buildRequest: attempt 2 via local (qwen2.5-coder-7b), context L0 4937 chars (retry sampling: temperature 0.4, seed 2), 2.8s
+  model.buildRequest: ✓ tsc, static, examples:1/1
+  model.parseOutput: attempt 1 via local (qwen2.5-coder-7b), context L0 10955 chars, batched with 3 other regions, 0.0s
+  model.parseOutput: ✗ OARC-E090 example "#4" failed: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}; expected {"ok":false,"diagnostic":{"code":"OARC-E0
+  model.parseOutput: attempt 2 via local (qwen2.5-coder-7b), context L0 5539 chars (retry sampling: temperature 0.4, seed 2), 6.9s
+  model.parseOutput: ✗ OARC-E090 example "#4" failed: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}; expected {"ok":false,"diagnostic":{"code":"OARC-E0
+  model.parseOutput: attempt 3 via local (qwen2.5-coder-7b), context L0 5539 chars (retry sampling: temperature 0.7, seed 3), 6.3s
+  model.parseOutput: ✗ OARC-E090 example "#1" failed: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"bad-imports"}}; expected {"ok":true,"body":"return 1;","imports":[]}
+  model.call: attempt 1 via local (qwen2.5-coder-7b), context L0 10955 chars, batched with 3 other regions, 0.0s
+  model.call: ✗ OARC-E070 TS2345 line 152: Argument of type 'OllamaChatRequest' is not assignable to parameter of type 'Json'.
+  Type 'OllamaChatRequest' is not assignable to t
+  model.call: attempt 2 via local (qwen2.5-coder-7b), context L0 5242 chars (retry sampling: temperature 0.4, seed 2), 3.5s
+  model.call: ✗ OARC-E090 example "#1" failed: got {"fakesAfter":{"http.stub":{"requests":[{"url":"http://h:1/api/chat","body":"{\"model\":\"m\",\"stream\":false,\"format\":{\"
+  model.call: attempt 3 via local (qwen2.5-coder-7b), context L0 5242 chars (retry sampling: temperature 0.7, seed 3), 1.1s
+  model.call: ✗ OARC-E070 TS2345 line 151: Argument of type 'OllamaChatRequest' is not assignable to parameter of type 'Json'.
+  Type 'OllamaChatRequest' is not assignable to t
+  ownership.detect: attempt 1 via local (qwen2.5-coder-7b), context L0 4923 chars, 6.1s
+  ownership.detect: ✗ OARC-E090 example "developer, spec unchanged" failed: got {"state":"developer","diagnostic":{"code":"OARC-W060"}}; expected {"state":"developer","diagnostic":nu
+  ownership.detect: attempt 2 via local (qwen2.5-coder-7b), context L0 4923 chars (retry sampling: temperature 0.4, seed 2), 4.1s
+  ownership.detect: ✗ OARC-E090 example "markers removed" failed: got {"state":"developer","diagnostic":{"code":"OARC-W060"}}; expected {"state":"conflicted","diagnostic":{"code":"OA
+  ownership.detect: attempt 3 via local (qwen2.5-coder-7b), context L0 4923 chars (retry sampling: temperature 0.7, seed 3), 4.0s
+  ownership.detect: ✗ OARC-E090 example "developer, spec unchanged" failed: got {"state":"developer","diagnostic":{"code":"OARC-W060"}}; expected {"state":"developer","diagnostic":nu
+  backend openai qwen2.5-coder-7b: output truncated at 3072 tokens in a repetition loop; not retrying with more
+  auth.splitToken, auth.apiKey: one batched request via local (qwen2.5-coder-7b), context 7044 chars, 59.6s
+  auth.splitToken: attempt 1 via local (qwen2.5-coder-7b), context L0 7044 chars, batched with 1 other region, 59.6s
+  auth.splitToken: ✗ output was not valid: invalid-json (10397 chars, ends "ordCred\", \"ApiKeyCred\", \"MagicLinkCred\",")
+  auth.splitToken: attempt 2 via local (qwen2.5-coder-7b), context L0 3123 chars (retry sampling: temperature 0.4, seed 2), 2.3s
+  auth.splitToken: ✗ OARC-E070 TS2322 line 108: Type '(token: string) => string[] | null' is not assignable to type 'SplitToken'.
+  Type 'string[] | null' is not assignable to type 
+  auth.splitToken: attempt 3 via local (qwen2.5-coder-7b), context L0 3123 chars (retry sampling: temperature 0.7, seed 3), 1.4s
+  auth.splitToken: ✗ OARC-E090 example "only the first dot splits" failed: got ["k1","a"]; expected ["k1","a.b"]
+  auth.password: attempt 1 via local (qwen2.5-coder-7b), context L0 7576 chars, 3.4s
+  auth.password: ✗ OARC-E070 TS18047 line 158: 'user' is possibly 'null'.
+    > await ports.users.recordFailure(user.id);
+  auth.password: attempt 2 via local (qwen2.5-coder-7b), context L0 7576 chars (retry sampling: temperature 0.4, seed 2), 1.6s
+  auth.password: ✗ the reply repeats an earlier attempt; stopping
+  auth.apiKey: attempt 1 via local (qwen2.5-coder-7b), context L0 7044 chars, batched with 1 other region, 0.0s
+  auth.apiKey: ✗ output was not valid: invalid-json (10397 chars, ends "ordCred\", \"ApiKeyCred\", \"MagicLinkCred\",")
+  backend openai qwen2.5-coder-7b: output truncated at 3072 tokens in a repetition loop; not retrying with more
+  auth.apiKey: attempt 2 via local (qwen2.5-coder-7b), context L0 6260 chars (retry sampling: temperature 0.4, seed 2), 60.1s
+  auth.apiKey: ✗ output was not valid: invalid-json (10397 chars, ends "t\", \"Strategy\", \"PasswordCred\", \"ApiKeyC")
+  backend openai qwen2.5-coder-7b: output truncated at 3072 tokens in a repetition loop; not retrying with more
+  auth.apiKey: attempt 3 via local (qwen2.5-coder-7b), context L0 6260 chars (retry sampling: temperature 0.7, seed 3), 59.0s
+  auth.apiKey: ✗ output was not valid: invalid-json (10397 chars, ends "t\", \"Strategy\", \"PasswordCred\", \"ApiKeyC")
+  auth.apiKey: ✗ the reply repeats an earlier attempt; stopping
+  auth.magicLink: attempt 1 via local (qwen2.5-coder-7b), context L0 7860 chars, 2.7s
+  auth.magicLink: ✗ inconclusive: 11 example(s) end in pending region(s) auth.splitToken
+  lb.roundRobin, lb.leastConnections, lb.weighted, lb.hash32: one batched request via local (qwen2.5-coder-7b), context 10659 chars, 14.3s
+  lb.roundRobin: attempt 1 via local (qwen2.5-coder-7b), context L0 10659 chars, batched with 3 other regions, 14.3s
+  lb.roundRobin: ✓ tsc, static, examples:7/7
+  lb.leastConnections: attempt 1 via local (qwen2.5-coder-7b), context L0 10659 chars, batched with 3 other regions, 0.0s
+  lb.leastConnections: ✗ OARC-E090 example "law: equal backends share requests evenly" failed: got ["a","a","a","a","a","a"]; expected ["a","b","c","a","b","c"]
+  lb.leastConnections: attempt 2 via local (qwen2.5-coder-7b), context L0 4518 chars (retry sampling: temperature 0.4, seed 2), 3.5s
+  lb.leastConnections: ✗ OARC-E090 example "law: equal backends share requests evenly" failed: got ["a","a","a","a","a","a"]; expected ["a","b","c","a","b","c"]
+  lb.leastConnections: attempt 3 via local (qwen2.5-coder-7b), context L0 4518 chars (retry sampling: temperature 0.7, seed 3), 3.8s
+  lb.leastConnections: ✗ OARC-E070 TS2345 line 121: Argument of type 'null' is not assignable to parameter of type 'string'.
+    > result.push(null);
+  lb.weighted: attempt 1 via local (qwen2.5-coder-7b), context L0 10659 chars, batched with 3 other regions, 0.0s
+  lb.weighted: ✗ OARC-E070 TS18047 line 149: 'pick' is possibly 'null'.
+    > return pick.id;
+  lb.weighted: attempt 2 via local (qwen2.5-coder-7b), context L0 4573 chars (retry sampling: temperature 0.4, seed 2), 4.5s
+  lb.weighted: ✗ OARC-E070 TS18047 line 149: 'pick' is possibly 'null'.
+    > return pick.id;
+  lb.weighted: attempt 3 via local (qwen2.5-coder-7b), context L0 4573 chars (retry sampling: temperature 0.7, seed 3), 3.3s
+  lb.weighted: ✗ OARC-E090 example "law: equal backends share requests evenly" failed: got ["c","c","c","c","c","c"]; expected ["a","b","c","a","b","c"]
+  lb.hash32: attempt 1 via local (qwen2.5-coder-7b), context L0 10659 chars, batched with 3 other regions, 0.0s
+  lb.hash32: ✓ tsc, static, examples:3/3
+  lb.consistentHash: law "equal backends share requests evenly" waived: hashing pins each key to a backend, so the spread is statistical, not even per batch
+  lb.consistentHash: attempt 1 via local (qwen2.5-coder-7b), context L0 5306 chars, 2.4s
+  lb.consistentHash: ✓ tsc, static, examples:6/6
+  lb.healthCheck: attempt 1 via local (qwen2.5-coder-7b), context L0 5147 chars, 4.5s
+  lb.healthCheck: ✗ OARC-E090 example "the third failure takes a backend out" failed: got [{"id":"a","healthy":true,"failures":3,"successes":0,"downSince":1000},{"id":"b","healthy"
+  lb.healthCheck: attempt 2 via local (qwen2.5-coder-7b), context L0 5147 chars (retry sampling: temperature 0.4, seed 2), 2.7s
+  lb.healthCheck: ✗ OARC-E090 example "the third failure takes a backend out" failed: got [{"id":"a","healthy":true,"failures":3,"successes":0,"downSince":null},{"id":"b","healthy"
+  lb.healthCheck: attempt 3 via local (qwen2.5-coder-7b), context L0 5147 chars (retry sampling: temperature 0.7, seed 3), 3.6s
+  lb.healthCheck: ✗ OARC-E090 example "enough successes, but not out long enough yet" failed: got [{"id":"a","healthy":true,"failures":0,"successes":2,"downSince":null}]; expected 
+  lb.failover: attempt 1 via local (qwen2.5-coder-7b), context L0 4415 chars, 2.0s
+  lb.failover: ✓ tsc, static, examples:4/4
+  p2p.encodeLengthPrefixed, p2p.decodeLengthPrefixed, p2p.encodeVarint, p2p.decodeVarint: one batched request via local (qwen2.5-coder-7b), context 8208 chars, 16.1s
+  p2p.encodeLengthPrefixed: attempt 1 via local (qwen2.5-coder-7b), context L0 8208 chars, batched with 3 other regions, 16.1s
+  p2p.encodeLengthPrefixed: ✓ tsc, static, examples:3/3
+  p2p.decodeLengthPrefixed: attempt 1 via local (qwen2.5-coder-7b), context L0 8208 chars, batched with 3 other regions, 0.0s
+  p2p.decodeLengthPrefixed: ✗ OARC-E070 TS2345 line 99: Argument of type 'number[]' is not assignable to parameter of type 'AllowSharedBufferSource | undefined'.
+  Type 'number[]' is missing
+  p2p.decodeLengthPrefixed: attempt 2 via local (qwen2.5-coder-7b), context L0 4103 chars (retry sampling: temperature 0.4, seed 2), 5.9s
+  p2p.decodeLengthPrefixed: ✗ OARC-E071 import "util" is not allowed (allowed: open-arc, or a type shown as not in scope from its own file)
+  p2p.decodeLengthPrefixed: attempt 3 via local (qwen2.5-coder-7b), context L0 4103 chars (retry sampling: temperature 0.7, seed 3), 4.0s
+  p2p.decodeLengthPrefixed: ✗ OARC-E090 example "law: whole frames decode in order" failed: got {"messages":["hi"],"rest":[0,0,0,5,116,104,101,114,101]}; expected {"messages":["hi","there"],
+  p2p.encodeVarint: attempt 1 via local (qwen2.5-coder-7b), context L0 8208 chars, batched with 3 other regions, 0.0s
+  p2p.encodeVarint: ✗ OARC-E070 TS2588 line 109: Cannot assign to 'length' because it is a constant.
+    > length >>= 7;
+  p2p.encodeVarint: attempt 2 via local (qwen2.5-coder-7b), context L0 3338 chars (retry sampling: temperature 0.4, seed 2), 4.1s
+  p2p.encodeVarint: ✗ OARC-E071 import "util" is not allowed (allowed: open-arc, or a type shown as not in scope from its own file)
+  p2p.encodeVarint: attempt 3 via local (qwen2.5-coder-7b), context L0 3338 chars (retry sampling: temperature 0.7, seed 3), 2.4s
+  p2p.encodeVarint: ✗ OARC-E070 TS2588 line 109: Cannot assign to 'length' because it is a constant.
+    > length >>= 7;
+  p2p.decodeVarint: attempt 1 via local (qwen2.5-coder-7b), context L0 8208 chars, batched with 3 other regions, 0.0s
+  p2p.decodeVarint: ✗ OARC-E070 TS2345 line 148: Argument of type 'number[]' is not assignable to parameter of type 'AllowSharedBufferSource | undefined'.
+  Type 'number[]' is missin
+  p2p.decodeVarint: attempt 2 via local (qwen2.5-coder-7b), context L0 4046 chars (retry sampling: temperature 0.4, seed 2), 6.3s
+  p2p.decodeVarint: ✗ OARC-E071 import "util" is not allowed (allowed: open-arc, or a type shown as not in scope from its own file)
+  p2p.decodeVarint: attempt 3 via local (qwen2.5-coder-7b), context L0 4046 chars (retry sampling: temperature 0.7, seed 3), 4.6s
+  p2p.decodeVarint: ✗ OARC-E090 example "law: whole frames decode in order" failed: got {"messages":["hi"],"rest":[5,116,104,101,114,101]}; expected {"messages":["hi","there"],"rest"
+  p2p.handshake, p2p.peerTable, p2p.onGossip, p2p.broadcast: one batched request via local (qwen2.5-coder-7b), context 11618 chars, 20.6s
+  p2p.handshake: attempt 1 via local (qwen2.5-coder-7b), context L0 11618 chars, batched with 3 other regions, 20.6s
+  p2p.handshake: ✗ OARC-E070 TS2367 line 168: This comparison appears to be unintentional because the types '"sent" | "ready" | "failed"' and '"idle"' have no overlap.
+    > } els
+  p2p.handshake: attempt 2 via local (qwen2.5-coder-7b), context L1 4999 chars (retry sampling: temperature 0.4, seed 2), 6.2s
+  p2p.handshake: ✗ OARC-E070 TS2322 line 165: Type '(state: HsState, event: HsEvent, supported: number[]) => { state: { phase: "sent"; version: number | null; error: string | null
+  p2p.handshake: attempt 3 via local (qwen2.5-coder-7b), context L2 4999 chars (retry sampling: temperature 0.7, seed 3), 4.4s
+  p2p.handshake: ✗ OARC-E070 TS2322 line 165: Type '(state: HsState, event: HsEvent, supported: number[]) => { state: { phase: "sent"; version: number | null; error: string | null
+  p2p.peerTable: attempt 1 via local (qwen2.5-coder-7b), context L0 11618 chars, batched with 3 other regions, 0.0s
+  p2p.peerTable: ✓ tsc, static, examples:5/5
+  p2p.onGossip: attempt 1 via local (qwen2.5-coder-7b), context L0 11618 chars, batched with 3 other regions, 0.0s
+  p2p.onGossip: ✗ OARC-E070 TS7034 line 263: Variable 'forward' implicitly has type 'any[]' in some locations where its type cannot be determined.
+    > const forward = [];
+  p2p.onGossip: attempt 2 via local (qwen2.5-coder-7b), context L0 4410 chars (retry sampling: temperature 0.4, seed 2), 6.2s
+  p2p.onGossip: ✗ OARC-E090 example "ttl 0 is delivered but not forwarded" failed: got {"state":{"self":"b","peers":["a","c"],"seen":["g2"]},"deliver":false,"forward":[]}; expect
+  p2p.onGossip: attempt 3 via local (qwen2.5-coder-7b), context L0 4410 chars (retry sampling: temperature 0.7, seed 3), 6.7s
+  p2p.onGossip: ✗ OARC-E073 'require' is forbidden in regions: put the module in "imports" instead (names the file already imports are already in scope)
+  p2p.broadcast: attempt 1 via local (qwen2.5-coder-7b), context L0 11618 chars, batched with 3 other regions, 0.0s
+  p2p.broadcast: ✗ OARC-E070 TS2304 line 336: Cannot find name 'state'.
+    > const result = onGossip(state, null, msg, fanout);
+  p2p.broadcast: attempt 2 via local (qwen2.5-coder-7b), context L1 5153 chars (retry sampling: temperature 0.4, seed 2), 5.3s
+  p2p.broadcast: ✗ the reply repeats an earlier attempt; stopping
+  plan.selectTargets: attempt 1 via local (qwen2.5-coder-7b), context L0 3388 chars, 5.5s
+  plan.selectTargets: ✗ OARC-E070 TS2339 line 69: Property 'children' does not exist on type 'PlanInput'.
+    > if (region.children) {
+  plan.selectTargets: attempt 2 via local (qwen2.5-coder-7b), context L1 3388 chars (retry sampling: temperature 0.4, seed 2), 4.6s
+  plan.selectTargets: ✗ the reply repeats an earlier attempt; stopping
+  sandbox.buildArgv, sandbox.readHarnessOutput: one batched request via local (qwen2.5-coder-7b), context 5984 chars, 13.5s
+  sandbox.buildArgv: attempt 1 via local (qwen2.5-coder-7b), context L0 5984 chars, batched with 1 other region, 13.5s
+  sandbox.buildArgv: ✗ OARC-E090 example "#1" failed: got ["bwrap","--unshare-all","--die-with-parent","--new-session","--ro-bind","/tmp/oa-stage","/work","--ro-bind","/usr","/usr","-
+  sandbox.buildArgv: attempt 2 via local (qwen2.5-coder-7b), context L0 4744 chars (retry sampling: temperature 0.4, seed 2), 7.9s
+  sandbox.buildArgv: ✗ OARC-E070 TS2322 line 78: Type '(cfg: SandboxConfig) => (string | string[])[]' is not assignable to type 'BuildArgv'.
+  Type '(string | string[])[]' is not assi
+  sandbox.buildArgv: attempt 3 via local (qwen2.5-coder-7b), context L0 4744 chars (retry sampling: temperature 0.7, seed 3), 6.7s
+  sandbox.buildArgv: ✗ OARC-E090 example "#1" failed: got ["bwrap","--unshare-all","--die-with-parent","--new-session","--ro-bind","/tmp/oa-stage","/work","--ro-bind","/usr","/usr","-
+  sandbox.readHarnessOutput: attempt 1 via local (qwen2.5-coder-7b), context L0 5984 chars, batched with 1 other region, 0.0s
+  sandbox.readHarnessOutput: ✗ OARC-E090 example "#1" failed: got {"complete":false,"passed":1,"failed":[{"name":"b","ok":false,"actual":3},{"done":2}]}; expected {"complete":true,"passed":1,
+  sandbox.readHarnessOutput: attempt 2 via local (qwen2.5-coder-7b), context L0 3260 chars (retry sampling: temperature 0.4, seed 2), 6.1s
+  sandbox.readHarnessOutput: ✗ OARC-E090 example "#1" failed: got {"complete":false,"passed":1,"failed":[{"name":"b","ok":false,"actual":3},{"done":2}]}; expected {"complete":true,"passed":1,
+  sandbox.readHarnessOutput: attempt 3 via local (qwen2.5-coder-7b), context L0 3260 chars (retry sampling: temperature 0.7, seed 3), 4.3s
+  sandbox.readHarnessOutput: ✗ OARC-E070 TS7006 line 114: Parameter 'line' implicitly has an 'any' type.
+    > const parseJsonLine = (line) => {
+  watch.classifyPath, watch.enqueue, watch.takeNext: one batched request via local (qwen2.5-coder-7b), context 3920 chars, 8.4s
+  watch.classifyPath: attempt 1 via local (qwen2.5-coder-7b), context L0 3920 chars, batched with 2 other regions, 8.4s
+  watch.classifyPath: ✗ OARC-E090 example "#7" failed: got "source"; expected "ignore"
+  watch.classifyPath: attempt 2 via local (qwen2.5-coder-7b), context L0 1757 chars (retry sampling: temperature 0.4, seed 2), 2.5s
+  watch.classifyPath: ✗ OARC-E090 example "#4" failed: got "source"; expected "fakes"
+  watch.classifyPath: attempt 3 via local (qwen2.5-coder-7b), context L0 1757 chars (retry sampling: temperature 0.7, seed 3), 1.5s
+  watch.classifyPath: ✗ OARC-E090 example "#7" failed: got "source"; expected "ignore"
+  watch.enqueue: attempt 1 via local (qwen2.5-coder-7b), context L0 3920 chars, batched with 2 other regions, 0.0s
+  watch.enqueue: ✗ OARC-E090 example "#3" failed: got {"pending":["a","c"],"rerun":["a"],"running":"a"}; expected {"pending":["c"],"running":"a","rerun":["a"]}
+  watch.enqueue: attempt 2 via local (qwen2.5-coder-7b), context L0 1782 chars (retry sampling: temperature 0.4, seed 2), 3.4s
+  watch.enqueue: ✗ OARC-E090 example "#3" failed: got {"pending":["a","c"],"rerun":[],"running":"a"}; expected {"pending":["c"],"running":"a","rerun":["a"]}
+  watch.enqueue: attempt 3 via local (qwen2.5-coder-7b), context L0 1782 chars (retry sampling: temperature 0.7, seed 3), 3.1s
+  watch.enqueue: ✗ OARC-E070 TS2588 line 71: Cannot assign to 'newPending' because it is a constant.
+    > newPending = newPending.filter(id => id !== running);
+  watch.takeNext: attempt 1 via local (qwen2.5-coder-7b), context L0 3920 chars, batched with 2 other regions, 0.0s
+  watch.takeNext: ✗ OARC-E070 TS2322 line 100: Type 'string | undefined' is not assignable to type 'string | null'.
+  Type 'undefined' is not assignable to type 'string | null'.
+  
+  watch.takeNext: attempt 2 via local (qwen2.5-coder-7b), context L0 1771 chars (retry sampling: temperature 0.4, seed 2), 3.3s
+  watch.takeNext: ✗ OARC-E090 example "#3" failed: got {"next":"a","queue":{"pending":["c","a"],"rerun":[],"running":"a"}}; expected {"next":"a","queue":{"pending":["c"],"running":
+  watch.takeNext: attempt 3 via local (qwen2.5-coder-7b), context L0 1771 chars (retry sampling: temperature 0.7, seed 3), 3.2s
+  watch.takeNext: ✗ OARC-E071 import "./src/watch" is not allowed (allowed: open-arc, or a type shown as not in scope from its own file)
+warning OARC-W001 src/engine.ts:1204  '@openarc:' text that is not a valid marker
+warning OARC-W044 txn.planJournal  thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle) [examples:2]
+warning OARC-W044 txn.commit  thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle) [examples:1; try: {}, "", []]
+warning OARC-W044 txn.recover  thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle) [examples:2]
+warning OARC-W040 compile.run.lock  block region verified indirectly (through its function's examples)
+warning OARC-W040 compile.run.recover  block region verified indirectly (through its function's examples)
+warning OARC-W040 compile.run.parse  block region verified indirectly (through its function's examples)
+warning OARC-W040 compile.run.analyze  block region verified indirectly (through its function's examples)
+warning OARC-W040 compile.run.plan  block region verified indirectly (through its function's examples)
+warning OARC-W040 compile.run.generate  block region verified indirectly (through its function's examples)
+warning OARC-W040 compile.run.stage  block region verified indirectly (through its function's examples)
+warning OARC-W040 compile.run.commit  block region verified indirectly (through its function's examples)
+warning OARC-W040 compile.run.unlock  block region verified indirectly (through its function's examples)
+warning OARC-W044 markers.scanMarkers  thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle) [no-edge-case; try: ""]
+warning OARC-W044 markers.buildRegionTree  thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle) [no-edge-case; try: [], {}, "", 0, a negative number]
+warning OARC-W044 model.buildRequest  thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle) [examples:1; try: "", {}, 0, a negative number]
+warning OARC-W044 model.parseOutput  thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle) [no-edge-case; try: ""]
+warning OARC-W044 model.call  thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle) [examples:1]
+warning OARC-W044 sandbox.buildArgv  thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle) [examples:2]
+warning OARC-W044 watch.classifyPath  thin examples: fewer than 3, or none with an edge case (empty, zero, negative, null); passing them proves little (openarc check <id> --oracle) [no-edge-case; try: ""]
+error   OARC-E082 block.checkRestrictions  repair attempts exhausted [output was not valid: invalid-json]
+error   OARC-E082 cli.parseArgv  repair attempts exhausted [OARC-E070 TS2322 line 43: Type '(argv: string[]) => { cmd: "init"; ids?: undefined; id?: undefined; mode?: undefined; file?: undefined; fn?: undefined; debounceMs?: undefined; reason?: undefined; } | ]
+warning OARC-W043 cli.parseArgv  region keeps a body that does not satisfy its current spec (its recompile failed; shown as stale)
+error   OARC-E082 txn.recover  repair attempts exhausted [OARC-E070 TS2345 line 117: Argument of type 'string | null' is not assignable to parameter of type 'string'.
+  Type 'null' is not assignable to type 'string'.
+    > const journal = JSON.parse(await fs]
+error   OARC-E082 hash.canonicalJson  repair attempts exhausted [OARC-E090 example "#1" failed: got "{\"b\":1,\"a\":[true,null,\"x\"]}"; expected "{\"a\":[true,null,\"x\"],\"b\":1}"]
+error   OARC-E082 hash.normalizeOwnedText  repair attempts exhausted [output was not valid: invalid-json]
+error   OARC-E082 hash.sha256Tagged  repair attempts exhausted [repeat: OARC-E070 TS1232 line 81: An import declaration can only be used at the top level of a namespace or module.
+    > import { createHash } from 'node:crypto';]
+error   OARC-E082 markers.scanMarkers  repair attempts exhausted [repeat: OARC-E073 'require' is forbidden in regions: put the module in "imports" instead (names the file already imports are already in scope)]
+error   OARC-E082 markers.buildRegionTree  repair attempts exhausted [OARC-E090 example "nested" failed: got {"roots":[{"id":"a.b","beginLine":3,"endLine":5,"children":[{"id":"a","beginLine":1,"endLine":5,"children":[]}]}],"diagnostics":[{"code":"OARC-E030","id":"a","li]
+error   OARC-E082 model.renderTemplate  repair attempts exhausted [OARC-E070 TS7034 line 57: Variable 'missing' implicitly has type 'any[]' in some locations where its type cannot be determined.
+    > const missing = [];]
+error   OARC-E082 model.parseOutput  repair attempts exhausted [OARC-E090 example "#1" failed: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"bad-imports"}}; expected {"ok":true,"body":"return 1;","imports":[]}]
+error   OARC-E082 model.call  repair attempts exhausted [OARC-E070 TS2345 line 151: Argument of type 'OllamaChatRequest' is not assignable to parameter of type 'Json'.
+  Type 'OllamaChatRequest' is not assignable to type '{ [k: string]: Json; }'.
+    Index ]
+warning OARC-W043 model.call  region keeps a body that does not satisfy its current spec (its recompile failed; shown as stale)
+error   OARC-E082 ownership.detect  repair attempts exhausted [OARC-E090 example "developer, spec unchanged" failed: got {"state":"developer","diagnostic":{"code":"OARC-W060"}}; expected {"state":"developer","diagnostic":null}]
+warning OARC-W043 ownership.detect  region keeps a body that does not satisfy its current spec (its recompile failed; shown as stale)
+error   OARC-E082 auth.splitToken  repair attempts exhausted [OARC-E090 example "only the first dot splits" failed: got ["k1","a"]; expected ["k1","a.b"]]
+error   OARC-E082 auth.password  repair attempts exhausted [repeat: OARC-E070 TS18047 line 158: 'user' is possibly 'null'.
+    > await ports.users.recordFailure(user.id);]
+error   OARC-E082 auth.apiKey  repair attempts exhausted [repeat: output was not valid: invalid-json]
+warning OARC-W042 auth.magicLink  held back: it can't be verified until the regions it waits on exist (a block: its sibling blocks, kept in the cache and committed by a later run; detail waiting:<ids>: pending callees its examples end in) [waiting:auth.splitToken]
+error   OARC-E082 lb.leastConnections  repair attempts exhausted [OARC-E070 TS2345 line 121: Argument of type 'null' is not assignable to parameter of type 'string'.
+    > result.push(null);]
+error   OARC-E082 lb.weighted  repair attempts exhausted [OARC-E090 example "law: equal backends share requests evenly" failed: got ["c","c","c","c","c","c"]; expected ["a","b","c","a","b","c"]]
+error   OARC-E082 lb.healthCheck  repair attempts exhausted [OARC-E090 example "enough successes, but not out long enough yet" failed: got [{"id":"a","healthy":true,"failures":0,"successes":2,"downSince":null}]; expected [{"id":"a","healthy":false,"failures":0,]
+error   OARC-E092 ui.loginPage  sandbox unavailable [dom:not-configured]
+error   OARC-E082 p2p.decodeLengthPrefixed  repair attempts exhausted [OARC-E090 example "law: whole frames decode in order" failed: got {"messages":["hi"],"rest":[0,0,0,5,116,104,101,114,101]}; expected {"messages":["hi","there"],"rest":[]}]
+error   OARC-E082 p2p.encodeVarint  repair attempts exhausted [OARC-E070 TS2588 line 109: Cannot assign to 'length' because it is a constant.
+    > length >>= 7;]
+error   OARC-E082 p2p.decodeVarint  repair attempts exhausted [OARC-E090 example "law: whole frames decode in order" failed: got {"messages":["hi"],"rest":[5,116,104,101,114,101]}; expected {"messages":["hi","there"],"rest":[]}]
+error   OARC-E082 p2p.handshake  repair attempts exhausted [OARC-E070 TS2322 line 165: Type '(state: HsState, event: HsEvent, supported: number[]) => { state: { phase: "sent"; version: number | null; error: string | null; }; send: { type: "hello"; versions: nu]
+error   OARC-E082 p2p.onGossip  repair attempts exhausted [OARC-E073 'require' is forbidden in regions: put the module in "imports" instead (names the file already imports are already in scope)]
+error   OARC-E082 p2p.broadcast  repair attempts exhausted [repeat: OARC-E070 TS2304 line 336: Cannot find name 'state'.
+    > const result = onGossip(state, null, msg, fanout);]
+error   OARC-E082 plan.selectTargets  repair attempts exhausted [repeat: OARC-E070 TS2339 line 69: Property 'children' does not exist on type 'PlanInput'.
+    > if (region.children) {]
+error   OARC-E082 sandbox.buildArgv  repair attempts exhausted [OARC-E090 example "#1" failed: got ["bwrap","--unshare-all","--die-with-parent","--new-session","--ro-bind","/tmp/oa-stage","/work","--ro-bind","/usr","/usr","--ro-bind","/home/u/.asdf/installs/nodejs]
+warning OARC-W043 sandbox.buildArgv  region keeps a body that does not satisfy its current spec (its recompile failed; shown as stale)
+error   OARC-E082 sandbox.readHarnessOutput  repair attempts exhausted [OARC-E070 TS7006 line 114: Parameter 'line' implicitly has an 'any' type.
+    > const parseJsonLine = (line) => {]
+error   OARC-E082 watch.classifyPath  repair attempts exhausted [OARC-E090 example "#7" failed: got "source"; expected "ignore"]
+error   OARC-E082 watch.enqueue  repair attempts exhausted [OARC-E070 TS2588 line 71: Cannot assign to 'newPending' because it is a constant.
+    > newPending = newPending.filter(id => id !== running);]
+warning OARC-W043 watch.enqueue  region keeps a body that does not satisfy its current spec (its recompile failed; shown as stale)
+error   OARC-E082 watch.takeNext  repair attempts exhausted [OARC-E071 import "./src/watch" is not allowed (allowed: open-arc, or a type shown as not in scope from its own file)]
+error   OARC-E090 compile.run  example failed [joint:empty project: nothing to do, lock released,one pending region: generated, verified, committed]
+stale: cli.parseArgv, model.call, ownership.detect, sandbox.buildArgv, watch.enqueue keep a body that does not satisfy the current spec
+done: exit 1 · 90 model call(s) · 981.4s
+exit 1

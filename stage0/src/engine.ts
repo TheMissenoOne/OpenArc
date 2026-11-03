@@ -1245,8 +1245,9 @@ export function staticCheck(body: string, effects: string[], fileBound: Set<stri
 // The model never writes files. It returns a body string; the compiler is the only writer, and it
 // enforces that a body can only ever land between its own region's markers.
 
-/** A comment that merely mentions the marker prefix ("// matches @openarc: markers") is removed before splicing: a safe,
- *  non-semantic normalisation (§8.7). A marker-SHAPED comment (`// @openarc:begin|end …`) is kept, so guardBody rejects it. */
+/** A comment that merely mentions the marker prefix (e.g. "matches the openarc marker prefix") is removed before splicing:
+ *  a safe, non-semantic normalisation (§8.7). A marker-SHAPED comment (a begin or end marker line) is kept, so guardBody
+ *  rejects it. */
 export function stripMarkerComments(body: string, tsx = false): { body: string; stripped: number } {
   if (!body.includes("@openarc:")) return { body, stripped: 0 };
   const pre = "async function __region() {\n";

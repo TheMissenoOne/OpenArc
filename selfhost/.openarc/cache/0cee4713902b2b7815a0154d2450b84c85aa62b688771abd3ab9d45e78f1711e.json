@@ -1,0 +1,1 @@
+{"body":"if (id === '') return false;\nconst segments = id.split('.');\nfor (const segment of segments) {\n    if (!/^[a-z][a-zA-Z0-9]*$/.test(segment)) return false;\n  }\nreturn true;","imports":[],"tokens":{"prompt":463,"completion":135}}
