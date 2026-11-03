@@ -114,6 +114,19 @@ async function compile(maxAttempts: number, bodies: string[]) {
     `const verse = (n: number) => 1;\nreturn verse(n);`, `const verse = (n: number) => 1;\nif (n > 0) return verse(n);`, `${helper}\nfunction verse(n: number) { return 1; }\nfunction verse(n: number) { return 2; }`])
     assert.equal(engine.unwrapBody(r, "function", false, self), r, r);
   assert.equal(engine.unwrapBody(`${helper}\nconst verse = (n: number) => 1;`, "block", false, self), `${helper}\nconst verse = (n: number) => 1;`);
+  // a returned (or bare) function with the region's own parameters: Seed-Coder's habit (dev bench 2026-11-03, TS2322)
+  const returned: [string, string][] = [
+    [`${helper}\nreturn (n: number) => {\n  return animals[n]!;\n};`, `${helper}\nreturn animals[n]!;`],
+    [`${helper}\nreturn (n) => animals[n]!;`, `${helper}\nreturn animals[n]!;`],
+    [`return function (n: number) { return 1; };`, "return 1;"],
+    [`(n: number) => {\n  return 1;\n}`, "return 1;"],
+    [`return ((n: number) => 1);`, "return 1;"],
+  ];
+  for (const [reply, want] of returned) for (const r of [reply, fence(reply)]) assert.equal(engine.unwrapBody(r, "function", false, self), want, r);
+  // left alone: other parameters, an earlier return, not the last statement, a block region
+  for (const r of [`return (k: number) => 1;`, `return (n: number, m: number) => 1;`, `if (n < 0) return () => 0;\nreturn (n: number) => 1;`, `return (n: number) => 1;\nconst x = 1;`])
+    assert.equal(engine.unwrapBody(r, "function", false, self), r, r);
+  assert.equal(engine.unwrapBody(`return (n: number) => 1;`, "block", false, self), `return (n: number) => 1;`);
   // end to end: helpers + the whole function compiles on attempt 1 (was TS2322 "(n: number) => void")
   const { res, sent, snap } = await compile(3, ["const ONE = 1;\nexport const inc: Inc = (n) => {\n  return n + ONE;\n};"]);
   assert.equal(res.exit, 0, JSON.stringify(res.diagnostics));

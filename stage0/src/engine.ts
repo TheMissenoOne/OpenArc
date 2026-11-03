@@ -1072,6 +1072,27 @@ function declaredFunction(st: ts.Statement, name: string): ts.FunctionLikeDeclar
 const bodyText = (fn: ts.FunctionLikeDeclaration, sf: ts.SourceFile): string =>
   ts.isBlock(fn.body!) ? fn.body.statements.map((s) => s.getText(sf)).join("\n") : `return ${fn.body!.getText(sf)};`;
 
+/** A return anywhere in `n` (an `if (…) return verse(n);` too), not counting nested functions' own returns. */
+const returns = (n: ts.Node): boolean => ts.isReturnStatement(n) || (!ts.isFunctionLike(n) && !!ts.forEachChild(n, (c) => returns(c) || undefined));
+
+/** Same parameter count and names as the region's own (whitespace ignored). */
+const sameParams = (fn: ts.FunctionLikeDeclaration, sf: ts.SourceFile, params: string[]): boolean =>
+  fn.parameters.length === params.length && fn.parameters.every((x, i) => x.name.getText(sf).replace(/\s+/g, "") === params[i]!.replace(/\s+/g, ""));
+
+/** A reply whose last statement returns (or just is) a function with the region's own parameters, e.g. helpers then
+ *  `return (start, end) => {...};`: the model wrote the function, not its body (Seed-Coder, dev bench 2026-11-03).
+ *  The helpers followed by that function's body. null when another statement already returns.
+ *  ponytail: syntactic; a region whose result is a function taking the same parameter names would be unwrapped too. */
+function unwrapReturned(sf: ts.SourceFile, self: { params: string[] }): string | null {
+  const last = sf.statements.at(-1);
+  let e = last && (ts.isReturnStatement(last) || ts.isExpressionStatement(last)) ? last.expression : undefined;
+  while (e && ts.isParenthesizedExpression(e)) e = e.expression;
+  if (!e || !(ts.isArrowFunction(e) || ts.isFunctionExpression(e)) || !sameParams(e, sf, self.params)) return null;
+  const rest = sf.statements.slice(0, -1);
+  if (rest.some(returns)) return null;
+  return [...rest.map((st) => st.getText(sf)), bodyText(e, sf)].join("\n");
+}
+
 /** A reply of helper statements plus the region's own declaration (same name, same parameter names), e.g.
  *  `const animals = [...];\nconst verse: VerseFn = (n) => {...};`: the helpers (export dropped) followed by the own
  *  body. null when no single statement declares it, or another statement already returns (then it is a real body). */
@@ -1079,11 +1100,8 @@ function unwrapOwn(sf: ts.SourceFile, self: { name: string; params: string[] }):
   const own = sf.statements.filter((st) => declaredFunction(st, self.name));
   if (own.length !== 1) return null;
   const fn = declaredFunction(own[0]!, self.name)!;
-  const norm = (s: string) => s.replace(/\s+/g, "");
-  if (!fn.body || fn.parameters.length !== self.params.length || fn.parameters.some((x, i) => norm(x.name.getText(sf)) !== norm(self.params[i]!))) return null;
+  if (!fn.body || !sameParams(fn, sf, self.params)) return null;
   const rest = sf.statements.filter((st) => st !== own[0] && !ts.isExportAssignment(st) && !ts.isExportDeclaration(st)); // `export default f;`, `export { f };`
-  // a return anywhere in the rest (an `if (…) return verse(n);` too), not counting nested functions' own returns
-  const returns = (n: ts.Node): boolean => ts.isReturnStatement(n) || (!ts.isFunctionLike(n) && !!ts.forEachChild(n, (c) => returns(c) || undefined));
   if (rest.some(returns)) return null;
   return [...rest.map((st) => st.getText(sf).replace(/^export\s+(default\s+)?/, "")), bodyText(fn, sf)].join("\n");
 }
@@ -1094,6 +1112,8 @@ export function unwrapBody(body: string, kind: "function" | "block", tsx = false
   let b = body.trim().replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/, "").trim();
   if (kind !== "function") return b;
   const sf = ts.createSourceFile(tsx ? "b.tsx" : "b.ts", b, ts.ScriptTarget.Latest, true);
+  const returned = self ? unwrapReturned(sf, self) : null;
+  if (returned !== null) return returned;
   if (sf.statements.length !== 1) { // code-first: a whole method (`pick(key: string): T { … }`)
     const own = self && sf.statements.length > 1 ? unwrapOwn(sf, self) : null;
     if (own !== null) return own;
