@@ -111,6 +111,13 @@ async function withReconnect(ports: Ports, b: BackendConfig, system: string, use
 
 type Reply = { text: string; truncated: boolean; tokens: Tokens | null };
 
+/** A local OpenAI-compatible server answered as a model other than the backend's. llama-server holds one model and
+ *  reports its alias whatever the request names, so two backends on one URL (one model loaded at a time) would record
+ *  the loaded model's reply under the other's name. Hosted APIs answer with dated or vendor names, and a server started
+ *  without an alias reports a file name, so only an unrelated name from a loopback URL counts. */
+export const servedOther = (b: BackendConfig, served: string): boolean =>
+  /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(baseUrlOf(b)) && !/\.gguf$/i.test(served) && !served.startsWith(b.model) && !b.model.startsWith(served);
+
 /** Ollama's OpenAI-compatible /v1 (explicit `ollamaCompat`, else a baseUrl on port 11434 ending in /v1). */
 export const isOllamaCompat = (b: BackendConfig): boolean => b.ollamaCompat ?? /:11434\/v1$/.test(baseUrlOf(b));
 
@@ -155,7 +162,8 @@ async function completeOnce(ports: Ports, b: BackendConfig, system: string, user
       };
       const headers: Record<string, string> = { ...b.headers };
       if (key) headers.authorization = `Bearer ${key}`;
-      const res = JSON.parse(await ports.http.postJson(`${baseUrlOf(b)}/chat/completions`, body, headers)) as { choices?: { finish_reason?: string; message?: { content?: string | null } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+      const res = JSON.parse(await ports.http.postJson(`${baseUrlOf(b)}/chat/completions`, body, headers)) as { model?: string; choices?: { finish_reason?: string; message?: { content?: string | null } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+      if (res.model && servedOther(b, res.model)) throw new Error(`openai: the server at ${baseUrlOf(b)} answered as "${res.model}", not "${b.model}": another model is loaded`);
       const content = res.choices?.[0]?.message?.content;
       const truncated = res.choices?.[0]?.finish_reason === "length";
       const tokens = tokensOf(res.usage?.prompt_tokens, res.usage?.completion_tokens);

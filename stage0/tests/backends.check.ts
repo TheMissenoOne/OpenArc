@@ -4,7 +4,7 @@ import type { Json } from "open-arc";
 import type { Ports } from "../src/types.ts";
 import type { BackendConfig } from "../src/config.ts";
 import { parseConfig } from "../src/config.ts";
-import { complete, looping, ANTHROPIC_VERSION, OUTPUT_SCHEMA } from "../src/backends.ts";
+import { complete, looping, servedOther, ANTHROPIC_VERSION, OUTPUT_SCHEMA } from "../src/backends.ts";
 import { MODEL_OUTPUT_SCHEMA } from "../src/model.ts";
 
 const OUT = '{"body":"return 1;","imports":[]}';
@@ -198,4 +198,14 @@ const strictSchema = { ...schemaWith(["from", "names", "default"], { type: ["str
   assert.equal(await complete(ports, b, "S", "U", env), OUT);
   assert.deepStrictEqual([seen[0]!.url, seen[0]!.headers?.authorization], ["http://127.0.0.1:8080/v1/chat/completions", undefined]);
 }
-console.log("backends: request shapes, truncation retry, ollama /v1, llama-server default ok");
+// a local server answering as another model (two backends on one llama-server URL): an error, not a misattributed reply
+{
+  const local: BackendConfig = { provider: "openai", model: "seed-coder-8b", baseUrl: "http://127.0.0.1:8080/v1", maxContextTokens: 8192 };
+  const as = (model: string) => JSON.stringify({ ...JSON.parse(openaiReply), model });
+  await assert.rejects(complete(fake(as("qwen3.5-9b")).ports, local, "S", "U", env), /answered as "qwen3.5-9b", not "seed-coder-8b"/);
+  for (const ok of ["seed-coder-8b", "seed-coder-8b-instruct", "models/Seed-Coder-8B-Instruct-Q4_K_M.gguf"]) assert.equal(await complete(fake(as(ok)).ports, local, "S", "U", env), OUT, ok);
+  // hosted: names differ by design (dated snapshots, vendor prefixes), never checked
+  assert.equal(await complete(fake(as("gpt-5-2026-08-07")).ports, { ...local, baseUrl: "https://api.example.com/v1", model: "my-deployment" }, "S", "U", env), OUT);
+  assert.deepStrictEqual([servedOther(local, "qwen3.5-9b"), servedOther({ ...local, baseUrl: "http://localhost:1234/v1" }, "x"), servedOther({ ...local, baseUrl: "http://localhost.example.com/v1" }, "x")], [true, true, false]);
+}
+console.log("backends: request shapes, truncation retry, ollama /v1, llama-server default, served model ok");
