@@ -1,0 +1,1 @@
+{"body":"const index = token.indexOf('.');\nif (index === -1 || index === 0 || index === token.length - 1) {\n    return null;\n  }\nreturn [token.slice(0, index), token.slice(index + 1)];","imports":[],"sampling":{"temperature":0.4,"seed":2},"tokens":{"prompt":2188,"completion":137}}

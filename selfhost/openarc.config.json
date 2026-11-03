@@ -7,6 +7,27 @@
       "model": "qwen2.5-coder-7b",
       "maxContextTokens": 8192,
       "outputFormat": "json"
+    },
+    "seed": {
+      "provider": "openai",
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "model": "seed-coder-8b",
+      "maxContextTokens": 8192,
+      "outputFormat": "json"
+    },
+    "qwen35": {
+      "provider": "openai",
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "model": "qwen3.5-9b",
+      "maxContextTokens": 8192,
+      "outputFormat": "json"
+    },
+    "q14": {
+      "provider": "openai",
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "model": "qwen2.5-coder-14b-iq3m",
+      "maxContextTokens": 8192,
+      "outputFormat": "json"
     }
   },
   "compilation": {
@@ -15,6 +36,59 @@
     "context": {
       "initialLevel": 0,
       "expandOnFailure": true
+    }
+  },
+  "regions": {
+    "cli.parseArgv": {
+      "backend": "seed"
+    },
+    "hash.canonicalJson": {
+      "backend": "seed"
+    },
+    "hash.sha256Tagged": {
+      "backend": "seed"
+    },
+    "model.renderTemplate": {
+      "backend": "seed"
+    },
+    "auth.splitToken": {
+      "backend": "seed"
+    },
+    "auth.magicLink": {
+      "backend": "seed"
+    },
+    "lb.leastConnections": {
+      "backend": "seed"
+    },
+    "p2p.decodeLengthPrefixed": {
+      "backend": "seed"
+    },
+    "p2p.encodeVarint": {
+      "backend": "seed"
+    },
+    "p2p.onGossip": {
+      "backend": "seed"
+    },
+    "plan.selectTargets": {
+      "backend": "seed"
+    },
+    "watch.takeNext": {
+      "backend": "seed"
+    },
+    "auth.password": {
+      "backend": "qwen35"
+    },
+    "lb.weighted": {
+      "backend": "qwen35"
+    },
+    "sandbox.readHarnessOutput": {
+      "backend": "qwen35"
+    },
+    "watch.classifyPath": {
+      "backend": "qwen35"
+    },
+    "p2p.handshake": {
+      "backend": "q14"
     }
   }
 }

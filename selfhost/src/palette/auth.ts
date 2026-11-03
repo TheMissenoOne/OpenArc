@@ -105,7 +105,13 @@ export const splitTokenSpec = arc.defineRegion<SplitToken>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin auth.splitToken
-export const splitToken: SplitToken = (token) => arc.todo("auth.splitToken");
+export const splitToken: SplitToken = (token) => {
+  const index = token.indexOf('.');
+  if (index === -1 || index === 0 || index === token.length - 1) {
+      return null;
+    }
+  return [token.slice(0, index), token.slice(index + 1)];
+};
 // @openarc:end auth.splitToken
 
 // ── auth.password ─────────────────────────────────────────────── variant, written as a sketch
@@ -149,7 +155,18 @@ export const passwordSpec = arc.defineRegion<Strategy<PasswordCred>>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin auth.password
-export const password: Strategy<PasswordCred> = (cred, ports) => arc.todo("auth.password");
+export const password: Strategy<PasswordCred> = async (cred, ports) => {
+  const email = (cred.email.trim().toLowerCase());
+  const user = await ports.users.findByEmail(email);
+  const stored = user?.passwordHash ?? ports.hasher.dummyHash;
+  const match = ports.hasher.equal(await ports.hasher.hash(cred.password, stored), stored);
+  if (user === null || !match) {
+    if (user) await ports.users.recordFailure(user.id)
+    return { ok: false, reason: "invalid" };
+  }
+  if ((user.lockedUntil !== null && user.lockedUntil > ports.clock.now())) return { ok: false, reason: "locked" };
+  return { ok: true, userId: user.id };
+};
 // @openarc:end auth.password
 
 // ── auth.apiKey ───────────────────────────────────────────────── variant, written as prose
@@ -231,5 +248,14 @@ export const magicLinkSpec = arc.defineRegion<Strategy<MagicLinkCred>>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin auth.magicLink
-export const magicLink: Strategy<MagicLinkCred> = (cred, ports) => arc.todo("auth.magicLink");
+export const magicLink: Strategy<MagicLinkCred> = async (cred, ports) => {
+  const [tokenId, secret] = splitToken(cred.token) ?? ["", ""];
+  const link = tokenId ? await ports.users.findMagicLink(tokenId) : null;
+  const stored = link !== null && !link.used ? link.secretHash : ports.hasher.dummyHash;
+  const match = ports.hasher.equal(await ports.hasher.hash(secret, stored), stored);
+  if (link === null || link.used || !match) return { ok: false, reason: "invalid" };
+  if ((link.expiresAt <= ports.clock.now())) return { ok: false, reason: "expired" };
+  if (!(await ports.users.consumeMagicLink(tokenId))) return { ok: false, reason: "invalid" }; // the atomic claim: one sign-in per link
+  return { ok: true, userId: link.userId };
+};
 // @openarc:end auth.magicLink

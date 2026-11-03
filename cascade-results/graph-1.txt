@@ -1,0 +1,53 @@
+block.checkRestrictions            F pending    10 ex  src/block.ts
+cli.parseArgv                      F compiler   22 ex  src/cli.ts
+compile.run                        F developer  3 ex  src/compile.ts
+  compile.run.lock                 B pending    0 ex  src/compile.ts
+  compile.run.recover              B pending    0 ex  src/compile.ts
+  compile.run.parse                B pending    0 ex  src/compile.ts
+  compile.run.analyze              B pending    0 ex  src/compile.ts
+  compile.run.plan                 B pending    0 ex  src/compile.ts
+  compile.run.generate             B pending    0 ex  src/compile.ts
+  compile.run.stage                B pending    0 ex  src/compile.ts
+  compile.run.commit               B pending    0 ex  src/compile.ts
+  compile.run.unlock               B pending    0 ex  src/compile.ts
+hash.canonicalJson                 F compiler   5 ex  src/hash.ts
+hash.normalizeOwnedText            F pending    7 ex  src/hash.ts
+hash.sha256Tagged                  F compiler   3 ex  src/hash.ts
+ids.isValidId                      F compiler   9 ex  src/ids.ts
+ids.findDuplicateIds               F compiler   3 ex  src/ids.ts
+markers.scanMarkers                F pending    7 ex  src/markers.ts
+markers.buildRegionTree            F pending    4 ex  src/markers.ts
+model.renderTemplate               F compiler   4 ex  src/model.ts
+model.buildRequest                 F compiler   1 ex  src/model.ts
+model.parseOutput                  F pending    7 ex  src/model.ts
+model.call                         F compiler   1 ex  src/model.ts
+ownership.detect                   F compiler   9 ex  src/ownership.ts
+auth.splitToken                    F compiler   6 ex  src/palette/auth.ts
+auth.password                      F pending    10 ex  src/palette/auth.ts
+auth.apiKey                        F pending    8 ex  src/palette/auth.ts
+auth.magicLink                     F compiler   11 ex  src/palette/auth.ts
+lb.roundRobin                      F compiler   7 ex  src/palette/loadBalancer.ts
+lb.leastConnections                F compiler   7 ex  src/palette/loadBalancer.ts
+lb.weighted                        F pending    7 ex  src/palette/loadBalancer.ts
+lb.hash32                          F compiler   3 ex  src/palette/loadBalancer.ts
+lb.consistentHash                  F compiler   6 ex  src/palette/loadBalancer.ts
+lb.healthCheck                     F pending    6 ex  src/palette/loadBalancer.ts
+lb.failover                        F compiler   4 ex  src/palette/loadBalancer.ts
+ui.loginPage                       F pending    3 ex  src/palette/loginPage.tsx
+p2p.encodeLengthPrefixed           F compiler   3 ex  src/palette/p2p.ts
+p2p.decodeLengthPrefixed           F compiler   8 ex  src/palette/p2p.ts
+p2p.encodeVarint                   F compiler   3 ex  src/palette/p2p.ts
+p2p.decodeVarint                   F pending    8 ex  src/palette/p2p.ts
+p2p.handshake                      F pending    8 ex  src/palette/p2p.ts
+p2p.peerTable                      F compiler   5 ex  src/palette/p2p.ts
+p2p.onGossip                       F compiler   5 ex  src/palette/p2p.ts
+p2p.broadcast                      F pending    5 ex  src/palette/p2p.ts
+plan.selectTargets                 F compiler   3 ex  src/plan.ts
+sandbox.buildArgv                  F stale      2 ex  src/sandbox.ts
+sandbox.readHarnessOutput          F pending    4 ex  src/sandbox.ts
+txn.planJournal                    F compiler   2 ex  src/txn.ts
+txn.commit                         F compiler   1 ex  src/txn.ts
+txn.recover                        F pending    2 ex  src/txn.ts
+watch.classifyPath                 F pending    9 ex  src/watch.ts
+watch.enqueue                      F compiler   4 ex  src/watch.ts
+watch.takeNext                     F compiler   3 ex  src/watch.ts

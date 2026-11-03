@@ -7,21 +7,31 @@
       "file": "src/cli.ts",
       "symbol": "parseArgv",
       "ownership": "compiler",
-      "hash": "sha256:9cc4d292ab2193b0b2291032d3e198e337f531f6d0cb431957270dfad6b6c147",
-      "specHash": "sha256:64ba713c186e913673d884705736e2e3f4b31665754587694473f22fd78a2787",
-      "fingerprint": "sha256:5807b1c92b6c4216285e92c31d1c0db252cd5341baa1503610f08b35c041c7a8",
+      "hash": "sha256:23a4ff07525f05ab47e985dff0429cf28020eda9bbf8e22e00bc702aa23a9e2a",
+      "specHash": "sha256:27f064784976d725d5aa94332ad0ed45349ec3235cdec330b8afcbdf85574bed",
+      "fingerprint": "sha256:7738c93f689a5cb284e490e83eb474ae8055152fba8f431c85f43b2470e49f95",
       "provenance": {
         "source": "generated",
-        "backend": "local",
-        "model": "qwen3.5:9b",
+        "backend": "seed",
+        "model": "seed-coder-8b",
+        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "outputFormat": "json",
         "contextLevel": 0,
-        "attempts": 1,
+        "attempts": 2,
         "verifiedBy": [
           "tsc",
           "static",
-          "examples:11/11"
+          "examples:22/22"
         ],
-        "at": "2026-10-31T17:41:14.674Z"
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
+        },
+        "tokens": {
+          "prompt": 3729,
+          "completion": 1608
+        },
+        "at": "2026-11-03T06:09:43.114Z"
       }
     },
     "compile.run": {
@@ -36,6 +46,72 @@
       "provenance": {
         "source": "extracted",
         "at": "2026-10-31T17:41:14.678Z"
+      }
+    },
+    "hash.canonicalJson": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/hash.ts",
+      "symbol": "canonicalJson",
+      "ownership": "compiler",
+      "hash": "sha256:396a4da200fe06506a717a70f0218dcb86de92565bcea0376dbd18958be28f63",
+      "specHash": "sha256:a345d8c67c82b071612a770d709fa4344a56aba92b2f1b225cde529fdbd3a590",
+      "fingerprint": "sha256:eea23655cf05a0aefcf4f164a8ebda373b3006be16ec0b19eeb29dc5622f26ae",
+      "provenance": {
+        "source": "generated",
+        "backend": "seed",
+        "model": "seed-coder-8b",
+        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 2,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:5/5"
+        ],
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
+        },
+        "tokens": {
+          "prompt": 1535,
+          "completion": 317
+        },
+        "at": "2026-11-03T06:09:43.114Z"
+      }
+    },
+    "hash.sha256Tagged": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/hash.ts",
+      "symbol": "sha256Tagged",
+      "ownership": "compiler",
+      "hash": "sha256:609d6edf556d7e6644e52564c592adb265a89792f41b18adac81730a036d20d1",
+      "specHash": "sha256:27a33e678a38f661e5ec988f96d3060baf95cdd48cf443a40f6fdf32bd0883d1",
+      "fingerprint": "sha256:043b61ac983f77beaa4ca216a30c81fee089d84d03ee2e99392ca7952405fb80",
+      "provenance": {
+        "source": "generated",
+        "backend": "seed",
+        "model": "seed-coder-8b",
+        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "outputFormat": "json",
+        "contextLevel": 1,
+        "attempts": 2,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:3/3"
+        ],
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
+        },
+        "tokens": {
+          "prompt": 1667,
+          "completion": 316
+        },
+        "at": "2026-11-03T06:09:43.114Z"
       }
     },
     "ids.isValidId": {
@@ -102,6 +178,39 @@
           "completion": 278
         },
         "at": "2026-11-02T22:26:46.291Z"
+      }
+    },
+    "model.renderTemplate": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/model.ts",
+      "symbol": "renderTemplate",
+      "ownership": "compiler",
+      "hash": "sha256:17198cc351630231d0d2a1eedf5a4d354b1c76d03a98573f6e08831ebdabc395",
+      "specHash": "sha256:b361bec0c7fc6c0a7c955b3f52d0f69e57f0ac4bb277d864cec9ba0a5e27ff47",
+      "fingerprint": "sha256:443c9ecb981727c81ba3af83267716ed704c6972b3d4c762d6aa847b1ccd58c8",
+      "provenance": {
+        "source": "generated",
+        "backend": "seed",
+        "model": "seed-coder-8b",
+        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 2,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:4/4"
+        ],
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
+        },
+        "tokens": {
+          "prompt": 2842,
+          "completion": 421
+        },
+        "at": "2026-11-03T06:09:43.114Z"
       }
     },
     "model.buildRequest": {
@@ -183,6 +292,97 @@
         "at": "2026-10-31T19:45:08.431Z"
       }
     },
+    "auth.splitToken": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/auth.ts",
+      "symbol": "splitToken",
+      "ownership": "compiler",
+      "hash": "sha256:039466b640b93c1749067a07a3e1a83e4ddf03ce1cb5d046f3f07cda969efa81",
+      "specHash": "sha256:f29ac72c33625a2ce9aa5a64be6df9666607dac170fc9ebe9d099fcd99a4ab91",
+      "fingerprint": "sha256:338170c92844206a26615216356f3f1b2bf467d14684a3e84be40c1e29a3c505",
+      "provenance": {
+        "source": "generated",
+        "backend": "seed",
+        "model": "seed-coder-8b",
+        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 2,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:6/6"
+        ],
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
+        },
+        "tokens": {
+          "prompt": 2188,
+          "completion": 137
+        },
+        "at": "2026-11-03T06:09:43.114Z"
+      }
+    },
+    "auth.password": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/auth.ts",
+      "symbol": "password",
+      "ownership": "compiler",
+      "hash": "sha256:c598397110f4573cd77d7fd15df2ebe6541922830373f5345edc90fe704e96fe",
+      "specHash": "sha256:df3760aea3e1449431ce52eb11275a0596e79b33f164532f1cccd3a37d9d8b94",
+      "fingerprint": "sha256:63eb3fb0de73ad173b27cb82d401bb89788d6a4a3508b766b5bf6e394601b492",
+      "provenance": {
+        "source": "generated",
+        "backend": "qwen35",
+        "model": "qwen3.5-9b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen3.5-9b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:10/10"
+        ],
+        "tokens": {
+          "prompt": 2244,
+          "completion": 49
+        },
+        "at": "2026-11-03T06:26:19.408Z"
+      }
+    },
+    "auth.magicLink": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/auth.ts",
+      "symbol": "magicLink",
+      "ownership": "compiler",
+      "hash": "sha256:ea83bf6f852beeaeafab11f4aa6892a0220791588ddcba4c5ea9f4caf7ab458d",
+      "specHash": "sha256:d7e2e7aa1a39a5d134dfa003a0f3b1c61dfac51b1337cf235b0b9897240bbcfa",
+      "fingerprint": "sha256:e3a54790900cf7c88226269137d9d702dd5a808400b351cdfc702d29b7fd2b15",
+      "provenance": {
+        "source": "generated",
+        "backend": "seed",
+        "model": "seed-coder-8b",
+        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:11/11"
+        ],
+        "tokens": {
+          "prompt": 2467,
+          "completion": 26
+        },
+        "at": "2026-11-03T06:09:43.114Z"
+      }
+    },
     "lb.roundRobin": {
       "kind": "function",
       "parent": null,
@@ -216,6 +416,73 @@
           "completion": 149
         },
         "at": "2026-11-02T22:26:46.291Z"
+      }
+    },
+    "lb.leastConnections": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/loadBalancer.ts",
+      "symbol": "leastConnections",
+      "ownership": "compiler",
+      "hash": "sha256:0166a772015a55b9c08851c2bbcdf7812141c664795feda7f5684af6d8638573",
+      "specHash": "sha256:a92abaa70659b36c5268039d56d12b5ddd8266b404fc08d6652ed12b2b0837d7",
+      "fingerprint": "sha256:cc0a710af653d743d9874569e397a01e75489dfa947f0e1e89b6291cb6545d84",
+      "provenance": {
+        "source": "generated",
+        "backend": "seed",
+        "model": "seed-coder-8b",
+        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:7/7"
+        ],
+        "batch": [
+          "lb.leastConnections",
+          "lb.weighted",
+          "lb.healthCheck"
+        ],
+        "tokens": {
+          "prompt": 1065,
+          "completion": 160
+        },
+        "at": "2026-11-03T06:09:43.114Z"
+      }
+    },
+    "lb.weighted": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/loadBalancer.ts",
+      "symbol": "weighted",
+      "ownership": "compiler",
+      "hash": "sha256:9b1da8356242b70a4d28ccd0e01258235f1d8768989a4c6ea7451d4c4f0fa460",
+      "specHash": "sha256:fd13067c61dc70ca8d885d350233e2578adea99da1d84b7a41b628ac1d7d36f2",
+      "fingerprint": "sha256:869052383d3698bd9e01f3bb5b359676cedd21858126b25c868e70c145d9ce01",
+      "provenance": {
+        "source": "generated",
+        "backend": "qwen35",
+        "model": "qwen3.5-9b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen3.5-9b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 3,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:7/7"
+        ],
+        "sampling": {
+          "temperature": 0.7,
+          "seed": 3
+        },
+        "tokens": {
+          "prompt": 5724,
+          "completion": 4013
+        },
+        "at": "2026-11-03T06:26:19.408Z"
       }
     },
     "lb.hash32": {
@@ -349,6 +616,108 @@
         "at": "2026-11-02T22:26:46.291Z"
       }
     },
+    "p2p.decodeLengthPrefixed": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/p2p.ts",
+      "symbol": "decodeLengthPrefixed",
+      "ownership": "compiler",
+      "hash": "sha256:ef78bf7627cf7c607fcba9a529b8850078020e928d7747f5445e6adf92fd9b93",
+      "specHash": "sha256:97d48e9ffffdf15ee32e7c55095de3f06f781726604c6fee69900126842cc440",
+      "fingerprint": "sha256:1652c64a7253505e7ccb4133ef0e741b60eb2614ceab12c1112724502edb3dbe",
+      "provenance": {
+        "source": "generated",
+        "backend": "seed",
+        "model": "seed-coder-8b",
+        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:8/8"
+        ],
+        "batch": [
+          "p2p.decodeLengthPrefixed",
+          "p2p.encodeVarint",
+          "p2p.decodeVarint",
+          "p2p.handshake"
+        ],
+        "tokens": {
+          "prompt": 912,
+          "completion": 248
+        },
+        "at": "2026-11-03T06:09:43.114Z"
+      }
+    },
+    "p2p.encodeVarint": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/p2p.ts",
+      "symbol": "encodeVarint",
+      "ownership": "compiler",
+      "hash": "sha256:7d6898bda6ff3094be717fdf0e76d7e1245765b6eac386d7d265dfa926aac245",
+      "specHash": "sha256:2537e3c62048b92336713c122527b59b08c9b1f0cacfea47379f6eb70a96f64b",
+      "fingerprint": "sha256:ce75c41eabd90f6bcb554e6b080108ff2163c4820601964c7b2be61961488cc5",
+      "provenance": {
+        "source": "generated",
+        "backend": "seed",
+        "model": "seed-coder-8b",
+        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 2,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:3/3"
+        ],
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
+        },
+        "tokens": {
+          "prompt": 2672,
+          "completion": 367
+        },
+        "at": "2026-11-03T06:09:43.114Z"
+      }
+    },
+    "p2p.handshake": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/p2p.ts",
+      "symbol": "handshake",
+      "ownership": "compiler",
+      "hash": "sha256:eb03543d3d562df8d920c7da47916f5f7c0227dcae3cf5566616878a3a82e46b",
+      "specHash": "sha256:ed7dc27ddc4d83b0117978b23ad73670688766ab412bc422a6f22cfaf6838063",
+      "fingerprint": "sha256:7518d2ba692a1f5d52e770496c12b6f6d1ed9dc3835a01095fce617c93c26df5",
+      "provenance": {
+        "source": "generated",
+        "backend": "q14",
+        "model": "qwen2.5-coder-14b-iq3m",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen2.5-coder-14b-iq3m",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:8/8"
+        ],
+        "batch": [
+          "p2p.decodeVarint",
+          "p2p.handshake",
+          "p2p.broadcast"
+        ],
+        "tokens": {
+          "prompt": 1017,
+          "completion": 435
+        },
+        "at": "2026-11-03T07:26:20.012Z"
+      }
+    },
     "p2p.peerTable": {
       "kind": "function",
       "parent": null,
@@ -384,6 +753,68 @@
         "at": "2026-11-02T22:26:46.291Z"
       }
     },
+    "p2p.onGossip": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/p2p.ts",
+      "symbol": "onGossip",
+      "ownership": "compiler",
+      "hash": "sha256:61a6e793e3259eabd9907b75fb2effcca86bff72de4616077de164cff1d8b1e2",
+      "specHash": "sha256:24e2a7923e78f0649a8ef3a86a0778caa4d49ba4881e46609a3eb3a3fd2bcefa",
+      "fingerprint": "sha256:e8b78f19d92643011eb7c776a8ed8d46e84b34c73074dbdba0980aa0484fc163",
+      "provenance": {
+        "source": "generated",
+        "backend": "seed",
+        "model": "seed-coder-8b",
+        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 2,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:5/5"
+        ],
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
+        },
+        "tokens": {
+          "prompt": 3047,
+          "completion": 530
+        },
+        "at": "2026-11-03T06:09:43.114Z"
+      }
+    },
+    "plan.selectTargets": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/plan.ts",
+      "symbol": "selectTargets",
+      "ownership": "compiler",
+      "hash": "sha256:15e2aeba20303db853b2ea9dc2714f11a2a58cfb420ca8d10c1dc2a3621c8bf3",
+      "specHash": "sha256:816e00e762826931c7e0d0496cb7d1c8ee7f1d45d9be7a6e12273036536958f4",
+      "fingerprint": "sha256:6b91ad1ecc7d0dc115ed3b527f55f80ac70511293d115d1ca5bad2abe6db8166",
+      "provenance": {
+        "source": "generated",
+        "backend": "seed",
+        "model": "seed-coder-8b",
+        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 1,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:3/3"
+        ],
+        "tokens": {
+          "prompt": 1048,
+          "completion": 439
+        },
+        "at": "2026-11-03T06:09:43.114Z"
+      }
+    },
     "sandbox.buildArgv": {
       "kind": "function",
       "parent": null,
@@ -405,6 +836,39 @@
           "examples:1/1"
         ],
         "at": "2026-10-31T19:45:08.431Z"
+      }
+    },
+    "sandbox.readHarnessOutput": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/sandbox.ts",
+      "symbol": "readHarnessOutput",
+      "ownership": "compiler",
+      "hash": "sha256:7e46eafc4afcca8de3cd3b81255f878d129a43271d81d0a8a41f42e7480d0c96",
+      "specHash": "sha256:61a98cf833233604901a41cf00eedf342835e9f54e1ca3b29612424cac839359",
+      "fingerprint": "sha256:e6f946080a46f34b14d7536afffcd3096e59261206dacd54c9884764bb9ef5a6",
+      "provenance": {
+        "source": "generated",
+        "backend": "qwen35",
+        "model": "qwen3.5-9b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen3.5-9b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 2,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:4/4"
+        ],
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
+        },
+        "tokens": {
+          "prompt": 2144,
+          "completion": 527
+        },
+        "at": "2026-11-03T06:26:19.408Z"
       }
     },
     "txn.planJournal": {
@@ -474,6 +938,39 @@
         "at": "2026-11-02T22:26:46.291Z"
       }
     },
+    "watch.classifyPath": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/watch.ts",
+      "symbol": "classifyPath",
+      "ownership": "compiler",
+      "hash": "sha256:9e2b89c1bac3cdb6730d4ebf2ea3ce2d8402ebef9e67adf4c443aea682e34e98",
+      "specHash": "sha256:c92bcad70fac0560471c490b19ae1200bf9d47fb151743a42ef62a6219284d9f",
+      "fingerprint": "sha256:a91fbfb464e8d765b311666d43c3c689e2c5bfe051c307acd29a3bcd7fb2454e",
+      "provenance": {
+        "source": "generated",
+        "backend": "qwen35",
+        "model": "qwen3.5-9b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen3.5-9b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 3,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:9/9"
+        ],
+        "sampling": {
+          "temperature": 0.7,
+          "seed": 3
+        },
+        "tokens": {
+          "prompt": 1847,
+          "completion": 758
+        },
+        "at": "2026-11-03T06:26:19.408Z"
+      }
+    },
     "watch.enqueue": {
       "kind": "function",
       "parent": null,
@@ -495,6 +992,39 @@
           "examples:4/4"
         ],
         "at": "2026-10-31T19:45:08.431Z"
+      }
+    },
+    "watch.takeNext": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/watch.ts",
+      "symbol": "takeNext",
+      "ownership": "compiler",
+      "hash": "sha256:2e4dd2310d75db5179a15e7e86bbeea7acd706a2dbb305078ab3db7f292577d6",
+      "specHash": "sha256:716a476c91c2faa3ffac8b5fe3330d80f435569c81dbe03a730a0bf73dc57efa",
+      "fingerprint": "sha256:bcac425aad2a107bd24b85590635efdad80a7fc2e7576314c11058ff4ca3b1b3",
+      "provenance": {
+        "source": "generated",
+        "backend": "seed",
+        "model": "seed-coder-8b",
+        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 2,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:3/3"
+        ],
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
+        },
+        "tokens": {
+          "prompt": 1205,
+          "completion": 155
+        },
+        "at": "2026-11-03T06:09:43.114Z"
       }
     }
   }

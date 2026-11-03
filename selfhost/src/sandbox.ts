@@ -1,5 +1,6 @@
 import * as arc from "open-arc";
 import type { HarnessSummary, SandboxConfig } from "./types.ts";
+import type { ExampleOutcome } from "./types.ts";
 
 // ── sandbox.buildArgv ─────────────────────────────────────────── spec §9.2
 // The expected argv was run for real on the target machine (Fedora 43, bwrap, Node 25.9.0):
@@ -110,5 +111,32 @@ export const readHarnessOutputSpec = arc.defineRegion<ReadHarnessOutput>({
 });
 
 // @openarc:begin sandbox.readHarnessOutput
-export const readHarnessOutput: ReadHarnessOutput = (stdout) => arc.todo("sandbox.readHarnessOutput");
+export const readHarnessOutput: ReadHarnessOutput = (stdout) => {
+  const lines = stdout.split('\n').filter(l => l.trim() !== '');
+  const outcomes: ExampleOutcome[] = [];
+  let completed = false;
+  let expectedDone = 0;
+  let doneSeen = false;
+
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line);
+      if (obj.done !== undefined) {
+        doneSeen = true;
+        expectedDone = obj.done;
+        completed = true;
+      } else {
+        outcomes.push(obj);
+      }
+    } catch {
+      outcomes.push({ name: '<unparseable>', ok: false, actual: line });
+    }
+  }
+
+  if (completed && outcomes.length === expectedDone) {
+    return { complete: true, passed: outcomes.filter(o => o.ok).length, failed: outcomes.filter(o => !o.ok) };
+  }
+
+  return { complete: false, passed: outcomes.filter(o => o.ok).length, failed: outcomes.filter(o => !o.ok) };
+};
 // @openarc:end sandbox.readHarnessOutput

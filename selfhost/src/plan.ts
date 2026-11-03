@@ -1,5 +1,6 @@
 import * as arc from "open-arc";
 import type { PlanInput, PlanResult } from "./types.ts";
+import type { Diagnostic } from "./types.ts";
 
 // ── plan.selectTargets ────────────────────────────────────────── spec §8.1 PLAN
 type SelectTargets = (regions: PlanInput[], requested: string[]) => PlanResult;
@@ -53,5 +54,17 @@ export const selectTargetsSpec = arc.defineRegion<SelectTargets>({
 });
 
 // @openarc:begin plan.selectTargets
-export const selectTargets: SelectTargets = (regions, requested) => arc.todo("plan.selectTargets");
+export const selectTargets: SelectTargets = (regions, requested) => {
+  const buildRegionMap = (regions: PlanInput[]): Map<string, PlanInput> => { const map = new Map(); for (const region of regions) { map.set(region.id, region); } return map; };
+  const getDescendants = (map: Map<string, PlanInput>, id: string): string[] => { const descendants: string[] = []; const stack = [id]; while (stack.length > 0) { const current = stack.pop()!; const region = map.get(current); if (region) { for (const [key, value] of map.entries()) { if (value.parent === current) { stack.push(key); descendants.push(key); } } } } return descendants; };
+  const map = buildRegionMap(regions);
+  const scopeIds = requested.length === 0 ? Array.from(map.keys()) : requested.concat(requested.flatMap(id => getDescendants(map, id)));
+  const scopeSet = new Set(scopeIds);
+  const targets: string[] = [];
+  const skipped: Diagnostic[] = [];
+  const visited = new Set<string>();
+  const postOrderTraversal = (id: string) => { if (visited.has(id)) return; visited.add(id); const region = map.get(id)!; for (const [key, value] of map.entries()) { if (value.parent === id) { postOrderTraversal(key); } } if (scopeSet.has(id)) { if (region.state === 'pending' || (region.state === 'compiler' && region.stale)) { targets.push(id); } else if (region.state === 'developer' && region.stale) { skipped.push({ code: 'OARC-W060', id }); } else if (region.state === 'conflicted') { skipped.push({ code: 'OARC-E061', id }); } } };
+  for (const id of scopeIds) { postOrderTraversal(id); }
+  return { targets, skipped };
+};
 // @openarc:end plan.selectTargets

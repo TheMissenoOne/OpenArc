@@ -53,7 +53,24 @@ export const renderTemplateSpec = arc.defineRegion<RenderTemplate>({
 });
 
 // @openarc:begin model.renderTemplate
-export const renderTemplate: RenderTemplate = (template, vars) => arc.todo("model.renderTemplate");
+export const renderTemplate: RenderTemplate = (template, vars) => {
+  const regex = /{{([a-zA-Z0-9_]+)}}/g;
+  let match;
+  const missing: string[] = [];
+  const result = template.replace(regex, (_, name) => {
+    if (name in vars) {
+      return vars[name];
+    } else {
+      missing.push(name);
+      return `{{${name}}}`;
+    }
+  });
+  if (missing.length > 0) {
+    return { ok: false, missing: Array.from(new Set(missing)) };
+  } else {
+    return { ok: true, text: result };
+  }
+};
 // @openarc:end model.renderTemplate
 
 // ── model.buildRequest ────────────────────────────────────────── spec §8.4
