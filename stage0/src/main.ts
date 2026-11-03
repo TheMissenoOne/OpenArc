@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as http from "node:http";
 import * as https from "node:https";
+import { brotliDecompressSync, unzipSync } from "node:zlib";
 import type { CompileRequest, Diagnostic, Ports } from "./types.ts";
 import { parseArgv } from "./cli.ts";
 import { run } from "./compile.ts";
@@ -126,23 +127,33 @@ export function realPorts(root: string): Ports {
     http: {
       // node:http, not fetch: fetch drops a request whose response headers take over 300 s (undici headersTimeout),
       // and a non-streamed completion sends none until it is done, so a slow model (~8 tokens/s, e.g. a 14B partly on
-      // the CPU) failed every long reply as "fetch failed". No client timeout here; a dead server still fails fast.
+      // the CPU) failed every long reply as "fetch failed". What fetch did besides is kept: same-origin 307/308
+      // redirects (the body re-sent; another origin would get the API key, so it is an error) and gzip/deflate/br bodies.
+      // ponytail: a fixed 30 min of silence ends a request; a config knob if a model ever needs longer.
       async postJson(url, body, headers) {
         const data = JSON.stringify(body);
-        const u = new URL(url);
-        const { status, text } = await new Promise<{ status: number; text: string }>((ok, no) => {
-          const req = (u.protocol === "https:" ? https : http).request(u, { method: "POST", headers: { ...headers, "content-type": "application/json", "content-length": Buffer.byteLength(data) } }, (res) => {
-            let t = "";
-            res.setEncoding("utf8");
-            res.on("data", (c: string) => (t += c));
-            res.on("end", () => ok({ status: res.statusCode ?? 0, text: t }));
-            res.on("error", no);
+        for (let u = new URL(url), hops = 0; ; hops++) {
+          const res = await new Promise<http.IncomingMessage>((ok, no) => {
+            const req = (u.protocol === "https:" ? https : http).request(u, { method: "POST", timeout: 30 * 60_000, headers: { ...headers, "content-type": "application/json", "content-length": Buffer.byteLength(data) } }, ok);
+            req.on("timeout", () => req.destroy(new Error("no response from the model server in 30 min")));
+            req.on("error", no);
+            req.end(data);
           });
-          req.on("error", no);
-          req.end(data);
-        });
-        if (status < 200 || status > 299) throw new Error(`HTTP ${status}: ${text.slice(0, 200)}`);
-        return text;
+          const chunks: Buffer[] = [];
+          for await (const c of res) chunks.push(c as Buffer);
+          const status = res.statusCode ?? 0;
+          if ((status === 307 || status === 308) && res.headers.location) {
+            const next = new URL(res.headers.location, u);
+            if (next.origin !== u.origin || hops >= 5) throw new Error(`HTTP ${status}: ${next.origin !== u.origin ? "redirect to another origin" : "too many redirects"} (${next.href}); set the backend's baseUrl to the final URL`);
+            u = next;
+            continue;
+          }
+          const raw = Buffer.concat(chunks);
+          const enc = res.headers["content-encoding"]?.toLowerCase();
+          const text = (enc === "br" ? brotliDecompressSync(raw) : enc === "gzip" || enc === "deflate" ? unzipSync(raw) : raw).toString("utf8");
+          if (status < 200 || status > 299) throw new Error(`HTTP ${status}: ${text.slice(0, 200)}`);
+          return text;
+        }
       },
       async get(url) {
         const r = await fetch(url);
