@@ -14,6 +14,7 @@ export const canonicalJsonSpec = arc.defineRegion<CanonicalJson>({
     { args: [[{ b: 2, a: 1 }]], expected: "[{\"a\":1,\"b\":2}]" },
     { args: ["é"], expected: "\"é\"" },
     { args: [1.5], expected: "1.5" },
+    { name: "integer-like keys sort as strings", args: [{ "10": 1, "2": 2 }], expected: "{\"10\":1,\"2\":2}" },
   ],
 });
 

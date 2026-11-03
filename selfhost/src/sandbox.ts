@@ -88,7 +88,8 @@ export const readHarnessOutputSpec = arc.defineRegion<ReadHarnessOutput>({
   id: "sandbox.readHarnessOutput",
   intent: [
     "stdout is JSON lines: {name, ok, actual?} per example, then a final {done: n}. Blank lines are ignored.",
-    "complete = a {done} line was seen and n equals the number of outcome lines. Generated code can process.exit() mid-run, so a missing done line means incomplete.",
+    "complete = a {done} line was seen, n equals the number of outcome lines, and no outcome line follows the done line. Generated code can process.exit() mid-run, so a missing done line means incomplete;",
+    "it also shares stdout, so an outcome after the done line means the marker was forged and the run is incomplete.",
     "A non-JSON line counts as a failure {name: '<unparseable>', ok: false, actual: <line>}.",
   ],
   examples: [
@@ -106,6 +107,11 @@ export const readHarnessOutputSpec = arc.defineRegion<ReadHarnessOutput>({
       expected: { complete: false, passed: 0, failed: [{ name: "<unparseable>", ok: false, actual: "garbage" }] },
     },
     { args: [""], expected: { complete: false, passed: 0, failed: [] } },
+    {
+      name: "outcome after the done line",
+      args: ["{\"done\":1}\n{\"name\":\"x\",\"ok\":true}\n"],
+      expected: { complete: false, passed: 1, failed: [] },
+    },
   ],
 });
 
