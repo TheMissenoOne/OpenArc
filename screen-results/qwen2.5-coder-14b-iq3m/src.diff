@@ -1,0 +1,378 @@
+diff --git a/selfhost/src/hash.ts b/selfhost/src/hash.ts
+index c5b6a1a..5df705b 100644
+--- a/selfhost/src/hash.ts
++++ b/selfhost/src/hash.ts
+@@ -18,7 +18,18 @@ export const canonicalJsonSpec = arc.defineRegion<CanonicalJson>({
+ });
+ 
+ // @openarc:begin hash.canonicalJson
+-export const canonicalJson: CanonicalJson = (value) => arc.todo("hash.canonicalJson");
++export const canonicalJson: CanonicalJson = (value) => {
++  if (typeof value === 'object' && value !== null) {
++      if (Array.isArray(value)) {
++        return `[${value.map(canonicalJson).join(',')}]`;
++      } else {
++        const sortedKeys = Object.keys(value).sort();
++        const sortedEntries = sortedKeys.map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`);
++        return `{${sortedEntries.join(',')}}`;
++      }
++    }
++  return JSON.stringify(value);
++};
+ // @openarc:end hash.canonicalJson
+ 
+ // ── hash.normalizeOwnedText ───────────────────────────────────── spec §4.1
+diff --git a/selfhost/src/palette/auth.ts b/selfhost/src/palette/auth.ts
+index 3706dc5..2518f7d 100644
+--- a/selfhost/src/palette/auth.ts
++++ b/selfhost/src/palette/auth.ts
+@@ -149,7 +149,18 @@ export const passwordSpec = arc.defineRegion<Strategy<PasswordCred>>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin auth.password
+-export const password: Strategy<PasswordCred> = (cred, ports) => arc.todo("auth.password");
++export const password: Strategy<PasswordCred> = async (cred, ports) => {
++  const email = (cred.email.trim().toLowerCase());
++  const user = await ports.users.findByEmail(email);
++  const stored = user?.passwordHash ?? ports.hasher.dummyHash;
++  const match = ports.hasher.equal(await ports.hasher.hash(cred.password, stored), stored);
++  if (user === null || !match) {
++    if (user) await ports.users.recordFailure(user.id);
++    return { ok: false, reason: "invalid" };
++  }
++  if ((user.lockedUntil !== null && user.lockedUntil > ports.clock.now())) return { ok: false, reason: "locked" };
++  return { ok: true, userId: user.id };
++};
+ // @openarc:end auth.password
+ 
+ // ── auth.apiKey ───────────────────────────────────────────────── variant, written as prose
+diff --git a/selfhost/src/palette/loadBalancer.ts b/selfhost/src/palette/loadBalancer.ts
+index 42f9645..fa8e58e 100644
+--- a/selfhost/src/palette/loadBalancer.ts
++++ b/selfhost/src/palette/loadBalancer.ts
+@@ -102,7 +102,32 @@ export const leastConnectionsSpec = arc.defineRegion<Strategy>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin lb.leastConnections
+-export const leastConnections: Strategy = (backends, keys) => arc.todo("lb.leastConnections");
++export const leastConnections: Strategy = (backends, keys) => {
++  const healthyBackends = backends.filter(backend => backend.healthy);
++  if (healthyBackends.length === 0) {
++      return keys.map(() => null);
++    }
++  return keys.map(() => {
++      let minConnections = Infinity;
++      let selectedBackend = null;
++
++      for (const backend of healthyBackends) {
++        if (backend.connections < minConnections) {
++          minConnections = backend.connections;
++          selectedBackend = backend.id;
++        }
++      }
++
++      if (selectedBackend) {
++        const selected = healthyBackends.find(b => b.id === selectedBackend);
++        if (selected) {
++          selected.connections += 1;
++        }
++      }
++
++      return selectedBackend;
++    });
++};
+ // @openarc:end lb.leastConnections
+ 
+ // ── lb.weighted ───────────────────────────────────────────────── variant
+diff --git a/selfhost/src/palette/p2p.ts b/selfhost/src/palette/p2p.ts
+index f129e1e..90c1e6a 100644
+--- a/selfhost/src/palette/p2p.ts
++++ b/selfhost/src/palette/p2p.ts
+@@ -82,7 +82,23 @@ export const decodeLengthPrefixedSpec = arc.defineRegion<Decoder>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin p2p.decodeLengthPrefixed
+-export const decodeLengthPrefixed: Decoder = (chunks) => arc.todo("p2p.decodeLengthPrefixed");
++export const decodeLengthPrefixed: Decoder = (chunks) => {
++  let buffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
++  let messages: string[] = [];
++  let rest: number[] = [];
++  while (buffer.length >= 4) {
++      let length = buffer.readUInt32BE(0);
++      if (buffer.length >= 4 + length) {
++        let message = buffer.slice(4, 4 + length).toString('utf-8');
++        messages.push(message);
++        buffer = buffer.slice(4 + length);
++      } else {
++        break;
++      }
++    }
++  rest = Array.from(buffer);
++  return { messages, rest };
++};
+ // @openarc:end p2p.decodeLengthPrefixed
+ 
+ // ── p2p.encodeVarint / p2p.decodeVarint ───────────────────────── unsigned LEB128 length
+@@ -99,7 +115,20 @@ export const encodeVarintSpec = arc.defineRegion<Encode>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin p2p.encodeVarint
+-export const encodeVarint: Encode = (message) => arc.todo("p2p.encodeVarint");
++export const encodeVarint: Encode = (message) => {
++  let encoded = new TextEncoder().encode(message);
++  let length = encoded.length;
++  let varint: number[] = [];
++  do {
++      let byte = length & 0x7F;
++      length >>= 7;
++      if (length > 0) {
++        byte |= 0x80;
++      }
++      varint.push(byte);
++    } while (length > 0);
++  return varint.concat(Array.from(encoded));
++};
+ // @openarc:end p2p.encodeVarint
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+@@ -162,7 +191,50 @@ export const handshakeSpec = arc.defineRegion<Handshake>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin p2p.handshake
+-export const handshake: Handshake = (state, event, supported) => arc.todo("p2p.handshake");
++export const handshake: Handshake = (state, event, supported) => {
++  let send: HsMessage[] = [];
++  switch (event.type) {
++      case 'start':
++        if (state.phase === 'idle') {
++          state.phase = 'sent';
++          send.push({ type: 'hello', versions: supported });
++        }
++        break;
++      case 'hello':
++        if (state.phase === 'idle' || state.phase === 'sent') {
++          let commonVersions = event.versions.filter(v => supported.includes(v));
++          if (commonVersions.length > 0) {
++            state.phase = 'ready';
++            state.version = Math.max(...commonVersions);
++            send.push({ type: 'ack', version: state.version });
++          } else {
++            state.phase = 'failed';
++            state.error = 'version-mismatch';
++            send.push({ type: 'reject', reason: 'version-mismatch' });
++          }
++        }
++        break;
++      case 'ack':
++        if (state.phase === 'sent') {
++          if (supported.includes(event.version)) {
++            state.phase = 'ready';
++            state.version = event.version;
++          } else {
++            state.phase = 'failed';
++            state.error = 'version-mismatch';
++            send.push({ type: 'reject', reason: 'version-mismatch' });
++          }
++        }
++        break;
++      case 'reject':
++        if (state.phase !== 'failed') {
++          state.phase = 'failed';
++          state.error = event.reason;
++        }
++        break;
++    }
++  return { state, send };
++};
+ // @openarc:end p2p.handshake
+ 
+ // ───────────────────────────── peer table and gossip ─────────────────────────────
+@@ -254,7 +326,28 @@ export const onGossipSpec = arc.defineRegion<OnGossip>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin p2p.onGossip
+-export const onGossip: OnGossip = (state, from, msg, fanout) => arc.todo("p2p.onGossip");
++export const onGossip: OnGossip = (state, from, msg, fanout) => {
++  if (state.seen.includes(msg.id)) {
++    return { state, deliver: false, forward: [] };
++  }
++
++  state.seen = [...state.seen.slice(-SEEN_LIMIT + 1), msg.id];
++
++  if (msg.ttl === 0) {
++    return { state, deliver: true, forward: [] };
++  }
++
++  const candidates = state.peers
++    .filter(peer => peer !== from && peer !== msg.origin && peer !== state.self)
++    .sort();
++
++  const rotation = msg.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0) % candidates.length;
++
++  const forward = candidates.slice(rotation).concat(candidates.slice(0, rotation)).slice(0, fanout)
++    .map(to => ({ to, msg: { ...msg, ttl: msg.ttl - 1 } }));
++
++  return { state, deliver: true, forward };
++};
+ // @openarc:end p2p.onGossip
+ 
+ /** The network as one peer process sees it: send to a linked peer; receive the next delivery (null when quiet).
+diff --git a/selfhost/src/plan.ts b/selfhost/src/plan.ts
+index cd5c1c6..8dafd7a 100644
+--- a/selfhost/src/plan.ts
++++ b/selfhost/src/plan.ts
+@@ -1,5 +1,6 @@
+ import * as arc from "open-arc";
+ import type { PlanInput, PlanResult } from "./types.ts";
++import type { Diagnostic } from "./types.ts";
+ 
+ // ── plan.selectTargets ────────────────────────────────────────── spec §8.1 PLAN
+ type SelectTargets = (regions: PlanInput[], requested: string[]) => PlanResult;
+@@ -53,5 +54,42 @@ export const selectTargetsSpec = arc.defineRegion<SelectTargets>({
+ });
+ 
+ // @openarc:begin plan.selectTargets
+-export const selectTargets: SelectTargets = (regions, requested) => arc.todo("plan.selectTargets");
++export const selectTargets: SelectTargets = (regions, requested) => {
++  const inScope = new Set<string>();
++  const targets: string[] = [];
++  const skipped: Diagnostic[] = [];
++  const addRegionToScope = (region: PlanInput) => {
++      inScope.add(region.id);
++      if (region.state === 'conflicted') {
++        skipped.push({ code: 'OARC-E061', id: region.id });
++      } else if (region.state === 'developer' && region.stale) {
++        skipped.push({ code: 'OARC-W060', id: region.id });
++      } else if ((region.state === 'pending' || (region.state === 'compiler' && region.stale)) && !skipped.some(diag => diag.id === region.id)) {
++        targets.push(region.id);
++      }
++    };
++  const getDescendants = (region: PlanInput): PlanInput[] => {
++      return regions.filter(r => r.parent === region.id);
++    };
++  const processRegion = (region: PlanInput) => {
++      const descendants = getDescendants(region);
++      descendants.forEach(processRegion);
++      addRegionToScope(region);
++    };
++  if (requested.length === 0) {
++      regions.forEach(region => {
++        if (!inScope.has(region.id)) {
++          processRegion(region);
++        }
++      });
++    } else {
++      requested.forEach(id => {
++        const region = regions.find(r => r.id === id);
++        if (region && !inScope.has(region.id)) {
++          processRegion(region);
++        }
++      });
++    }
++  return { targets, skipped };
++};
+ // @openarc:end plan.selectTargets
+diff --git a/selfhost/src/sandbox.ts b/selfhost/src/sandbox.ts
+index 85bb8ca..df783d4 100644
+--- a/selfhost/src/sandbox.ts
++++ b/selfhost/src/sandbox.ts
+@@ -1,5 +1,6 @@
+ import * as arc from "open-arc";
+ import type { HarnessSummary, SandboxConfig } from "./types.ts";
++import type { ExampleOutcome } from "./types.ts";
+ 
+ // ── sandbox.buildArgv ─────────────────────────────────────────── spec §9.2
+ // The expected argv was run for real on the target machine (Fedora 43, bwrap, Node 25.9.0):
+@@ -76,8 +77,58 @@ export const buildArgvSpec = arc.defineRegion<BuildArgv>({
+ 
+ // @openarc:begin sandbox.buildArgv
+ export const buildArgv: BuildArgv = (cfg) => {
+-  const args: string[] = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session", "--ro-bind", cfg.stageDir, "/work", "--ro-bind", "/usr", "/usr", "--ro-bind", cfg.nodePrefix, cfg.nodePrefix, "--symlink", "usr/lib64", "/lib64", "--symlink", "usr/lib", "/lib", "--symlink", "usr/bin", "/bin", "--tmpfs", "/tmp", "--proc", "/proc", "--dev", "/dev", "--chdir", "/work", "prlimit", "--as=" + cfg.addressSpaceBytes, "--cpu=" + cfg.cpuSeconds, cfg.nodeBin, "--permission", "--allow-fs-read=/work", "--max-old-space-size=" + cfg.heapMb, "/work/.openarc/harness.mjs", cfg.regionId];
+-  return args;
++  const argv = [
++      'bwrap',
++      '--unshare-all',
++      '--die-with-parent',
++      '--new-session',
++      `--ro-bind`,
++      cfg.stageDir,
++      '/work',
++      `--ro-bind`,
++      '/usr',
++      '/usr',
++      `--ro-bind`,
++      cfg.nodePrefix,
++      cfg.nodePrefix,
++      `--symlink`,
++      'usr/lib64',
++      '/lib64',
++      `--symlink`,
++      'usr/lib',
++      '/lib',
++      `--symlink`,
++      'usr/bin',
++      '/bin',
++      `--tmpfs`,
++      '/tmp',
++      `--proc`,
++      '/proc',
++      `--dev`,
++      '/dev',
++    ];
++  for (const path of cfg.extraReadPaths) {
++      argv.push(`--ro-bind`, path, path);
++    }
++  argv.push(
++      `--chdir`,
++      '/work',
++      'prlimit',
++      `--as=${cfg.addressSpaceBytes}`,
++      `--cpu=${cfg.cpuSeconds}`,
++      cfg.nodeBin,
++      `--permission`,
++      `--allow-fs-read=/work`
++    );
++  for (const path of cfg.extraReadPaths) {
++      argv.push(`--allow-fs-read=${path}`);
++    }
++  argv.push(
++      `--max-old-space-size=${cfg.heapMb}`,
++      '/work/.openarc/harness.mjs',
++      cfg.regionId
++    );
++  return argv;
+ };
+ // @openarc:end sandbox.buildArgv
+ 
+@@ -110,5 +161,30 @@ export const readHarnessOutputSpec = arc.defineRegion<ReadHarnessOutput>({
+ });
+ 
+ // @openarc:begin sandbox.readHarnessOutput
+-export const readHarnessOutput: ReadHarnessOutput = (stdout) => arc.todo("sandbox.readHarnessOutput");
++export const readHarnessOutput: ReadHarnessOutput = (stdout) => {
++  const lines = stdout.split('\n').filter(line => line.trim() !== '');
++  const failed: ExampleOutcome[] = [];
++  let passed = 0;
++  let complete = false;
++  for (const line of lines) {
++      try {
++        const outcome: ExampleOutcome = JSON.parse(line);
++        if ('done' in outcome) {
++          complete = true;
++          if (outcome.done !== passed + failed.length) {
++            complete = false;
++          }
++        } else {
++          if (outcome.ok) {
++            passed += 1;
++          } else {
++            failed.push(outcome);
++          }
++        }
++      } catch (e) {
++        failed.push({ name: '<unparseable>', ok: false, actual: line });
++      }
++    }
++  return { complete, passed, failed };
++};
+ // @openarc:end sandbox.readHarnessOutput

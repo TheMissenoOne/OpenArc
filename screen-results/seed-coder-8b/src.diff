@@ -1,0 +1,353 @@
+diff --git a/selfhost/src/cli.ts b/selfhost/src/cli.ts
+index 547a2dc..4f98d47 100644
+--- a/selfhost/src/cli.ts
++++ b/selfhost/src/cli.ts
+@@ -41,40 +41,87 @@ export const parseArgvSpec = arc.defineRegion<ParseArgv>({
+ 
+ // @openarc:begin cli.parseArgv
+ export const parseArgv: ParseArgv = (argv) => {
+-  const [cmd, ...rest] = argv;
+-  if (cmd === "compile") {
+-    return { cmd: "compile", ids: rest };
++  if (argv.length === 0) {
++    return { cmd: 'usage', reason: 'unknown-command' };
+   }
+-  if (cmd === "scaffold") {
+-    return { cmd: "scaffold" };
+-  }
+-  if (cmd === "init") {
+-    return { cmd: "init" };
+-  }
+-  if (cmd === "freeze" || cmd === "release" || cmd === "inspect") {
+-    if (rest.length === 0) {
+-      return { cmd: "usage", reason: "missing-id" };
+-    }
+-    return { cmd, id: rest[0] };
+-  }
+-  if (cmd === "graph") {
+-    return { cmd: "graph" };
+-  }
+-  if (cmd === "resolve") {
+-    if (rest.length === 0) {
+-      return { cmd: "usage", reason: "missing-id" };
+-    }
+-    const id = rest[0];
+-    const modeFlag = rest.slice(1).find((f) => f.startsWith("--"));
+-    if (!modeFlag) {
+-      return { cmd: "usage", reason: "resolve-needs-mode" };
+-    }
+-    const mode = modeFlag.replace("--", "");
+-    if (mode !== "keep" && mode !== "regen" && mode !== "unlink") {
+-      return { cmd: "usage", reason: "unknown-command" };
+-    }
+-    return { cmd: "resolve", id, mode };
++  const [command, ...rest] = argv;
++  switch (command) {
++    case 'init':
++      return { cmd: 'init' };
++
++    case 'compile':
++      return { cmd: 'compile', ids: rest };
++
++    case 'scaffold':
++      return { cmd: 'scaffold' };
++
++    case 'freeze':
++    case 'release':
++    case 'inspect':
++      if (rest.length === 0) {
++        return { cmd: 'usage', reason: 'missing-id' };
++      }
++      return { cmd: command, id: rest[0] };
++
++    case 'graph':
++      return { cmd: 'graph' };
++
++    case 'resolve':
++      if (rest.length < 2) {
++        return { cmd: 'usage', reason: 'resolve-needs-mode' };
++      }
++      const [id, mode] = rest;
++      if (!['--keep', '--regen', '--unlink'].includes(mode)) {
++        return { cmd: 'usage', reason: 'bad-flag' };
++      }
++      return { cmd: 'resolve', id, mode: mode.slice(2) as 'keep' | 'regen' | 'unlink' };
++
++    case 'extract':
++      if (rest.length === 0) {
++        return { cmd: 'usage', reason: 'missing-file' };
++      }
++      const file = rest[0];
++      const args = rest.slice(1);
++      const result: { file: string; fn?: string; id?: string } = { file };
++
++      for (let i = 0; i < args.length; i++) {
++        const arg = args[i];
++        if (arg === '--function') {
++          if (i + 1 >= args.length) return { cmd: 'usage', reason: 'bad-flag' };
++          result.fn = args[++i];
++        } else if (arg === '--id') {
++          if (i + 1 >= args.length) return { cmd: 'usage', reason: 'bad-flag' };
++          result.id = args[++i];
++        } else if (arg.startsWith('--')) {
++          return { cmd: 'usage', reason: 'bad-flag' };
++        }
++      }
++
++      return { cmd: 'extract', ...result };
++
++    case 'watch':
++      let debounceMs = 300;
++      const watchArgs = rest;
++
++      for (let i = 0; i < watchArgs.length; i++) {
++        const arg = watchArgs[i];
++        if (arg === '--debounce') {
++          if (i + 1 >= watchArgs.length) return { cmd: 'usage', reason: 'bad-flag' };
++          const value = watchArgs[++i];
++          const num = Number(value);
++          if (isNaN(num) || num < 0 || !Number.isSafeInteger(num)) {
++            return { cmd: 'usage', reason: 'bad-flag' };
++          }
++          debounceMs = num;
++        } else if (arg.startsWith('--')) {
++          return { cmd: 'usage', reason: 'bad-flag' };
++        }
++      }
++
++      return { cmd: 'watch', debounceMs };
++
++    default:
++      return { cmd: 'usage', reason: 'unknown-command' };
+   }
+-  return { cmd: "usage", reason: "unknown-command" };
+ };
+ // @openarc:end cli.parseArgv
+diff --git a/selfhost/src/hash.ts b/selfhost/src/hash.ts
+index c5b6a1a..1346fbc 100644
+--- a/selfhost/src/hash.ts
++++ b/selfhost/src/hash.ts
+@@ -18,7 +18,22 @@ export const canonicalJsonSpec = arc.defineRegion<CanonicalJson>({
+ });
+ 
+ // @openarc:begin hash.canonicalJson
+-export const canonicalJson: CanonicalJson = (value) => arc.todo("hash.canonicalJson");
++export const canonicalJson: CanonicalJson = (value) => {
++  return JSON.stringify(value, (key, val) => {
++    if (typeof val === 'object' && val !== null) {
++      if (Array.isArray(val)) {
++        return val;
++      }
++      const sortedKeys = Object.keys(val).sort();
++      const result: { [k: string]: any } = {};
++      for (const k of sortedKeys) {
++        result[k] = val[k];
++      }
++      return result;
++    }
++    return val;
++  });
++};
+ // @openarc:end hash.canonicalJson
+ 
+ // ── hash.normalizeOwnedText ───────────────────────────────────── spec §4.1
+diff --git a/selfhost/src/model.ts b/selfhost/src/model.ts
+index 3a35a96..258d704 100644
+--- a/selfhost/src/model.ts
++++ b/selfhost/src/model.ts
+@@ -53,7 +53,24 @@ export const renderTemplateSpec = arc.defineRegion<RenderTemplate>({
+ });
+ 
+ // @openarc:begin model.renderTemplate
+-export const renderTemplate: RenderTemplate = (template, vars) => arc.todo("model.renderTemplate");
++export const renderTemplate: RenderTemplate = (template, vars) => {
++  const regex = /{{([a-zA-Z0-9_]+)}}/g;
++  let match;
++  const missing: string[] = [];
++  const result = template.replace(regex, (_, name) => {
++    if (name in vars) {
++      return vars[name];
++    } else {
++      missing.push(name);
++      return `{{${name}}}`;
++    }
++  });
++  if (missing.length > 0) {
++    return { ok: false, missing: Array.from(new Set(missing)) };
++  } else {
++    return { ok: true, text: result };
++  }
++};
+ // @openarc:end model.renderTemplate
+ 
+ // ── model.buildRequest ────────────────────────────────────────── spec §8.4
+diff --git a/selfhost/src/palette/auth.ts b/selfhost/src/palette/auth.ts
+index 3706dc5..7c107fd 100644
+--- a/selfhost/src/palette/auth.ts
++++ b/selfhost/src/palette/auth.ts
+@@ -105,7 +105,13 @@ export const splitTokenSpec = arc.defineRegion<SplitToken>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin auth.splitToken
+-export const splitToken: SplitToken = (token) => arc.todo("auth.splitToken");
++export const splitToken: SplitToken = (token) => {
++  const index = token.indexOf('.');
++  if (index === -1 || index === 0 || index === token.length - 1) {
++      return null;
++    }
++  return [token.slice(0, index), token.slice(index + 1)];
++};
+ // @openarc:end auth.splitToken
+ 
+ // ── auth.password ─────────────────────────────────────────────── variant, written as a sketch
+@@ -231,5 +237,14 @@ export const magicLinkSpec = arc.defineRegion<Strategy<MagicLinkCred>>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin auth.magicLink
+-export const magicLink: Strategy<MagicLinkCred> = (cred, ports) => arc.todo("auth.magicLink");
++export const magicLink: Strategy<MagicLinkCred> = async (cred, ports) => {
++  const [tokenId, secret] = splitToken(cred.token) ?? ["", ""];
++  const link = tokenId ? await ports.users.findMagicLink(tokenId) : null;
++  const stored = link !== null && !link.used ? link.secretHash : ports.hasher.dummyHash;
++  const match = ports.hasher.equal(await ports.hasher.hash(secret, stored), stored);
++  if (link === null || link.used || !match) return { ok: false, reason: "invalid" };
++  if ((link.expiresAt <= ports.clock.now())) return { ok: false, reason: "expired" };
++  if (!(await ports.users.consumeMagicLink(tokenId))) return { ok: false, reason: "invalid" }; // the atomic claim: one sign-in per link
++  return { ok: true, userId: link.userId };
++};
+ // @openarc:end auth.magicLink
+diff --git a/selfhost/src/palette/loadBalancer.ts b/selfhost/src/palette/loadBalancer.ts
+index 42f9645..b444550 100644
+--- a/selfhost/src/palette/loadBalancer.ts
++++ b/selfhost/src/palette/loadBalancer.ts
+@@ -102,7 +102,9 @@ export const leastConnectionsSpec = arc.defineRegion<Strategy>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin lb.leastConnections
+-export const leastConnections: Strategy = (backends, keys) => arc.todo("lb.leastConnections");
++export const leastConnections: Strategy = (backends, keys) => {
++  return keys.map(key => { const healthyBackends = backends.filter(b => b.healthy); if (healthyBackends.length === 0) return null; healthyBackends.sort((a, b) => a.connections - b.connections); const backend = healthyBackends[0]; backend.connections += 1; return backend.id; });
++};
+ // @openarc:end lb.leastConnections
+ 
+ // ── lb.weighted ───────────────────────────────────────────────── variant
+diff --git a/selfhost/src/palette/p2p.ts b/selfhost/src/palette/p2p.ts
+index f129e1e..2f7bc03 100644
+--- a/selfhost/src/palette/p2p.ts
++++ b/selfhost/src/palette/p2p.ts
+@@ -82,7 +82,30 @@ export const decodeLengthPrefixedSpec = arc.defineRegion<Decoder>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin p2p.decodeLengthPrefixed
+-export const decodeLengthPrefixed: Decoder = (chunks) => arc.todo("p2p.decodeLengthPrefixed");
++export const decodeLengthPrefixed: Decoder = (chunks) => {
++  let buffer: number[] = [];
++  let messages: string[] = [];
++  let index = 0;
++
++  while (index < chunks.length) {
++    const chunk = chunks[index++];
++    buffer = buffer.concat(chunk);
++
++    while (buffer.length >= 4) {
++      const length = new DataView(new Uint8Array(buffer.slice(0, 4)).buffer).getUint32(0, false);
++
++      if (buffer.length >= 4 + length) {
++        const message = new TextDecoder().decode(new Uint8Array(buffer.slice(4, 4 + length)));
++        messages.push(message);
++        buffer = buffer.slice(4 + length);
++      } else {
++        break;
++      }
++    }
++  }
++
++  return { messages, rest: buffer };
++};
+ // @openarc:end p2p.decodeLengthPrefixed
+ 
+ // ── p2p.encodeVarint / p2p.decodeVarint ───────────────────────── unsigned LEB128 length
+@@ -162,7 +185,41 @@ export const handshakeSpec = arc.defineRegion<Handshake>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin p2p.handshake
+-export const handshake: Handshake = (state, event, supported) => arc.todo("p2p.handshake");
++export const handshake: Handshake = (state, event, supported) => {
++  let newState = { ...state };
++  let send: HsMessage[] = [];
++
++  if (state.phase === 'idle' && event.type === 'start') {
++    newState.phase = 'sent';
++    send = [{ type: 'hello', versions: supported }];
++  } else if ((state.phase === 'idle' || state.phase === 'sent') && event.type === 'hello') {
++    const commonVersions = event.versions.filter(v => supported.includes(v));
++    if (commonVersions.length > 0) {
++      const highestVersion = Math.max(...commonVersions);
++      newState.phase = 'ready';
++      newState.version = highestVersion;
++      send = [{ type: 'ack', version: highestVersion }];
++    } else {
++      newState.phase = 'failed';
++      newState.error = 'version-mismatch';
++      send = [{ type: 'reject', reason: 'version-mismatch' }];
++    }
++  } else if (state.phase === 'sent' && event.type === 'ack') {
++    if (supported.includes(event.version)) {
++      newState.phase = 'ready';
++      newState.version = event.version;
++    } else {
++      newState.phase = 'failed';
++      newState.error = 'version-mismatch';
++      send = [{ type: 'reject', reason: 'version-mismatch' }];
++    }
++  } else if (event.type === 'reject') {
++    newState.phase = 'failed';
++    newState.error = event.reason;
++  }
++
++  return { state: newState, send };
++};
+ // @openarc:end p2p.handshake
+ 
+ // ───────────────────────────── peer table and gossip ─────────────────────────────
+@@ -254,7 +311,9 @@ export const onGossipSpec = arc.defineRegion<OnGossip>({
+ 
+ /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
+ // @openarc:begin p2p.onGossip
+-export const onGossip: OnGossip = (state, from, msg, fanout) => arc.todo("p2p.onGossip");
++export const onGossip: OnGossip = (state, from, msg, fanout) => {
++  if (state.seen.includes(msg.id)) { return { state, deliver: false, forward: [] }; } state.seen.push(msg.id); if (state.seen.length > SEEN_LIMIT) { state.seen.shift(); } const candidates = state.peers.filter(peer => peer !== from && peer !== msg.origin && peer !== state.self); const rotation = (msg.id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)) % candidates.length; const rotatedCandidates = [...candidates.slice(rotation), ...candidates.slice(0, rotation)]; const forward = msg.ttl > 0 ? rotatedCandidates.slice(0, fanout).map(peer => ({ to: peer, msg: { ...msg, ttl: msg.ttl - 1 } })) : []; return { state, deliver: true, forward };
++};
+ // @openarc:end p2p.onGossip
+ 
+ /** The network as one peer process sees it: send to a linked peer; receive the next delivery (null when quiet).
+diff --git a/selfhost/src/plan.ts b/selfhost/src/plan.ts
+index cd5c1c6..018a93d 100644
+--- a/selfhost/src/plan.ts
++++ b/selfhost/src/plan.ts
+@@ -1,5 +1,6 @@
+ import * as arc from "open-arc";
+ import type { PlanInput, PlanResult } from "./types.ts";
++import type { Diagnostic } from "./types.ts";
+ 
+ // ── plan.selectTargets ────────────────────────────────────────── spec §8.1 PLAN
+ type SelectTargets = (regions: PlanInput[], requested: string[]) => PlanResult;
+@@ -53,5 +54,17 @@ export const selectTargetsSpec = arc.defineRegion<SelectTargets>({
+ });
+ 
+ // @openarc:begin plan.selectTargets
+-export const selectTargets: SelectTargets = (regions, requested) => arc.todo("plan.selectTargets");
++export const selectTargets: SelectTargets = (regions, requested) => {
++  const buildRegionMap = (regions: PlanInput[]): Map<string, PlanInput> => { const map = new Map(); for (const region of regions) { map.set(region.id, region); } return map; };
++  const getDescendants = (map: Map<string, PlanInput>, id: string): string[] => { const descendants: string[] = []; const stack = [id]; while (stack.length > 0) { const current = stack.pop()!; const region = map.get(current); if (region) { for (const [key, value] of map.entries()) { if (value.parent === current) { stack.push(key); descendants.push(key); } } } } return descendants; };
++  const map = buildRegionMap(regions);
++  const scopeIds = requested.length === 0 ? Array.from(map.keys()) : requested.concat(requested.flatMap(id => getDescendants(map, id)));
++  const scopeSet = new Set(scopeIds);
++  const targets: string[] = [];
++  const skipped: Diagnostic[] = [];
++  const visited = new Set<string>();
++  const postOrderTraversal = (id: string) => { if (visited.has(id)) return; visited.add(id); const region = map.get(id)!; for (const [key, value] of map.entries()) { if (value.parent === id) { postOrderTraversal(key); } } if (scopeSet.has(id)) { if (region.state === 'pending' || (region.state === 'compiler' && region.stale)) { targets.push(id); } else if (region.state === 'developer' && region.stale) { skipped.push({ code: 'OARC-W060', id }); } else if (region.state === 'conflicted') { skipped.push({ code: 'OARC-E061', id }); } } };
++  for (const id of scopeIds) { postOrderTraversal(id); }
++  return { targets, skipped };
++};
+ // @openarc:end plan.selectTargets
