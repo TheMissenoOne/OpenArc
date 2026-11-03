@@ -11,7 +11,7 @@ export const parseArgvSpec = arc.defineRegion<ParseArgv>({
     "| resolve <id> --keep|--regen|--unlink | extract <file> [--function <name>] [--id <id>] (flags in any order after the file; omit absent flags)",
     "| watch [--debounce <ms>] (debounceMs defaults to 300; the value must be a non-negative safe integer).",
     "Missing id -> usage missing-id; resolve without a mode -> usage resolve-needs-mode; extract without a file -> usage missing-file;",
-    "extract or watch with an unknown flag or a flag without a valid value -> usage bad-flag; anything else -> usage unknown-command.",
+    "extract or watch with an unknown flag, a flag without a valid value (a value starting with '--' is not a value), or an extra argument -> usage bad-flag; anything else -> usage unknown-command.",
   ],
   examples: [
     { args: [["compile"]], expected: { cmd: "compile", ids: [] } },
@@ -22,6 +22,7 @@ export const parseArgvSpec = arc.defineRegion<ParseArgv>({
     { args: [["release"]], expected: { cmd: "usage", reason: "missing-id" } },
     { args: [["resolve", "a", "--regen"]], expected: { cmd: "resolve", id: "a", mode: "regen" } },
     { args: [["resolve", "a"]], expected: { cmd: "usage", reason: "resolve-needs-mode" } },
+    { args: [["resolve"]], expected: { cmd: "usage", reason: "missing-id" } },
     { args: [["graph"]], expected: { cmd: "graph" } },
     { args: [[]], expected: { cmd: "usage", reason: "unknown-command" } },
     { args: [["bogus"]], expected: { cmd: "usage", reason: "unknown-command" } },
@@ -30,12 +31,15 @@ export const parseArgvSpec = arc.defineRegion<ParseArgv>({
     { args: [["extract"]], expected: { cmd: "usage", reason: "missing-file" } },
     { args: [["extract", "src/a.ts", "--function"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["extract", "src/a.ts", "--bogus", "x"]], expected: { cmd: "usage", reason: "bad-flag" } },
+    { args: [["extract", "src/a.ts", "--function", "--id"]], expected: { cmd: "usage", reason: "bad-flag" } },
+    { args: [["extract", "src/a.ts", "--id", "--function", "f"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["watch"]], expected: { cmd: "watch", debounceMs: 300 } },
     { args: [["watch", "--debounce", "50"]], expected: { cmd: "watch", debounceMs: 50 } },
     { args: [["watch", "--debounce"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["watch", "--debounce", "soon"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["watch", "--debounce", "99999999999999999999"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["watch", "--bogus", "1"]], expected: { cmd: "usage", reason: "bad-flag" } },
+    { args: [["watch", "--debounce", "50", "--bogus"]], expected: { cmd: "usage", reason: "bad-flag" } },
   ],
 });
 

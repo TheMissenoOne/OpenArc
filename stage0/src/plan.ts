@@ -50,6 +50,11 @@ export const selectTargetsSpec = arc.defineRegion<SelectTargets>({
       args: [[{ id: "a", parent: null, state: "compiler", stale: false }], []],
       expected: { targets: [], skipped: [] },
     },
+    {
+      name: "unknown requested id is ignored",
+      args: [[{ id: "a", parent: null, state: "pending", stale: true }], ["zzz", "a"]],
+      expected: { targets: ["a"], skipped: [] },
+    },
   ],
 });
 
