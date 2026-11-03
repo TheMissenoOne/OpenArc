@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // `openarc` CLI entry point. Hand-written: the real ports plus command dispatch.
-import { mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { existsSync, watch } from "node:fs";
+import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { cpSync, existsSync, lstatSync, realpathSync, rmSync, watch } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -14,7 +15,8 @@ import { run } from "./compile.ts";
 import { commit, planJournal, recover } from "./txn.ts";
 import * as engine from "./engine.ts";
 import { DEFAULT_CONFIG, hostOf, parseConfig, presetConfig, type OpenArcConfig } from "./config.ts";
-import { describeBackend, testBackend } from "./backends.ts";
+import { complete, describeBackend, testBackend } from "./backends.ts";
+import { PHRASE_SYSTEM, parsePhrase, phrasePrompt, reportLines, suggest, type RegionView } from "./deps.ts";
 import { clearStaleLock, releaseOwnLock } from "./lock.ts";
 import { createWatcher, regionKey, type RegionKey } from "./watcher.ts";
 import { watchDirs } from "./dirwatch.ts";
@@ -288,6 +290,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc migrate <id>
        openarc check <id> --oracle <module>#<export> | check <ids...> --mutants [--operators trivial,boundary,comparison,constant,logical]
        openarc doctor
+       openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
        ${LINT_USAGE}`;
 
 /** `openarc backends [test [name]]`: list the configured backends, or send one tiny request through one of them. */
@@ -422,6 +425,78 @@ async function doctor(root: string, ports: Ports): Promise<number> {
   return r.ok ? 0 : 1;
 }
 
+/** `openarc deps suggest <id>`: search npm, filter on facts, trial in scratch copies, propose (src/deps.ts). Never writes
+ *  the project: the scratch copies live under the OS temp dir and are removed unless --keep. Exit 0 (a report), 1 on an
+ *  unknown region or a registry failure, 2 on a bad flag. */
+async function depsCmd(root: string, ports: Ports, args: string[]): Promise<number> {
+  const o = { max: 2, trial: true, json: false, keep: false, query: undefined as string | undefined };
+  const [sub, id, ...flags] = args;
+  let bad = false;
+  for (let i = 0; i < flags.length; i++) {
+    const f = flags[i]!, v = flags[i + 1];
+    if (f === "--json") o.json = true;
+    else if (f === "--no-trial") o.trial = false;
+    else if (f === "--keep") o.keep = true;
+    else if (f === "--max" && v && /^[1-9]\d?$/.test(v)) (o.max = +v), i++;
+    else if (f === "--query" && v !== undefined && !v.startsWith("--")) (o.query = v), i++;
+    else bad = true;
+  }
+  if (bad || sub !== "suggest" || !id || id.startsWith("--")) {
+    console.error(`openarc: ${sub === "suggest" && !id ? "missing-id" : "bad-flag"}\n\n${USAGE}`);
+    return 2;
+  }
+  const project = await analyzeOffline(ports, root, []);
+  const r = project.regions.find((x) => x.id === id && x.kind === "function");
+  if (!r) {
+    console.error(`no function region ${id}`);
+    return 1;
+  }
+  const view: RegionView = { id, file: r.file, intent: r.spec.intent, signature: r.spec.signature, deps: r.spec.deps, codeFirst: !!r.spec.codeFirst, ownership: r.state };
+  const backend = project.config.backends[project.config.compilation.defaultBackend]!;
+  const scratch: string[] = [];
+  const NOISE = new Set([".git", ".openarc/sandbox", ".openarc/txn", ".openarc/lock", ".openarc/attempts", ".openarc/watch-history.jsonl"]);
+  try {
+    const rep = await suggest({
+      http: ports.http,
+      run: (argv, cwd) => new Promise((done) => {
+        const child = spawn(argv[0]!, argv.slice(1), { cwd, stdio: ["ignore", "pipe", "pipe"] });
+        let out = "";
+        child.stdout.on("data", (b) => (out += b));
+        child.stderr.on("data", (b) => (out += b));
+        child.on("error", (e) => done({ code: null, out: `${out}\n${e.message}` }));
+        child.on("close", (code) => done({ code, out }));
+      }),
+      read: (abs) => readFile(abs, "utf8").catch(() => null),
+      write: (abs, text) => writeFile(abs, text),
+      async copyProject() {
+        const dir = await mkdtemp(`${tmpdir()}/openarc-deps-`);
+        scratch.push(dir);
+        cpSync(root, dir, { recursive: true, verbatimSymlinks: true, filter: (src) => !NOISE.has(relative(root, src).split(sep).join("/")) });
+        // a symlinked node_modules (a shared install) is copied for real, so npm install can't write through the link
+        if (existsSync(`${root}/node_modules`) && lstatSync(`${root}/node_modules`).isSymbolicLink()) {
+          rmSync(`${dir}/node_modules`);
+          cpSync(realpathSync(`${root}/node_modules`), `${dir}/node_modules`, { recursive: true, verbatimSymlinks: true });
+        }
+        return dir;
+      },
+      cli: [process.execPath, ...process.execArgv, process.argv[1]!],
+      now: new Date(),
+      log: (l) => console.error(l),
+    }, view, {
+      max: o.max, trial: o.trial, keep: o.keep, ...(o.query !== undefined ? { query: o.query } : {}),
+      // ponytail: one plain-text request; any failure falls back to the intent's words (suggest catches it)
+      phrase: async (v) => parsePhrase(await complete(ports, { ...backend, outputFormat: "code", outputReserveTokens: 64 }, PHRASE_SYSTEM, phrasePrompt(v), process.env, 0)),
+    });
+    console.log(o.json ? JSON.stringify(rep, null, 2) : reportLines(rep).join("\n"));
+    return 0;
+  } catch (e) {
+    console.error(`deps suggest ${id}: ${(e as Error).message}`);
+    return 1;
+  } finally {
+    if (!o.keep) for (const d of scratch) rmSync(d, { recursive: true, force: true });
+  }
+}
+
 async function main(argv: string[]): Promise<number> {
   const root = findRoot(process.cwd());
   const ports = realPorts(root);
@@ -431,6 +506,7 @@ async function main(argv: string[]): Promise<number> {
   // Same for `backends` and init's --backend flags (cli.parseArgv returns {cmd: "init"} whatever follows).
   if (argv[0] === "backends") return backends(ports, argv.slice(1));
   if (argv[0] === "doctor") return doctor(root, ports);
+  if (argv[0] === "deps") return depsCmd(root, ports, argv.slice(1));
   if (argv[0] === "migrate") return migrateCmd(root, ports, argv.slice(1));
   if (argv[0] === "lint") { // spec rules, offline: no model, no sandbox (src/lint.ts)
     const args = argv.slice(1).map((a, i, all) => (/[/\\]|\.tsx?$/.test(a) && all[i - 1] !== "--profile" && all[i - 1] !== "--format" ? relative(root, resolve(process.cwd(), a)).split(sep).join("/") : a));

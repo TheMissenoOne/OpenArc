@@ -131,3 +131,13 @@ Why does OpenArc trail the plain prompt? `matrix-ablations.json` holds one arm p
 | every arm (F) | `summarize.mjs` reports raw held-out pass AND accepted-and-correct (counted only when the arm's own public-example gate passed) | acceptance strictness |
 
 Every request body is logged to `results/<dir>/prompts/s<seed>/<config>/<exercise>.jsonl` so prompts can be audited. Each task row records `failCounts` per attempt: compile (type/syntax error or unparseable output; for the baseline, the file did not load), public (a public example failed) and constraint (an OpenArc static rule).
+
+## Dependency suggestions (issue #50): `deps/`
+
+`deps/run.mjs` measures `openarc deps suggest` on 9 small tasks (`deps/tasks/<task>.ts`: a `defineRegion` spec with 3 public examples; `<task>.heldout.mjs`: held-out cases and `meta.expectLib`). Six have a library that clearly helps (semver precedence, RFC 4180 CSV, calendar days across DST, UUID v4, slugify with transliteration, deep equality with Map/Set/Date/RegExp); three should get none (clamp, capitalize words, sum of evens). The held-out cases were checked against semver, csv-parse, uuid, slugify, dequal and an Intl reference.
+
+```bash
+node bench/deps/run.mjs --base-url http://127.0.0.1:8080/v1 --model <served model id> [--tasks semver-compare,clamp] [--max 2] [--backend-json '{"maxContextTokens":16384}']
+```
+
+Per task it builds a fresh project under `--work` (default `$TMPDIR/openarc-bench-deps`) using this checkout's `stage0/src/main.ts` (`--oa` to change), runs `openarc deps suggest <id> --json --keep`, and runs the held-out cases (under `node --permission`, read-only) on the arm without a new dependency and the arm with the proposed one. One row per task in `results/<date>-deps/tasks.jsonl`: `proposed`, `correct` (proposed iff `expectLib`), `query`/`querySource`, `declined`, every candidate's rejection or verdict, and per arm `verified`, `attempts`, `tokens`, `modelCalls`, `ms`, `mutants`, `heldOut`. Needs network for the npm search and installs. Tokens are the region's provenance (the arm's own attempts); the one keyword request is not counted, and a failed arm reports none.

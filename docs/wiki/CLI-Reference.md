@@ -25,6 +25,7 @@
 | `openarc resolve <id> --regen` | back up and regenerate |
 | `openarc resolve <id> --unlink` | forget a region whose markers you deleted |
 | `openarc extract <file> [--function <name>] [--id <id>] [--style code\|region]` | adopt existing functions as developer-owned regions, bodies untouched. Default `--style code`: markers inside each body, `@arc id` added to the JSDoc, the derived id (generics are fine). `--style region`: markers around the declaration and a `defineRegion` spec with a checker-derived `type <Name>Fn`. Both add a manifest entry. A missing flag value, or one starting with `--` (`--function --id`), is a bad flag (exit 2). See [[Adopting Existing Code]] |
+| `openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]` | look for an npm package that would help a function region, and decide by measurement: search the registry (keywords from the model, or the intent's words; `--query` sets them), filter on facts (license, downloads, last publish, typosquat-like names, types, install scripts, deprecated, dependency count), then compile the region in scratch copies without and with each of the first `--max` (default 2) survivors, installed pinned with `--ignore-scripts`. Prints the evidence and a proposal (`deps` change, `package.json` entry, install command) or why there is none. **Never installs or writes anything in the project.** `--no-trial` stops after the filter; `--keep` keeps the copies. Exit 0 (a report), 1 unknown region or registry failure, 2 bad flag. See [Dependency suggestions](#dependency-suggestions) |
 | `openarc migrate <id>` | convert one `defineRegion` function region to code-first form in one transaction: `export function` with the types printed from `F`, the intent as JSDoc, examples and settings in `arc.configure`; id, ownership and provenance kept. See [[Code First]] |
 
 ## Lint rules
@@ -73,6 +74,23 @@ survived m.weak line 6: n >= 0 -> n >= -1
 ```
 
 Here no example sits at `0`, so `{ args: [0], expected: true }` would kill all three. A trivial-body survivor ends in `(the examples pass for a vacuous body)`. A survivor means the checks can't tell that variant apart, not that the body is wrong (an equivalent mutant can survive any spec). No model call, nothing written outside the sandbox stage; exit 0.
+
+## Dependency suggestions
+
+```
+deps suggest uuid.isV4: query "uuid validate" (model)
+  without: verified, attempts 2, tokens 880, mutants 2/2, 0.8s
+  rejected uuid-validate@0.1.0 [MIT, 38211/wk, 2018-05-26]: last publish 2018-05-26 (> 5 years) and < 1000000 weekly downloads
+  candidate uuid@14.0.3 [MIT, .../wk, ..., types bundled, 0 deps]
+    with:    verified, attempts 1, tokens 440, mutants 6/6, 0.8s
+    verdict: better
+proposal: uuid@14.0.3 (not applied; nothing was installed in this project)
+  spec:         deps: ["uuid"]
+  package.json: {"dependencies":{"uuid":"14.0.3"}}
+  install:      npm install --save-exact uuid@14.0.3
+```
+
+A candidate is `better` when, with it, the region verifies, the body imports it, and something measured improves: the baseline failed, fewer attempts, a higher mutant score, or the same score for at most 80% of the tokens. When the model answers that the standard library suffices, nothing is searched. Network is needed for the search and `npm install` only; the compiles run in the sandbox as usual. Thresholds and details: SPEC §16. The benchmark is `bench/deps/run.mjs`.
 
 ## Files
 
