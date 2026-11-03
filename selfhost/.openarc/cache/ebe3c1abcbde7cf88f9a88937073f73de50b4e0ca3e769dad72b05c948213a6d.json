@@ -1,0 +1,1 @@
+{"body":"const r = await engine.generate(ports, req, project, id, diagnostics);\nif (r.candidate) candidate = r.candidate;\nmodelCalls += r.modelCalls;\nif (r.candidate) staged.push({ target: id, text: r.candidate.body });","imports":[],"tokens":{"prompt":6909,"completion":67}}

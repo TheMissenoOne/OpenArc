@@ -1,0 +1,1 @@
+{"body":"locked = await ports.fs.createExclusive('.openarc/lock');\n  if (!locked) {\n    diagnostics.push({ code: 'OARC-E095' });\n  }","imports":[],"sampling":{"temperature":0.4,"seed":2},"tokens":{"prompt":13863,"completion":80}}

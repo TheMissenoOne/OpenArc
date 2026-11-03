@@ -24,7 +24,7 @@
 | `openarc resolve <id> --keep` | accept the current body under the new spec |
 | `openarc resolve <id> --regen` | back up and regenerate |
 | `openarc resolve <id> --unlink` | forget a region whose markers you deleted |
-| `openarc extract <file> [--function <name>] [--id <id>] [--style code\|region]` | adopt existing functions as developer-owned regions, bodies untouched. Default `--style code`: markers inside each body, `@arc id` added to the JSDoc, the derived id (generics are fine). `--style region`: markers around the declaration and a `defineRegion` spec with a checker-derived `type <Name>Fn`. Both add a manifest entry. See [[Adopting Existing Code]] |
+| `openarc extract <file> [--function <name>] [--id <id>] [--style code\|region]` | adopt existing functions as developer-owned regions, bodies untouched. Default `--style code`: markers inside each body, `@arc id` added to the JSDoc, the derived id (generics are fine). `--style region`: markers around the declaration and a `defineRegion` spec with a checker-derived `type <Name>Fn`. Both add a manifest entry. A missing flag value, or one starting with `--` (`--function --id`), is a bad flag (exit 2). See [[Adopting Existing Code]] |
 | `openarc migrate <id>` | convert one `defineRegion` function region to code-first form in one transaction: `export function` with the types printed from `F`, the intent as JSDoc, examples and settings in `arc.configure`; id, ownership and provenance kept. See [[Code First]] |
 
 ## Lint rules

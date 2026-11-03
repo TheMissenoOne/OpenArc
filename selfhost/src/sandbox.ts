@@ -1,5 +1,6 @@
 import * as arc from "open-arc";
 import type { HarnessSummary, SandboxConfig } from "./types.ts";
+import type { ExampleOutcome } from "./types.ts";
 
 // ── sandbox.buildArgv ─────────────────────────────────────────── spec §9.2
 // The expected argv was run for real on the target machine (Fedora 43, bwrap, Node 25.9.0):
@@ -88,7 +89,8 @@ export const readHarnessOutputSpec = arc.defineRegion<ReadHarnessOutput>({
   id: "sandbox.readHarnessOutput",
   intent: [
     "stdout is JSON lines: {name, ok, actual?} per example, then a final {done: n}. Blank lines are ignored.",
-    "complete = a {done} line was seen and n equals the number of outcome lines. Generated code can process.exit() mid-run, so a missing done line means incomplete.",
+    "complete = a {done} line was seen, n equals the number of outcome lines, and no outcome line follows the done line. Generated code can process.exit() mid-run, so a missing done line means incomplete;",
+    "it also shares stdout, so an outcome after the done line means the marker was forged and the run is incomplete.",
     "A non-JSON line counts as a failure {name: '<unparseable>', ok: false, actual: <line>}.",
   ],
   examples: [
@@ -106,9 +108,41 @@ export const readHarnessOutputSpec = arc.defineRegion<ReadHarnessOutput>({
       expected: { complete: false, passed: 0, failed: [{ name: "<unparseable>", ok: false, actual: "garbage" }] },
     },
     { args: [""], expected: { complete: false, passed: 0, failed: [] } },
+    {
+      name: "outcome after the done line",
+      args: ["{\"done\":1}\n{\"name\":\"x\",\"ok\":true}\n"],
+      expected: { complete: false, passed: 1, failed: [] },
+    },
   ],
 });
 
 // @openarc:begin sandbox.readHarnessOutput
-export const readHarnessOutput: ReadHarnessOutput = (stdout) => arc.todo("sandbox.readHarnessOutput");
+export const readHarnessOutput: ReadHarnessOutput = (stdout) => {
+  const lines = stdout.split('\n').filter(l => l.trim() !== '');
+  const outcomes: ExampleOutcome[] = [];
+  let completed = false;
+  let expectedDone = 0;
+  let doneSeen = false;
+
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line);
+      if (obj.done !== undefined) {
+        doneSeen = true;
+        expectedDone = obj.done;
+        completed = true;
+      } else {
+        outcomes.push(obj);
+      }
+    } catch {
+      outcomes.push({ name: '<unparseable>', ok: false, actual: line });
+    }
+  }
+
+  if (completed && outcomes.length === expectedDone) {
+    return { complete: true, passed: outcomes.filter(o => o.ok).length, failed: outcomes.filter(o => !o.ok) };
+  }
+
+  return { complete: false, passed: outcomes.filter(o => o.ok).length, failed: outcomes.filter(o => !o.ok) };
+};
 // @openarc:end sandbox.readHarnessOutput

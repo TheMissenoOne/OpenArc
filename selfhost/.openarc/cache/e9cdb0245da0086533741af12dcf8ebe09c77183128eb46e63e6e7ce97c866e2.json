@@ -1,0 +1,1 @@
+{"body":"if (project !== null) { const r = await engine.generate(ports, req, project, id, diagnostics); if (r) { candidate = r.candidate; modelCalls += r.modelCalls; } }","imports":[],"sampling":{"temperature":0.4,"seed":2},"tokens":{"prompt":14287,"completion":110}}

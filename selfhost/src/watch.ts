@@ -36,7 +36,33 @@ export const classifyPathSpec = arc.defineRegion<ClassifyPath>({
 });
 
 // @openarc:begin watch.classifyPath
-export const classifyPath: ClassifyPath = (path) => arc.todo("watch.classifyPath");
+export const classifyPath: ClassifyPath = (path) => {
+  const isIgnore = (path: string): boolean => {
+    if (path.includes("node_modules/")) return true;
+    if (path.includes(".openarc/")) return true;
+    if (path.includes("build/")) return true;
+    if (path.includes("dist/")) return true;
+    return false;
+  };
+
+  if (isIgnore(path)) {
+    return "ignore";
+  }
+
+  if (path === "openarc.config.json") {
+    return "config";
+  }
+
+  if (path.startsWith("src/") && (path.endsWith(".ts") || path.endsWith(".tsx"))) {
+    return "source";
+  }
+
+  if (path.startsWith("tests/fakes/") && (path.endsWith(".ts") || path.endsWith(".tsx"))) {
+    return "fakes";
+  }
+
+  return "ignore";
+};
 // @openarc:end watch.classifyPath
 
 // ── watch.enqueue ──────────────────────────────────────────────── spec §15
@@ -91,5 +117,14 @@ export const takeNextSpec = arc.defineRegion<TakeNext>({
 });
 
 // @openarc:begin watch.takeNext
-export const takeNext: TakeNext = (queue) => arc.todo("watch.takeNext");
+export const takeNext: TakeNext = (queue) => {
+  const newPending = [...queue.rerun, ...queue.pending];
+  const uniquePending = newPending.filter((id, index) => newPending.indexOf(id) === index);
+  const updatedQueue = {
+    pending: uniquePending.slice(1),
+    running: uniquePending[0] || null,
+    rerun: []
+  };
+  return { next: uniquePending[0] || null, queue: updatedQueue };
+};
 // @openarc:end watch.takeNext

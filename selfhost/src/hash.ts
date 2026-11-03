@@ -1,6 +1,7 @@
 import * as arc from "open-arc";
 import type { Json } from "open-arc";
 import type { ChildSpan } from "./types.ts";
+import crypto, { createHash } from "node:crypto";
 
 // ── hash.canonicalJson ────────────────────────────────────────── spec §4.2
 type CanonicalJson = (value: Json) => string;
@@ -14,11 +15,27 @@ export const canonicalJsonSpec = arc.defineRegion<CanonicalJson>({
     { args: [[{ b: 2, a: 1 }]], expected: "[{\"a\":1,\"b\":2}]" },
     { args: ["é"], expected: "\"é\"" },
     { args: [1.5], expected: "1.5" },
+    { name: "integer-like keys sort as strings", args: [{ "10": 1, "2": 2 }], expected: "{\"10\":1,\"2\":2}" },
   ],
 });
 
 // @openarc:begin hash.canonicalJson
-export const canonicalJson: CanonicalJson = (value) => arc.todo("hash.canonicalJson");
+export const canonicalJson: CanonicalJson = (value) => {
+  return JSON.stringify(value, (key, value) => {
+    if (typeof value === 'object' && value !== null) {
+      if (Array.isArray(value)) {
+        return value;
+      }
+      const sortedKeys = Object.keys(value).sort();
+      const result: { [k: string]: any } = {};
+      for (const k of sortedKeys) {
+        result[k] = value[k];
+      }
+      return result;
+    }
+    return value;
+  });
+};
 // @openarc:end hash.canonicalJson
 
 // ── hash.normalizeOwnedText ───────────────────────────────────── spec §4.1
@@ -76,5 +93,13 @@ export const sha256TaggedSpec = arc.defineRegion<Sha256Tagged>({
 });
 
 // @openarc:begin hash.sha256Tagged
-export const sha256Tagged: Sha256Tagged = (text) => arc.todo("hash.sha256Tagged");
+export const sha256Tagged: Sha256Tagged = (text) => {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(text);
+  const hashBuffer = crypto.createHash('sha256').update(data).digest();
+  const hashHex = Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  return 'sha256:' + hashHex;
+};
 // @openarc:end hash.sha256Tagged

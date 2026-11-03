@@ -1,0 +1,4 @@
+cli.parseArgv
+hash.canonicalJson
+plan.selectTargets
+sandbox.readHarnessOutput

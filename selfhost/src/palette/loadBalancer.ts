@@ -102,7 +102,9 @@ export const leastConnectionsSpec = arc.defineRegion<Strategy>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.leastConnections
-export const leastConnections: Strategy = (backends, keys) => arc.todo("lb.leastConnections");
+export const leastConnections: Strategy = (backends, keys) => {
+  return keys.map(key => { const healthyBackends = backends.filter(b => b.healthy); if (healthyBackends.length === 0) return null; healthyBackends.sort((a, b) => a.connections - b.connections); const backend = healthyBackends[0]; backend.connections += 1; return backend.id; });
+};
 // @openarc:end lb.leastConnections
 
 // ── lb.weighted ───────────────────────────────────────────────── variant
@@ -130,7 +132,41 @@ export const weightedSpec = arc.defineRegion<Strategy>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.weighted
-export const weighted: Strategy = (backends, keys) => arc.todo("lb.weighted");
+export const weighted: Strategy = (backends, keys) => {
+  const healthyBackends = backends.filter(b => b.healthy);
+  if (healthyBackends.length === 0) {
+      return keys.map(() => null);
+    }
+  const current = new Map<string, number>();
+  healthyBackends.forEach(b => current.set(b.id, 0));
+  const totalWeight = healthyBackends.reduce((sum, b) => sum + b.weight, 0);
+  return keys.map(() => {
+      // Calculate new currents by adding weight to everyone
+      healthyBackends.forEach(b => {
+        current.set(b.id, (current.get(b.id) || 0) + b.weight);
+      });
+
+      // Find the backend with the maximum current value
+      // Ties are broken by list order, so we iterate in order and track max
+      let maxCurrent = -1;
+      let selectedId: string | null = null;
+
+      for (const b of healthyBackends) {
+        const val = current.get(b.id) || 0;
+        if (val > maxCurrent) {
+          maxCurrent = val;
+          selectedId = b.id;
+        }
+      }
+
+      // Subtract the total weight from the selected backend
+      if (selectedId) {
+        current.set(selectedId, maxCurrent - totalWeight);
+      }
+
+      return selectedId;
+    });
+};
 // @openarc:end lb.weighted
 
 // ── lb.hash32 ─────────────────────────────────────────────────── the hash consistentHash places keys with

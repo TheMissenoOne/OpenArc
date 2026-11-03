@@ -102,7 +102,8 @@ export const readHarnessOutputSpec = arc.defineRegion<ReadHarnessOutput>({
   id: "sandbox.readHarnessOutput",
   intent: [
     "stdout is JSON lines: {name, ok, actual?} per example, then a final {done: n}. Blank lines are ignored.",
-    "complete = a {done} line was seen and n equals the number of outcome lines. Generated code can process.exit() mid-run, so a missing done line means incomplete.",
+    "complete = a {done} line was seen, n equals the number of outcome lines, and no outcome line follows the done line. Generated code can process.exit() mid-run, so a missing done line means incomplete;",
+    "it also shares stdout, so an outcome after the done line means the marker was forged and the run is incomplete.",
     "A non-JSON line counts as a failure {name: '<unparseable>', ok: false, actual: <line>}.",
   ],
   examples: [
@@ -120,6 +121,11 @@ export const readHarnessOutputSpec = arc.defineRegion<ReadHarnessOutput>({
       expected: { complete: false, passed: 0, failed: [{ name: "<unparseable>", ok: false, actual: "garbage" }] },
     },
     { args: [""], expected: { complete: false, passed: 0, failed: [] } },
+    {
+      name: "outcome after the done line",
+      args: ["{\"done\":1}\n{\"name\":\"x\",\"ok\":true}\n"],
+      expected: { complete: false, passed: 1, failed: [] },
+    },
   ],
 });
 
@@ -128,6 +134,7 @@ export const readHarnessOutput: ReadHarnessOutput = (stdout) => {
   let passed = 0;
   let outcomes = 0;
   let done: number | null = null;
+  let afterDone = false;
   const failed: ExampleOutcome[] = [];
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
@@ -142,11 +149,12 @@ export const readHarnessOutput: ReadHarnessOutput = (stdout) => {
       continue;
     }
     outcomes++;
+    if (done !== null) afterDone = true;
     if (v && typeof v.name === "string" && typeof v.ok === "boolean") {
       if (v.ok) passed++;
       else failed.push(v.actual === undefined ? { name: v.name, ok: false } : { name: v.name, ok: false, actual: v.actual });
     } else failed.push({ name: "<unparseable>", ok: false, actual: line });
   }
-  return { complete: done !== null && done === outcomes, passed, failed };
+  return { complete: done !== null && done === outcomes && !afterDone, passed, failed };
 };
 // @openarc:end sandbox.readHarnessOutput

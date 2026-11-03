@@ -1,0 +1,1 @@
+{"body":"if (project !== null) await engine.analyze(ports, req, project, diagnostics);","imports":[],"tokens":{"prompt":6526,"completion":37}}

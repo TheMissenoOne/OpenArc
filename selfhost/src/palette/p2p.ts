@@ -82,7 +82,29 @@ export const decodeLengthPrefixedSpec = arc.defineRegion<Decoder>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin p2p.decodeLengthPrefixed
-export const decodeLengthPrefixed: Decoder = (chunks) => arc.todo("p2p.decodeLengthPrefixed");
+export const decodeLengthPrefixed: Decoder = (chunks) => {
+  let messages: string[] = [];
+  let rest: number[] = [];
+  let buffer: number[] = [];
+  let offset: number = 0;
+
+  for (const chunk of chunks) {
+    buffer = buffer.concat(chunk);
+    while (buffer.length >= offset + 4) {
+      const length = (buffer[offset] << 24) | (buffer[offset + 1] << 16) | (buffer[offset + 2] << 8) | buffer[offset + 3];
+      if (buffer.length >= offset + 4 + length) {
+        const message = new TextDecoder().decode(new Uint8Array(buffer.slice(offset + 4, offset + 4 + length)));
+        messages.push(message);
+        offset += 4 + length;
+      } else {
+        break;
+      }
+    }
+  }
+
+  rest = buffer.slice(offset);
+  return { messages, rest };
+};
 // @openarc:end p2p.decodeLengthPrefixed
 
 // ── p2p.encodeVarint / p2p.decodeVarint ───────────────────────── unsigned LEB128 length
@@ -99,7 +121,21 @@ export const encodeVarintSpec = arc.defineRegion<Encode>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin p2p.encodeVarint
-export const encodeVarint: Encode = (message) => arc.todo("p2p.encodeVarint");
+export const encodeVarint: Encode = (message) => {
+  const encoder = new TextEncoder();
+  const messageBytes = encoder.encode(message);
+  const length = messageBytes.length;
+  const varintBytes: number[] = [];
+  let value = length;
+
+  while (value > 0x7F) {
+    varintBytes.push((value & 0x7F) | 0x80);
+    value >>>= 7;
+  }
+  varintBytes.push(value);
+
+  return [...varintBytes, ...messageBytes];
+};
 // @openarc:end p2p.encodeVarint
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
@@ -162,7 +198,52 @@ export const handshakeSpec = arc.defineRegion<Handshake>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin p2p.handshake
-export const handshake: Handshake = (state, event, supported) => arc.todo("p2p.handshake");
+export const handshake: Handshake = (state, event, supported) => {
+  let newState: HsState = { ...state };
+  let send: HsMessage[] = [];
+  switch (event.type) {
+      case 'start':
+        if (state.phase === 'idle') {
+          newState.phase = 'sent';
+          send = [{ type: 'hello', versions: supported }];
+        }
+        break;
+      case 'hello':
+        if (state.phase === 'idle' || state.phase === 'sent') {
+          const commonVersions = event.versions.filter(v => supported.includes(v));
+          if (commonVersions.length > 0) {
+            const version = Math.max(...commonVersions);
+            newState.phase = 'ready';
+            newState.version = version;
+            send = [{ type: 'ack', version }];
+          } else {
+            newState.phase = 'failed';
+            newState.error = 'version-mismatch';
+            send = [{ type: 'reject', reason: 'version-mismatch' }];
+          }
+        }
+        break;
+      case 'ack':
+        if (state.phase === 'sent') {
+          if (supported.includes(event.version)) {
+            newState.phase = 'ready';
+            newState.version = event.version;
+          } else {
+            newState.phase = 'failed';
+            newState.error = 'version-mismatch';
+            send = [{ type: 'reject', reason: 'version-mismatch' }];
+          }
+        }
+        break;
+      case 'reject':
+        if (state.phase !== 'failed') {
+          newState.phase = 'failed';
+          newState.error = event.reason;
+        }
+        break;
+    }
+  return { state: newState, send: send };
+};
 // @openarc:end p2p.handshake
 
 // ───────────────────────────── peer table and gossip ─────────────────────────────
@@ -254,7 +335,22 @@ export const onGossipSpec = arc.defineRegion<OnGossip>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin p2p.onGossip
-export const onGossip: OnGossip = (state, from, msg, fanout) => arc.todo("p2p.onGossip");
+export const onGossip: OnGossip = (state, from, msg, fanout) => {
+  if (state.seen.includes(msg.id)) {
+      return { state, deliver: false, forward: [] };
+    }
+  const newSeen = [...state.seen, msg.id].slice(-SEEN_LIMIT);
+  const newState = { ...state, seen: newSeen };
+  if (msg.ttl <= 0) {
+      return { state: newState, deliver: true, forward: [] };
+    }
+  const candidates = state.peers.filter(p => p !== from && p !== msg.origin && p !== state.self);
+  const sumCharCodes = Array.from(msg.id).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const rotatedCandidates = [...candidates.slice(sumCharCodes % candidates.length), ...candidates.slice(0, sumCharCodes % candidates.length)];
+  const forwardTo = rotatedCandidates.slice(0, fanout);
+  const forward = forwardTo.map(peer => ({ to: peer, msg: { ...msg, ttl: msg.ttl - 1 } }));
+  return { state: newState, deliver: true, forward };
+};
 // @openarc:end p2p.onGossip
 
 /** The network as one peer process sees it: send to a linked peer; receive the next delivery (null when quiet).
