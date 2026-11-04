@@ -199,4 +199,28 @@ const chat = (content: string) => JSON.stringify({ message: { role: "assistant",
   assert.ok(res.diagnostics.some((d) => d.code === "OARC-W042" && d.id === "fixture.run.a"), JSON.stringify(res.diagnostics));
   assert.equal((fake.snapshot() as Snap).files["src/fixture.ts"], src, "neither a's body nor its import is committed");
 }
-console.log("compile-run: manifest-only transition, E080 stop, canonical imports, held-back blocks, save during compile, cache after E080 stop, held imports ok");
+// ── 8. traces: with "traces": true every model attempt is one line of .openarc/traces.jsonl (invalid, then verified);
+//       off by default, nothing is written
+{
+  const src = ['import * as arc from "open-arc";', "type Inc = (n: number) => number;", 'export const incSpec = arc.defineRegion<Inc>({ id: "fixture.inc", intent: "add one" });', "// @openarc:begin fixture.inc", 'export const inc: Inc = (n) => arc.todo("fixture.inc");', "// @openarc:end fixture.inc", ""].join("\n");
+  const config = (traces: boolean) => JSON.stringify({ version: 1, backends: { local: { provider: "ollama", model: "qwen3.5:9b", maxContextTokens: 8192, think: false } }, compilation: { defaultBackend: "local", maxAttempts: 3 }, ...(traces ? { traces } : {}) });
+  const compile = async (traces: boolean) => {
+    const fake = fakePorts({ files: { "openarc.config.json": config(traces), "src/fixture.ts": src, [M]: '{"schema":1,"regions":{}}' }, http: [TAGS, chat("nope"), chat('{"body":"return n + 1;"}')] });
+    assert.equal((await run(fake.instance as Ports, req)).exit, 0);
+    const files = (fake.snapshot() as Snap).files;
+    if (traces) assert.match(files[".openarc/.gitignore"] ?? "", /^traces\.jsonl$/m, "tracing adds its ignore rule");
+    return files[engine.TRACES];
+  };
+  const lines = (await compile(true))!.trim().split("\n").map((l) => JSON.parse(l));
+  assert.deepStrictEqual(lines.map((l) => [l.v, l.id, l.attempt, l.outcome, l.body]), [[1, "fixture.inc", 1, "invalid", null], [1, "fixture.inc", 2, "verified", "return n + 1;"]]);
+  const [bad, ok] = lines;
+  assert.equal(typeof bad.runId, "string");
+  assert.equal(bad.runId, ok.runId, "one runId per compile: the failed attempt and the verified one join on it");
+  assert.equal(bad.raw, "nope");
+  assert.match(bad.problems[0], /output was not valid/);
+  assert.deepStrictEqual([ok.file, ok.backend, ok.model, ok.level, ok.compilerVersion], ["src/fixture.ts", "local", "qwen3.5:9b", 0, engine.COMPILER_VERSION]);
+  assert.deepStrictEqual(ok.messages.map((m: { role: string }) => m.role), ["system", "user"]);
+  assert.match(ok.messages[1].content, /add one/);
+  assert.equal(await compile(false), undefined, "traces are off by default");
+}
+console.log("compile-run: manifest-only transition, E080 stop, canonical imports, held-back blocks, save during compile, cache after E080 stop, held imports, traces ok");
