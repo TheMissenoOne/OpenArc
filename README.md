@@ -94,22 +94,26 @@ Code-first is the main way, and every earlier form stays fully supported. They m
 
 | | |
 |---|---|
-| Release | [`open-arc` on npm](https://www.npmjs.com/package/open-arc): 0.10.0 published (`lint`, `compile --timings`, failed-region memory, spec checks before the model, faster watch, llama-server default) |
+| Release | [`open-arc` on npm](https://www.npmjs.com/package/open-arc): 0.10.0 published (`lint`, `compile --timings`, failed-region memory, spec checks before the model, faster watch, llama-server default). Unreleased on main: `openarc deps suggest`, import lifting for JSON bodies, returned-function and redeclared-parameter repairs, Qwen3.5-9B Q5_K_M as the default local model |
 | CI | Linux (bwrap), macOS (sandbox-exec), Windows (Node permission model) on Node 25, plus Linux on Node 23 |
-| Benchmark | The untuned pilot solved 0/5 tasks with OpenArc against 2/5 for a plain prompt. A rerun on a tuned backend is in progress: preliminary results are about 2/8 against 3/8, and the code output format didn't help. OpenArc doesn't beat a plain prompt yet. See draft PR [#5](https://github.com/TheMissenoOne/OpenArc/pull/5) and issue [#10](https://github.com/TheMissenoOne/OpenArc/issues/10) |
-| Self-hosting | Part of OpenArc is compiled by OpenArc (`selfhost/`); finishing it is issue [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) |
+| Benchmark | On the held-out test split (21 exercises, 3 seeds, Qwen3.5-9B Q5_K_M, run once), OpenArc is accepted and correct on 62% against 52% for a plain prompt, using 12% fewer tokens. The difference is not significant (+9.5 points, 95% CI [-7.9, +27.0]); on the dev split it was -3.9, also not significant. Read it as parity on correctness at lower cost. See [`bench/results/2026-11-04-test-q5`](bench/results/2026-11-04-test-q5/NOTES.md) and issue [#10](https://github.com/TheMissenoOne/OpenArc/issues/10) |
+| Self-hosting | 27 of 53 `selfhost/` regions are compiled and verified by OpenArc; the 9 `compile.run` blocks and 16 other regions are pending or stale. Stage 1, then stage 2: issue [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) |
 
-Alpha: the compiler's guarantees (write scope, sandbox, ownership) are tested on every commit; how often small models produce a passing body is what the benchmark is measuring.
+Alpha: the compiler's guarantees (write scope, sandbox, ownership) are tested on every commit; how often small models produce a passing body is what the benchmark measures.
 
 ## Roadmap
 
+- [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) Self-hosting: finish stage 1 (the remaining regions and the `compile.run` blocks), then stage 2 (rebuild with 0 model calls, byte-identical)
+- [#15](https://github.com/TheMissenoOne/OpenArc/issues/15) Known limitations, including two from the benchmark: throw cases as `{ throws }` examples in the bench adapter, and the import form for declared packages nothing imports yet
+- [#10](https://github.com/TheMissenoOne/OpenArc/issues/10) Benchmark follow-ups: the 13 skipped class-based exercises (via code-first specs), verified exemplars, region memory, more benchmarks
 - [#13](https://github.com/TheMissenoOne/OpenArc/issues/13) Code-first specs: phases 1 and 2 are in 0.9.0; next are laws over every implementation of an interface, in-place sketches, and atomic-design TSX
-- [#10](https://github.com/TheMissenoOne/OpenArc/issues/10) Benchmark rerun on a tuned backend: JSON vs code output vs plain prompt
-- [#11](https://github.com/TheMissenoOne/OpenArc/issues/11) Local LLM setup: the best engine and model for a given machine
-- [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) Self-hosting: stage 1 and stage 2
-- [#15](https://github.com/TheMissenoOne/OpenArc/issues/15) Known limitations from the benchmark and reviews
+- [#50](https://github.com/TheMissenoOne/OpenArc/issues/50) Dependency evaluation: `deps suggest` is on main (5/9 on the deps bench, no wrong proposals)
+- [#33](https://github.com/TheMissenoOne/OpenArc/issues/33) `check --mutants`: mutation-based spec strength
+- [#52](https://github.com/TheMissenoOne/OpenArc/issues/52) Type-constrained decoding as a repair fallback (parked: no gain on a 7B model)
+- [#53](https://github.com/TheMissenoOne/OpenArc/issues/53) Decision readout for decisions that have no verifier
 - [#7](https://github.com/TheMissenoOne/OpenArc/issues/7) VS Code extension
-- [#12](https://github.com/TheMissenoOne/OpenArc/issues/12) Palette (done in 0.8.0; the bundled palette is deprecated and frozen since 0.9.0)
+
+Done: [#11](https://github.com/TheMissenoOne/OpenArc/issues/11) local LLM setup ([guide](docs/local-llm-setup.md)), [#12](https://github.com/TheMissenoOne/OpenArc/issues/12) palette (0.8.0; the bundled palette is frozen since 0.9.0).
 
 ## Repository layout
 
@@ -121,7 +125,7 @@ Alpha: the compiler's guarantees (write scope, sandbox, ownership) are tested on
 | `examples/code-first-demo/` | code-first: load balancer classes, a p2p framing and gossip peer, a login adapter, with tests, a hidden test and laws |
 | `examples/demo/` | the smallest `defineRegion` project |
 | `examples/palette-demo/` | the bundled palette in use (deprecated, frozen): a login flow and page, a load-balanced service, a 3-peer gossip network |
-| `bench/` | the benchmark harness (on the draft PR [#5](https://github.com/TheMissenoOne/OpenArc/pull/5) branch) |
+| `bench/` | the benchmark harness (ts-bench dev/test splits, the deps bench) and every run's results under `bench/results/` |
 | `vscode-extension/` | a VS Code extension: regions, states and commands in the editor ([#7](https://github.com/TheMissenoOne/OpenArc/issues/7)) |
 | `docs/wiki/` | the wiki's source |
 | `docs/design/` | design proposals (structured specs, code-first specs) |
@@ -131,7 +135,7 @@ Alpha: the compiler's guarantees (write scope, sandbox, ownership) are tested on
 ```bash
 cd stage0 && npm i && npx tsc -p . && node tools/run-examples.ts --strict   # 43/43 classic regions (24 compiler + 19 palette)
 (cd tests/fixtures/ui && npm i)                                              # optional: jsdom + react, so ui.check runs the DOM
-for f in tests/*.check.ts; do node $f; done                                   # 22 checks, no model; several run the real sandbox
+for f in tests/*.check.ts; do node $f; done                                   # 27 checks, no model; several run the real sandbox
 node tools/build.ts && (cd build && npm pack)                                # build/open-arc-x.y.z.tgz
 cd ../selfhost && npm i && npx openarc compile --keep-going                  # OpenArc compiling OpenArc
 ```
