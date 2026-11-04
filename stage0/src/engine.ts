@@ -1545,8 +1545,8 @@ export const TRACES = ".openarc/traces.jsonl";
 async function trace(ports: Ports, p: Project, record: { [k: string]: Json }): Promise<void> {
   if (!p.config.traces && process.env.OPENARC_TRACES !== "1") return;
   const line = JSON.stringify({ v: 1, ts: ports.now(), runId: (p.runId ??= crypto.randomUUID()), ...record, compilerVersion: COMPILER_VERSION });
-  // ponytail: read + rewrite per line (FsPort has no append), like watch-history; add FsPort.append if the file gets big
-  await ports.fs.write(TRACES, ((await ports.fs.read(TRACES)) ?? "") + line + "\n");
+  if (ports.fs.append) await ports.fs.append(TRACES, line + "\n");
+  else await ports.fs.write(TRACES, ((await ports.fs.read(TRACES)) ?? "") + line + "\n"); // fakes without append
 }
 
 /** Sampling of an attempt: the backend's own on attempt 1; every retry varies it (temperature 0.4 on attempt 2, 0.7

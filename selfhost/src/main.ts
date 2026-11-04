@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // `openarc` CLI entry point. Hand-written: the real ports plus command dispatch.
-import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { cpSync, existsSync, lstatSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
@@ -93,6 +93,10 @@ export function realPorts(root: string): Ports {
       async write(rel, data) {
         await mkdir(dirname(p(rel)), { recursive: true });
         await writeFile(p(rel), data);
+      },
+      async append(rel, data) {
+        await mkdir(dirname(p(rel)), { recursive: true });
+        await appendFile(p(rel), data);
       },
       async rename(from, to) {
         await mkdir(dirname(p(to)), { recursive: true });
