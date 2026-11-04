@@ -249,5 +249,11 @@ console.log("efficiency: ok");
   assert.equal(engine.exportEqualsImport({ root }, "typescript"), 'import ts from "typescript";');
   assert.equal(engine.exportEqualsImport({ root }, "no-such-package-xyz"), null, "unresolved: no form");
   assert.equal(engine.exportEqualsImport({ root }, "node:path"), null, "no export = : no form");
+  const n = (names: string[], d?: string) => engine.normalizeImports({ root }, [{ from: "typescript", names, ...(d ? { default: d } : {}) }])[0];
+  assert.deepEqual(n(["ts"], "ts"), { from: "typescript", names: [], default: "ts" }, "import ts, { ts }");
+  assert.deepEqual(n(["ts"]), { from: "typescript", names: [], default: "ts" }, "import { ts } from an export = package");
+  assert.deepEqual(n(["default"], "ts"), { from: "typescript", names: [], default: "ts" }, "import ts, { default }");
+  assert.deepEqual(n(["SyntaxKind"]), { from: "typescript", names: ["SyntaxKind"] }, "other named imports stay");
+  assert.deepEqual(engine.normalizeImports({ root }, [{ from: "node:path", names: ["join"] }])[0], { from: "node:path", names: ["join"] });
   console.log("efficiency: export = default import form ok");
 }
