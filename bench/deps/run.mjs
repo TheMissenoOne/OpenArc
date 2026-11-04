@@ -8,7 +8,7 @@
 // node bench/deps/run.mjs --base-url http://127.0.0.1:8080/v1 --model <id> [--tasks a,b] [--max 2] [--out <dir>]
 //   [--work <dir>] [--oa <openarc main.ts or .js>] [--backend-json '{"maxContextTokens":16384}']
 import { spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -31,8 +31,12 @@ const oa = (args, cwd) => {
   const r = spawnSync(process.execPath, ["--no-warnings", a.oa, ...args], { cwd, encoding: "utf8", maxBuffer: 64 << 20 });
   return { code: r.status, stdout: r.stdout, stderr: r.stderr };
 };
+// The held-out importer loads candidate package code: the node tier `check` uses (reads limited to the copy, this
+// directory and open-arc's core; no writes, children or network on node >= 25), and an empty environment.
+// ponytail: no bwrap here; run the bench on node >= 25 or inside a container if candidates are untrusted.
 const heldOut = (dir, task) => {
-  const r = spawnSync(process.execPath, ["--no-warnings", "--permission", "--allow-fs-read=*", join(HERE, "heldout.mjs"), dir, task], { encoding: "utf8", timeout: 60_000 });
+  const reads = [dir, HERE, join(STAGE0, "core")].map((p) => `--allow-fs-read=${realpathSync(p)}`);
+  const r = spawnSync(process.execPath, ["--no-warnings", "--permission", ...reads, join(HERE, "heldout.mjs"), dir, task], { encoding: "utf8", timeout: 60_000, env: {} });
   try { return JSON.parse(r.stdout); } catch { return { passed: 0, total: null, error: (r.stderr || "no output").slice(0, 300) }; }
 };
 const armRow = (arm, task) => arm && { verified: arm.verified, attempts: arm.attempts, tokens: arm.tokens, modelCalls: arm.modelCalls, ms: arm.ms, mutants: arm.mutants, usesPkg: arm.usesPkg, heldOut: arm.dir ? heldOut(arm.dir, task) : null };
@@ -64,7 +68,7 @@ for (const task of tasks) {
   let rep;
   try { rep = JSON.parse(s.stdout); } catch { rep = { error: `deps suggest exit ${s.code}: ${(s.stderr || s.stdout).slice(-500)}` }; }
   let without = rep.without;
-  if (!without && !rep.error) { // nothing was trialled (declined before the trial): compile the plain arm here
+  if (!without) { // nothing was trialled (declined before the trial, or suggest failed): compile the plain arm here
     const w = join(root, "without");
     cpSync(proj, w, { recursive: true, verbatimSymlinks: true });
     const t1 = Date.now();

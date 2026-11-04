@@ -90,7 +90,7 @@ proposal: uuid@14.0.3 (not applied; nothing was installed in this project)
   install:      npm install --save-exact uuid@14.0.3
 ```
 
-A candidate is `better` when, with it, the region verifies, the body imports it, and something measured improves: the baseline failed, fewer attempts, a higher mutant score, or the same score for at most 80% of the tokens. When the model answers that the standard library suffices, nothing is searched. Network is needed for the search and `npm install` only; the compiles run in the sandbox as usual. Thresholds and details: SPEC §16. The benchmark is `bench/deps/run.mjs`.
+A candidate is `better` when, with it, the region verifies, the body imports it, and something measured improves: the baseline failed, fewer attempts, a higher mutant score, or the same score for at most 80% of the tokens. When the model answers that the standard library suffices, nothing is searched. Network is needed for the keyword request to the region's backend (it leaves the machine when that backend is hosted; `--query` skips it), the registry search and `npm install`; the compiles run in the sandbox as usual. Thresholds and details: SPEC §16. The benchmark is `bench/deps/run.mjs`.
 
 ## Files
 

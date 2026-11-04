@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // `openarc` CLI entry point. Hand-written: the real ports plus command dispatch.
 import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { cpSync, existsSync, lstatSync, realpathSync, rmSync, watch } from "node:fs";
+import { cpSync, existsSync, lstatSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as http from "node:http";
@@ -428,6 +428,7 @@ async function doctor(root: string, ports: Ports): Promise<number> {
 /** `openarc deps suggest <id>`: search npm, filter on facts, trial in scratch copies, propose (src/deps.ts). Never writes
  *  the project: the scratch copies live under the OS temp dir and are removed unless --keep. Exit 0 (a report), 1 on an
  *  unknown region or a registry failure, 2 on a bad flag. */
+const DEPS_CHILD_MS = 60 * 60_000; // ponytail: one fixed deadline per npm/compile/check child, above a slow local-model compile
 async function depsCmd(root: string, ports: Ports, args: string[]): Promise<number> {
   const o = { max: 2, trial: true, json: false, keep: false, query: undefined as string | undefined };
   const [sub, id, ...flags] = args;
@@ -451,8 +452,8 @@ async function depsCmd(root: string, ports: Ports, args: string[]): Promise<numb
     console.error(`no function region ${id}`);
     return 1;
   }
-  const view: RegionView = { id, file: r.file, intent: r.spec.intent, signature: r.spec.signature, deps: r.spec.deps, codeFirst: !!r.spec.codeFirst, ownership: r.state };
-  const backend = project.config.backends[project.config.compilation.defaultBackend]!;
+  const view: RegionView = { id, file: r.file, specFile: r.spec.file, intent: r.spec.intent, signature: r.spec.signature, deps: r.spec.deps, codeFirst: !!r.spec.codeFirst, ownership: r.state };
+  const backend = engine.backendFor(project, id, 0); // the region's backend, as compile picks it: the intent goes nowhere else
   const scratch: string[] = [];
   const NOISE = new Set([".git", ".openarc/sandbox", ".openarc/txn", ".openarc/lock", ".openarc/attempts", ".openarc/watch-history.jsonl"]);
   try {
@@ -460,6 +461,9 @@ async function depsCmd(root: string, ports: Ports, args: string[]): Promise<numb
       http: ports.http,
       run: (argv, cwd) => new Promise((done) => {
         const child = spawn(argv[0]!, argv.slice(1), { cwd, stdio: ["ignore", "pipe", "pipe"] });
+        // a hung npm or compile must not block forever (and keep the scratch copies): killed, code null = a failed arm
+        const timer = setTimeout(() => child.kill("SIGKILL"), DEPS_CHILD_MS).unref();
+        child.on("close", () => clearTimeout(timer));
         let out = "";
         child.stdout.on("data", (b) => (out += b));
         child.stderr.on("data", (b) => (out += b));
@@ -476,6 +480,17 @@ async function depsCmd(root: string, ports: Ports, args: string[]): Promise<numb
         if (existsSync(`${root}/node_modules`) && lstatSync(`${root}/node_modules`).isSymbolicLink()) {
           rmSync(`${dir}/node_modules`);
           cpSync(realpathSync(`${root}/node_modules`), `${dir}/node_modules`, { recursive: true, verbatimSymlinks: true });
+        }
+        // the trial and the compile write the region's files: a symlinked one is copied for real, so no write reaches the
+        // project through it; a symlinked directory above it is refused
+        for (const f of new Set([view.file, view.specFile])) {
+          const at = `${dir}/${f}`, up = relative(realpathSync(dir), realpathSync(dirname(at)));
+          if (up.startsWith("..") || isAbsolute(up)) throw new Error(`${f} is under a symlinked directory: the trial would write through it into the project`);
+          if (lstatSync(at).isSymbolicLink()) {
+            const text = readFileSync(at);
+            rmSync(at);
+            writeFileSync(at, text);
+          }
         }
         return dir;
       },

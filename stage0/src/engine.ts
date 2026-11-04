@@ -572,7 +572,7 @@ const initialLevel = (p: Project, r: RegionInfo): ContextLevel =>
   Math.max(p.config.regions?.[r.id]?.contextLevel ?? p.config.compilation.context.initialLevel, r.kind === "block" ? 1 : 0) as ContextLevel;
 
 /** stage 0 = default (or per-region) backend, stage 1 = fallback backend */
-function backendFor(p: Project, id: string, stage: 0 | 1): BackendConfig & { name: string } {
+export function backendFor(p: Project, id: string, stage: 0 | 1): BackendConfig & { name: string } {
   const c = p.config.compilation;
   const code = p.specs.get(id); // code-first: `@arc backend|outputFormat` are defaults; openarc.config.json regions[id] wins
   const name = stage === 1 && c.fallbackBackend ? c.fallbackBackend : (p.config.regions?.[id]?.backend ?? code?.backend ?? c.defaultBackend);
@@ -753,13 +753,16 @@ function defaultExportName(sf: ts.SourceFile | undefined): string | undefined {
   return undefined;
 }
 
+/** A default, namespace or non-`type` named binding: `import { type X } from "pkg"` binds no runtime value. */
+const bindsValue = (c: ts.ImportClause): boolean =>
+  !!c.name || !c.namedBindings || ts.isNamespaceImport(c.namedBindings) || c.namedBindings.elements.some((e) => !e.isTypeOnly);
 /** The import declaration most often used for package `spec` across the project (value imports only), or null. */
 function canonicalImport(p: Project, spec: string): string | null {
   const counts = new Map<string, number>();
   for (const rel of p.files.keys()) {
     const sf = p.program?.getSourceFile(abs(p, rel));
     for (const d of sf?.statements.filter(ts.isImportDeclaration) ?? [])
-      if ((d.moduleSpecifier as ts.StringLiteral).text === spec && d.importClause && !d.importClause.isTypeOnly) {
+      if ((d.moduleSpecifier as ts.StringLiteral).text === spec && d.importClause && !d.importClause.isTypeOnly && bindsValue(d.importClause)) {
         const t = d.getText(sf).replace(/\s+/g, " ");
         counts.set(t, (counts.get(t) ?? 0) + 1);
       }

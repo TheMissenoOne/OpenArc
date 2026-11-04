@@ -1,7 +1,8 @@
 // `openarc deps suggest <id>` (issue #50): search npm for a package that would help a region, filter candidates on
 // registry facts, trial the survivors in scratch copies of the project, and PROPOSE the `deps` and package.json change.
 // Hand-written. Nothing here writes to the project: every write goes to a scratch copy made by io.copyProject.
-// Network: the registry (search, manifests) and `npm install` only; compile/verify in the scratch copy is sandboxed as usual.
+// Network: the keyword request to the region's backend (a hosted one leaves the machine), the registry (search, manifests)
+// and `npm install`; compile/verify in the scratch copy is sandboxed as usual.
 import type { HttpPort } from "./types.ts";
 
 export const REGISTRY = "https://registry.npmjs.org";
@@ -26,6 +27,7 @@ export const POPULAR = [
 export interface Hit { name: string; version: string; description: string; license: string | null; date: string; weekly: number | null }
 export interface Facts extends Hit {
   types: "bundled" | "@types" | null;
+  typesVersion?: string; // the @types/<name> version the trial installs and the proposal pins
   deps: number;
   installScripts: string[];
   deprecated: string | null;
@@ -52,7 +54,7 @@ export interface Report {
   proposal: Proposal | null;
 }
 
-export interface RegionView { id: string; file: string; intent: string; signature: string; deps: string[]; codeFirst: boolean; ownership: string }
+export interface RegionView { id: string; file: string; specFile: string; intent: string; signature: string; deps: string[]; codeFirst: boolean; ownership: string }
 export interface SuggestIO {
   http: HttpPort;
   /** argv run with cwd; out is stdout and stderr together. */
@@ -114,6 +116,7 @@ export function hitReject(h: Hit, popular: string[], now: Date): string | null {
 /** A reason to reject on the version manifest, or null. */
 export function factsReject(f: Facts): string | null {
   if (f.deprecated) return `deprecated: ${f.deprecated.slice(0, 80)}`;
+  if (f.weekly !== null && f.weekly < MIN_WEEKLY) return `${f.weekly} weekly downloads < ${MIN_WEEKLY}`; // backfilled count
   if (f.installScripts.length) return `install scripts: ${f.installScripts.join(", ")}`;
   if (!f.types) return "no TypeScript types (bundled or @types)";
   if (f.deps > MAX_DEPS) return `${f.deps} dependencies > ${MAX_DEPS}`;
@@ -135,11 +138,12 @@ export async function facts(http: HttpPort, h: Hit): Promise<Facts> {
     types?: string; typings?: string; exports?: unknown; dependencies?: Record<string, string>; scripts?: Record<string, string>; gypfile?: boolean; deprecated?: string; license?: unknown;
   };
   let types: Facts["types"] = m.types || m.typings || JSON.stringify(m.exports ?? "").includes('"types"') ? "bundled" : null;
-  if (!types) types = await http.get(`${REGISTRY}/${enc(typesName(h.name))}/latest`).then(() => "@types" as const, () => null);
+  let typesVersion: string | undefined;
+  if (!types) types = await http.get(`${REGISTRY}/${enc(typesName(h.name))}/latest`).then((t) => ((typesVersion = (JSON.parse(t) as { version?: string }).version), "@types" as const), () => null);
   let weekly = h.weekly;
   if (weekly === null) weekly = await http.get(`${DOWNLOADS}/${h.name}`).then((t) => (JSON.parse(t) as { downloads?: number }).downloads ?? null, () => null);
   return {
-    ...h, weekly, types,
+    ...h, weekly, types, ...(typesVersion ? { typesVersion } : {}),
     deps: Object.keys(m.dependencies ?? {}).length,
     installScripts: [...INSTALL_SCRIPTS.filter((s) => m.scripts?.[s]), ...(m.gypfile ? ["gypfile"] : [])],
     deprecated: typeof m.deprecated === "string" ? m.deprecated : null,
@@ -159,6 +163,7 @@ export function editSpecDeps(text: string, r: RegionView, pkg: string): string |
       const start = text.lastIndexOf("/**", idLine.index);
       return text.slice(0, start) + block.replace(depsLine, (_m, head: string, rest: string) => `${head} ${rest.trim() === "none" ? "" : `${rest.trim()} `}${pkg}`.replace(/  +/g, " ")) + text.slice(start + block.length);
     }
+    if (r.deps.length) return null; // deps set by arc.configure or defineRegion: a JSDoc `@arc deps` too is OARC-E013
     const at = idLine.index + idLine[0].length;
     return `${text.slice(0, at)}\n${idLine[1]}@arc deps ${pkg}${text.slice(at)}`;
   }
@@ -166,10 +171,10 @@ export function editSpecDeps(text: string, r: RegionView, pkg: string): string |
   if (!m) return null;
   const after = text.slice(m.index);
   const d = /\bdeps:\s*\[/.exec(after);
-  // an existing deps array of THIS spec: before the next defineRegion
-  if (r.deps.length && d && !after.slice(0, d.index).includes("defineRegion")) {
+  // an existing deps array of THIS spec (possibly empty): before the next spec
+  if (d && !/define(Region|Block|Concept)/.test(after.slice(0, d.index))) {
     const at = m.index + d.index + d[0].length;
-    return `${text.slice(0, at)}${JSON.stringify(pkg)}, ${text.slice(at)}`;
+    return `${text.slice(0, at)}${JSON.stringify(pkg)}${/^\s*\]/.test(text.slice(at)) ? "" : ", "}${text.slice(at)}`;
   }
   if (r.deps.length) return null;
   const at = m.index + m[0].length;
@@ -188,9 +193,28 @@ export function verdict(without: Arm, w: Arm): string | null {
   if (!w.usesPkg) return "verified, but the body does not import the package";
   if (!without.verified) return null;
   if ((w.attempts ?? Infinity) < (without.attempts ?? Infinity)) return null;
-  if (pct(w) > pct(without)) return null;
+  if (without.mutants && pct(w) > pct(without)) return null; // an unmeasured baseline score is not 0
   if (pct(w) >= pct(without) && w.tokens !== null && without.tokens !== null && w.tokens <= 0.8 * without.tokens) return null;
   return "no measured gain over the body without it";
+}
+
+const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Does region `id`'s body (between its markers) use a value import of `pkg` from `text`? A type-only import, or one that
+ *  only other code in the file uses, does not count. */
+export function bodyUsesPkg(text: string, id: string, pkg: string): boolean {
+  const ls = text.split(/\r?\n/);
+  const b = ls.findIndex((l) => l.trim() === `// @openarc:begin ${id}`);
+  const e = ls.findIndex((l, i) => i > b && l.trim() === `// @openarc:end ${id}`);
+  if (b < 0 || e < 0) return false;
+  const body = ls.slice(b + 1, e).join("\n"), from = `["']${reEsc(pkg)}(/[^"']*)?["']`;
+  if (new RegExp(`\\b(import|require)\\s*\\(\\s*${from}`).test(body)) return true;
+  const names: string[] = [];
+  for (const m of text.matchAll(new RegExp(`^\\s*import\\s+(?!type\\b)([^;]*?)\\s+from\\s+${from}`, "gm"))) {
+    const clause = m[1]!, named = /\{([^}]*)\}/.exec(clause)?.[1] ?? "";
+    names.push(...(clause.replace(/\{[^}]*\}/, "").match(/[A-Za-z_$][\w$]*/g) ?? []).filter((n) => n !== "as"));
+    for (const s of named.split(",").map((x) => x.trim()).filter((x) => x && !/^type\s/.test(x))) names.push(s.split(/\s+as\s+/).at(-1)!);
+  }
+  return names.some((n) => new RegExp(`(?<![\\w$.])${reEsc(n)}(?![\\w$])`).test(body));
 }
 
 async function armOf(io: SuggestIO, dir: string, r: RegionView, pkg: string | null, keep: boolean): Promise<Arm> {
@@ -211,7 +235,7 @@ async function armOf(io: SuggestIO, dir: string, r: RegionView, pkg: string | nu
   return {
     verified, attempts: e?.provenance?.attempts ?? null, tokens: tk ? tk.prompt + tk.completion : null,
     modelCalls: Number.isFinite(modelCalls) ? modelCalls : null, mutants,
-    usesPkg: pkg !== null && new RegExp(`from\\s+["']${pkg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(/[^"']*)?["']`).test(file),
+    usesPkg: pkg !== null && bodyUsesPkg(file, r.id, pkg),
     ms, ...(keep ? { dir } : {}),
   };
 }
@@ -255,19 +279,20 @@ export async function suggest(io: SuggestIO, r: RegionView, o: SuggestOpts): Pro
     const c = rep.candidates.find((x) => x.name === f.name)!;
     const dir = await io.copyProject();
     io.log(`deps ${r.id}: trial ${f.name}@${f.version} in ${dir}`);
-    const pins = [`${f.name}@${f.version}`, ...(f.types === "@types" ? [typesName(f.name)] : [])];
+    const types = f.types === "@types" ? `${typesName(f.name)}${f.typesVersion ? `@${f.typesVersion}` : ""}` : null;
+    const pins = [`${f.name}@${f.version}`, ...(types ? [types] : [])];
     const inst = await io.run(["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", "--save-exact", ...pins], dir);
     if (inst.code !== 0) {
       c.verdict = `install failed: ${inst.out.trim().split("\n").at(-1)?.slice(0, 120)}`;
       continue;
     }
-    const text = await io.read(`${dir}/${r.file}`);
+    const text = await io.read(`${dir}/${r.specFile}`);
     const edited = text === null ? null : editSpecDeps(text, r, f.name);
     if (edited === null) {
       c.verdict = `could not add the dep to the spec mechanically (add ${specChangeText(r, f.name)} by hand to trial it)`;
       continue;
     }
-    await io.write(`${dir}/${r.file}`, edited);
+    await io.write(`${dir}/${r.specFile}`, edited);
     const arm = await armOf(io, dir, r, f.name, !!o.keep);
     c.trial = { with: arm };
     c.verdict = verdict(rep.without, arm) ?? "better";
@@ -277,8 +302,8 @@ export async function suggest(io: SuggestIO, r: RegionView, o: SuggestOpts): Pro
   const { f } = best;
   rep.proposal = {
     name: f.name, version: f.version, types: f.types!, specChange: specChangeText(r, f.name),
-    packageJson: { dependencies: { [f.name]: f.version }, ...(f.types === "@types" ? { devDependencies: { [typesName(f.name)]: "latest" } } : {}) },
-    install: `npm install --save-exact ${f.name}@${f.version}${f.types === "@types" ? ` && npm install -D ${typesName(f.name)}` : ""}`,
+    packageJson: { dependencies: { [f.name]: f.version }, ...(f.types === "@types" ? { devDependencies: { [typesName(f.name)]: f.typesVersion ?? "latest" } } : {}) },
+    install: `npm install --save-exact ${f.name}@${f.version}${f.types === "@types" ? ` && npm install -D --save-exact ${typesName(f.name)}${f.typesVersion ? `@${f.typesVersion}` : ""}` : ""}`,
   };
   return rep;
 }

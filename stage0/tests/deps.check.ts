@@ -39,18 +39,22 @@ assert.match(d.factsReject(f({ deprecated: "use y" }))!, /deprecated: use y/);
 assert.match(d.factsReject(f({ installScripts: ["postinstall"] }))!, /install scripts: postinstall/);
 assert.match(d.factsReject(f({ types: null }))!, /no TypeScript types/);
 assert.match(d.factsReject(f({ deps: 9 }))!, /9 dependencies/);
+assert.match(d.factsReject(f({ weekly: 40 }))!, /40 weekly downloads/, "the count backfilled from the downloads endpoint");
 assert.equal(d.typesName("@scope/pkg"), "@types/scope__pkg");
 
 // ── 3. spec edits
-const view = (x: Partial<d.RegionView> = {}): d.RegionView => ({ id: "semver.compare", file: "src/v.ts", intent: "Compare two semver versions", signature: "(a: string, b: string) => -1 | 0 | 1", deps: [], codeFirst: false, ownership: "pending", ...x });
+const view = (x: Partial<d.RegionView> = {}): d.RegionView => ({ id: "semver.compare", file: "src/v.ts", specFile: "src/v.ts", intent: "Compare two semver versions", signature: "(a: string, b: string) => -1 | 0 | 1", deps: [], codeFirst: false, ownership: "pending", ...x });
 assert.equal(d.editSpecDeps('arc.defineRegion<F>({\n  id: "semver.compare",\n  intent: "x",\n});', view(), "semver"), 'arc.defineRegion<F>({\n  id: "semver.compare", deps: ["semver"],\n  intent: "x",\n});');
 assert.equal(d.editSpecDeps('arc.defineRegion<F>({ intent: "x", id: "semver.compare" });', view(), "semver"), 'arc.defineRegion<F>({ intent: "x", id: "semver.compare", deps: ["semver"] });');
 assert.equal(d.editSpecDeps('arc.defineRegion<F>({ id: "semver.compare", deps: ["./a.ts"], intent: "x" });', view({ deps: ["./a.ts"] }), "semver"), 'arc.defineRegion<F>({ id: "semver.compare", deps: ["semver", "./a.ts"], intent: "x" });');
+assert.equal(d.editSpecDeps('arc.defineRegion<F>({ id: "semver.compare", deps: [], intent: "x" });', view(), "semver"), 'arc.defineRegion<F>({ id: "semver.compare", deps: ["semver"], intent: "x" });', "an empty deps array is filled, not duplicated");
+assert.equal(d.editSpecDeps('arc.defineRegion<F>({ id: "semver.compare" });\narc.defineRegion<G>({ id: "next", deps: [] });', view(), "semver"), 'arc.defineRegion<F>({ id: "semver.compare", deps: ["semver"] });\narc.defineRegion<G>({ id: "next", deps: [] });', "another spec's deps are not this one's");
 assert.equal(d.editSpecDeps('arc.defineRegion<F>({ id: "other" });', view(), "semver"), null, "no such spec");
 const cf = "/**\n * Compare.\n * @arc id semver.compare\n */\nexport function compare(a: string, b: string): number {";
 assert.equal(d.editSpecDeps(cf, view({ codeFirst: true }), "semver"), "/**\n * Compare.\n * @arc id semver.compare\n * @arc deps semver\n */\nexport function compare(a: string, b: string): number {");
 assert.equal(d.editSpecDeps(cf.replace(" */", " * @arc deps ./a.ts\n */"), view({ codeFirst: true, deps: ["./a.ts"] }), "semver"), cf.replace(" */", " * @arc deps ./a.ts semver\n */"));
 assert.equal(d.editSpecDeps(cf.replace(" * @arc id semver.compare\n", ""), view({ codeFirst: true }), "semver"), null, "code-first without @arc id: by hand");
+assert.equal(d.editSpecDeps(cf, view({ codeFirst: true, deps: ["./a.ts"] }), "semver"), null, "deps from arc.configure: a JSDoc @arc deps too is OARC-E013");
 assert.equal(d.specChangeText(view({ deps: ["./a.ts"] }), "semver"), 'deps: ["./a.ts", "semver"]');
 assert.equal(d.specChangeText(view({ codeFirst: true }), "semver"), "@arc deps semver");
 
@@ -61,6 +65,14 @@ assert.equal(d.verdict(arm({ attempts: 3 }), arm()), null, "fewer attempts");
 assert.equal(d.verdict(arm({ mutants: { killed: 3, scored: 5 } }), arm()), null, "higher mutant score");
 assert.equal(d.verdict(arm({ tokens: 2000 }), arm()), null, "<= 80% of the tokens");
 assert.match(d.verdict(arm(), arm())!, /no measured gain/);
+assert.match(d.verdict(arm({ mutants: null }), arm())!, /no measured gain/, "an unmeasured baseline mutant score is not 0");
+const B = (body: string, imports: string) => `${imports}\nexport function f() {\n// @openarc:begin semver.compare\n${body}\n// @openarc:end semver.compare\n}\nconst other = 1;\n`;
+assert.equal(d.bodyUsesPkg(B("return c(a, b);", 'import { compare as c } from "semver";'), "semver.compare", "semver"), true);
+assert.equal(d.bodyUsesPkg(B("return 0;", 'import type { SemVer } from "semver";'), "semver.compare", "semver"), false, "type-only import");
+assert.equal(d.bodyUsesPkg(B("let v: SemVer; return 0;", 'import { type SemVer } from "semver";'), "semver.compare", "semver"), false, "inline type specifier");
+assert.equal(d.bodyUsesPkg(B("return 0;", 'import semver from "semver";'), "semver.compare", "semver"), false, "imported, but the body does not use it");
+assert.equal(d.bodyUsesPkg(B("return semver.compare(a, b);", 'import semver from "semver";'), "semver.compare", "semver"), true);
+assert.equal(d.bodyUsesPkg(B("return S.compare(a, b);", 'import * as S from "semver/functions";'), "semver.compare", "semver"), true);
 assert.match(d.verdict(arm(), arm({ usesPkg: false }))!, /does not import/);
 assert.match(d.verdict(arm({ verified: false }), arm({ verified: false }))!, /not verified/);
 
@@ -115,10 +127,10 @@ const q = (s: string) => `${R}/-/v1/search?text=${encodeURIComponent(s)}&size=20
     [q("semver compare")]: search(hit("semvr"), hit("gpl-semver", { license: "GPL-3.0" }), hit("old-semver"), hit("semver", { version: "7.7.3", weekly: 400_000_000 })),
     [`${R}/old-semver/1.0.0`]: JSON.stringify({ deprecated: "use semver" }),
     [`${R}/semver/7.7.3`]: JSON.stringify({ license: "ISC", scripts: { test: "tap" } }),
-    [`${R}/@types%2fsemver/latest`]: "{}",
+    [`${R}/@types%2fsemver/latest`]: '{"version":"7.7.1"}',
   }, {
     without: { code: 1, out: "error OARC-E082 semver.compare\ndone: exit 1 · 3 model call(s) · 9.0s", attempts: 3 },
-    semver: { code: 0, out: "done: exit 0 · 1 model call(s) · 2.0s", attempts: 1, tokens: 900, body: 'import { compare as c } from "semver";\n', mutants: "mutants semver.compare: killed 4/4 (100%)" },
+    semver: { code: 0, out: "done: exit 0 · 1 model call(s) · 2.0s", attempts: 1, tokens: 900, body: 'import { compare as c } from "semver";\n// @openarc:begin semver.compare\nreturn c(a, b);\n// @openarc:end semver.compare\n', mutants: "mutants semver.compare: killed 4/4 (100%)" },
   });
   const phrased: string[] = [];
   const rep = await d.suggest(w.io, view(), { max: 2, trial: true, phrase: async (r) => (phrased.push(r.intent), "semver compare") });
@@ -136,12 +148,12 @@ const q = (s: string) => `${R}/-/v1/search?text=${encodeURIComponent(s)}&size=20
   assert.deepEqual(rep.candidates[3]!.trial?.with, { verified: true, attempts: 1, tokens: 900, modelCalls: 1, mutants: { killed: 4, scored: 4 }, usesPkg: true, ms: rep.candidates[3]!.trial!.with.ms });
   assert.deepEqual(rep.proposal, {
     name: "semver", version: "7.7.3", types: "@types", specChange: 'deps: ["semver"]',
-    packageJson: { dependencies: { semver: "7.7.3" }, devDependencies: { "@types/semver": "latest" } },
-    install: "npm install --save-exact semver@7.7.3 && npm install -D @types/semver",
+    packageJson: { dependencies: { semver: "7.7.3" }, devDependencies: { "@types/semver": "7.7.1" } },
+    install: "npm install --save-exact semver@7.7.3 && npm install -D --save-exact @types/semver@7.7.1",
   });
   // propose, never apply: npm ran only in a scratch copy, pinned, without scripts; nothing written under /proj
   const npm = w.runs.filter((r) => r.argv[0] === "npm");
-  assert.deepEqual(npm, [{ argv: ["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", "--save-exact", "semver@7.7.3", "@types/semver"], cwd: "/scratch2" }]);
+  assert.deepEqual(npm, [{ argv: ["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", "--save-exact", "semver@7.7.3", "@types/semver@7.7.1"], cwd: "/scratch2" }]);
   assert.ok(w.runs.every((r) => r.cwd.startsWith("/scratch")));
   assert.deepEqual(w.writes, ["/scratch2/src/v.ts"]);
   assert.equal(w.files.get("/proj/src/v.ts"), SPEC);
