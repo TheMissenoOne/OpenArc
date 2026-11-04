@@ -118,31 +118,45 @@ export const readHarnessOutputSpec = arc.defineRegion<ReadHarnessOutput>({
 
 // @openarc:begin sandbox.readHarnessOutput
 export const readHarnessOutput: ReadHarnessOutput = (stdout) => {
-  const lines = stdout.split('\n').filter(l => l.trim() !== '');
+  const lines = stdout.split(/\n+/).filter(line => line.trim() !== "");
   const outcomes: ExampleOutcome[] = [];
-  let completed = false;
-  let expectedDone = 0;
-  let doneSeen = false;
+  let doneCount = -1;
+  let complete = false;
 
   for (const line of lines) {
+    if (complete) {
+      // Outcome after done line means incomplete
+      complete = false;
+    }
     try {
       const obj = JSON.parse(line);
       if (obj.done !== undefined) {
-        doneSeen = true;
-        expectedDone = obj.done;
-        completed = true;
+        if (typeof obj.done === "number") {
+          doneCount = obj.done;
+          complete = true;
+        }
       } else {
-        outcomes.push(obj);
+        outcomes.push({
+          name: obj.name || "<unparseable>",
+          ok: obj.ok !== false,
+          actual: obj.actual
+        });
       }
     } catch {
-      outcomes.push({ name: '<unparseable>', ok: false, actual: line });
+      outcomes.push({
+        name: "<unparseable>",
+        ok: false,
+        actual: line
+      });
     }
   }
 
-  if (completed && outcomes.length === expectedDone) {
-    return { complete: true, passed: outcomes.filter(o => o.ok).length, failed: outcomes.filter(o => !o.ok) };
-  }
+  const passed = outcomes.filter(o => o.ok).length;
+  const failed = outcomes.filter(o => !o.ok);
 
-  return { complete: false, passed: outcomes.filter(o => o.ok).length, failed: outcomes.filter(o => !o.ok) };
+  if (complete && outcomes.length === doneCount) {
+    return { complete: true, passed, failed };
+  }
+  return { complete: false, passed, failed };
 };
 // @openarc:end sandbox.readHarnessOutput

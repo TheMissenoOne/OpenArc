@@ -881,9 +881,9 @@
       "file": "src/sandbox.ts",
       "symbol": "readHarnessOutput",
       "ownership": "compiler",
-      "hash": "sha256:7e46eafc4afcca8de3cd3b81255f878d129a43271d81d0a8a41f42e7480d0c96",
-      "specHash": "sha256:61a98cf833233604901a41cf00eedf342835e9f54e1ca3b29612424cac839359",
-      "fingerprint": "sha256:e6f946080a46f34b14d7536afffcd3096e59261206dacd54c9884764bb9ef5a6",
+      "hash": "sha256:62fc6fd97a27e74d3de4fb8b3ddda7af1bd807680a67736986aaabf73ffb68df",
+      "specHash": "sha256:e690bb23a0cc3037752aed027e6dde859a257100be3480e0ab822aa8fcabe839",
+      "fingerprint": "sha256:3ea1e20cc797136b9547515497cce4d0baef24afd981bbbd6948896e3f48b451",
       "provenance": {
         "source": "generated",
         "backend": "qwen35",
@@ -891,21 +891,21 @@
         "digest": "openai:http://127.0.0.1:8080/v1:qwen3.5-9b",
         "outputFormat": "json",
         "contextLevel": 0,
-        "attempts": 2,
+        "attempts": 1,
         "verifiedBy": [
           "tsc",
           "static",
-          "examples:4/4"
+          "examples:5/5"
         ],
-        "sampling": {
-          "temperature": 0.4,
-          "seed": 2
-        },
+        "batch": [
+          "sandbox.buildArgv",
+          "sandbox.readHarnessOutput"
+        ],
         "tokens": {
-          "prompt": 2144,
-          "completion": 527
+          "prompt": 957,
+          "completion": 351
         },
-        "at": "2026-11-03T06:26:19.408Z"
+        "at": "2026-11-04T17:17:27.164Z"
       }
     },
     "txn.planJournal": {
