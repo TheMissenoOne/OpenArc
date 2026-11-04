@@ -5,7 +5,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const BENCH = dirname(dirname(fileURLToPath(import.meta.url)));
-export const EXERCISES = JSON.parse(readFileSync(join(BENCH, "exercises.json"), "utf8"));
+// BENCH_EXERCISES: another task list in the same shape (the MultiPL-E training pool, train-pool.mjs)
+export const EXERCISES = JSON.parse(readFileSync(process.env.BENCH_EXERCISES ?? join(BENCH, "exercises.json"), "utf8"));
 export const PUBLIC_PER_FN = +(process.env.BENCH_PUBLIC ?? 3); // more public examples: use a separate --work (splits are cached there)
 
 /** Where a client should send requests for `backend`: our token-counting proxy, keeping the upstream path (e.g. /v1). */

@@ -1,0 +1,16 @@
+{
+  "_doc": "Teacher pass over the MultiPL-E TRAINING pool (train-pool.md): config A (OpenArc L0, repair) with traces on. Training only; never point this at exercises.json. Fill backend.info and runs[0].model from the teacher's llama-server.",
+  "backend": {
+    "provider": "openai",
+    "baseUrl": "http://127.0.0.1:8080/v1",
+    "maxContextTokens": 8192,
+    "outputReserveTokens": 4096,
+    "openarc": { "outputFormat": "json" },
+    "info": { "label": "teacher", "engine": "llama.cpp llama-server", "version": "FILL", "quant": "FILL", "kvCacheType": "FILL", "ctx": 8192, "flags": "FILL" }
+  },
+  "memory": { "minStartGb": 3, "abortGb": 1.5, "_why": "the teacher's llama-server keeps its weights resident" },
+  "configs": {
+    "A": { "kind": "openarc", "level": 0, "label": "OpenArc L0 (repair), traces on", "env": { "OPENARC_TRACES": "1" } }
+  },
+  "runs": [{ "model": "FILL-teacher", "configs": ["A"] }]
+}

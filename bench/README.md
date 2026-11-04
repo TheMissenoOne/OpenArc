@@ -45,6 +45,7 @@ OpenArc (A/B/C) and the baseline (D) talk to the same server through the proxy w
 | `exercises.json` | per-exercise signatures, and the skipped exercises with reasons |
 | `matrix.json` | configs, models, disabled slots for bigger models and an API backend, pilot list |
 | `summarize.mjs` | tables from `tasks.jsonl` |
+| `fetch-multipl-e.sh`, `train-pool.mjs`, `matrix-train.json` | MultiPL-E TRAINING pool for issue #63 (never a benchmark): see `train-pool.md` |
 
 ## Methodology
 

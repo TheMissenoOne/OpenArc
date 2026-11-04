@@ -167,6 +167,9 @@ for (const r of runs) {
         ...res,
       };
       promptLog = null;
+      // OPENARC_TRACES=1 (matrix-train.json): collect the task's compile traces into <out>/traces.jsonl, tagged with the task
+      const tr = join(dir, ".openarc/traces.jsonl");
+      if (existsSync(tr)) for (const l of readFileSync(tr, "utf8").split("\n").filter(Boolean)) appendFileSync(join(out, "traces.jsonl"), JSON.stringify({ task: ex, config: c, seed, ...JSON.parse(l) }) + "\n");
       appendFileSync(jsonl, JSON.stringify(rec) + "\n");
       note(`${key}: held-out ${res.heldOut?.passed ?? "?"}/${res.heldOut?.total ?? "?"} public ${res.publicPass} attempts ${res.attempts} tokens ${meter.prompt}+${meter.eval} ${(rec.wallMs / 1000).toFixed(0)}s rss ${Math.round(sample.peakRss / 1024)}MB minAvail ${Math.round(sample.minAvail / 1024)}MB${res.error ? " ERROR " + res.error.split("\n")[0] : ""}`);
     }
