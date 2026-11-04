@@ -82,7 +82,7 @@
       "backend": "qwen35"
     },
     "hash.canonicalJson": {
-      "backend": "qwen35"
+      "backend": "q14"
     },
     "plan.selectTargets": {
       "backend": "qwen35"

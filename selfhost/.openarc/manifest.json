@@ -54,31 +54,31 @@
       "file": "src/hash.ts",
       "symbol": "canonicalJson",
       "ownership": "compiler",
-      "hash": "sha256:396a4da200fe06506a717a70f0218dcb86de92565bcea0376dbd18958be28f63",
-      "specHash": "sha256:a345d8c67c82b071612a770d709fa4344a56aba92b2f1b225cde529fdbd3a590",
-      "fingerprint": "sha256:eea23655cf05a0aefcf4f164a8ebda373b3006be16ec0b19eeb29dc5622f26ae",
+      "hash": "sha256:5a51e2351d45f9cdc6be8c3edb80571012c2572f0959742d28df48d1f6c799a7",
+      "specHash": "sha256:774441db6a86ddb145eb91fa631db7f9e96d87d954f72f376bfeb2c098ade81c",
+      "fingerprint": "sha256:b0e03b6c5a2cc708697bcd0f1b1ea9555838f211b0081ad50a51a9fac15caba6",
       "provenance": {
         "source": "generated",
-        "backend": "seed",
-        "model": "seed-coder-8b",
-        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "backend": "q14",
+        "model": "qwen2.5-coder-14b-iq3m",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen2.5-coder-14b-iq3m",
         "outputFormat": "json",
         "contextLevel": 0,
         "attempts": 2,
         "verifiedBy": [
           "tsc",
           "static",
-          "examples:5/5"
+          "examples:6/6"
         ],
         "sampling": {
           "temperature": 0.4,
           "seed": 2
         },
         "tokens": {
-          "prompt": 1535,
-          "completion": 317
+          "prompt": 2562,
+          "completion": 4755
         },
-        "at": "2026-11-03T06:09:43.114Z"
+        "at": "2026-11-04T21:24:14.136Z"
       }
     },
     "hash.sha256Tagged": {
