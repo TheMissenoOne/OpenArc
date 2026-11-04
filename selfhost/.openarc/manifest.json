@@ -585,6 +585,39 @@
         "at": "2026-11-02T22:26:46.291Z"
       }
     },
+    "lb.healthCheck": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/loadBalancer.ts",
+      "symbol": "healthCheck",
+      "ownership": "compiler",
+      "hash": "sha256:433a3bf09015b8707c008312f4d176bf0b2a37e63cf81e8916ca4289c126d8e8",
+      "specHash": "sha256:57d57f85c32c2dd8569cc97f0b4534cc01321d63ae4d45e4b397cce053337794",
+      "fingerprint": "sha256:29391ef709d12108bcf2beec3eeefe1b3e33ee5f67c8031794ee687156316381",
+      "provenance": {
+        "source": "generated",
+        "backend": "qwen35",
+        "model": "qwen3.5-9b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen3.5-9b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 2,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:6/6"
+        ],
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
+        },
+        "tokens": {
+          "prompt": 2782,
+          "completion": 585
+        },
+        "at": "2026-11-04T22:21:22.637Z"
+      }
+    },
     "lb.failover": {
       "kind": "function",
       "parent": null,
