@@ -44,3 +44,14 @@ repair attempt; fixed by #57, which made sum-of-multiples pass 13/13 on all thre
 An earlier attempt at this run (not kept) was invalid: run from a worktree without `bench/node_modules` (held-out
 runner could not load), and llama-server died with SIGBUS in a CPU mul_mat (likely an mmap page fault on the HDD).
 `run-dev8.sh` now restarts the server before each seed if it is down.
+
+## 5. Rerun with #57 (redeclared parameter -> assignment), `../2026-11-04-dev-q5-param` (branch fix/param-redeclare 59a8aab)
+
+| | A | D | D - A (paired) |
+|---|---|---|---|
+| accepted-and-correct | 41% [18, 65] | 45% [22, 69] | +3.9 [-13.7, +21.6] |
+| held-out tests (accepted) | 56% | 64% | |
+| tokens/task, wall s/task | 1690, 14.8 | 1985, 25.8 | |
+
+A 35% -> 41% with the same seeds and server flags; identical on all three seeds (7/17). A's compile-fail rate per
+attempt fell from 23-30% to 17-21%.
