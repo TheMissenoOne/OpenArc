@@ -1074,7 +1074,12 @@ export function thinExamples(examples: Json[]): string | null {
   const edge = args.some(hasEdge);
   const detail = examples.length < 3 ? `examples:${examples.length}` : edge ? null : "no-edge-case";
   if (!detail || edge) return detail;
-  // the edge values matching the kinds of argument the examples already use, e.g. "no-edge-case; try: \"\", []"
+  const kinds = edgeKinds(examples);
+  return kinds.length ? `${detail}; try: ${kinds.join(", ")}` : detail;
+}
+
+/** The edge values matching the kinds of argument the examples already use, e.g. "no-edge-case; try: \"\", []". */
+function edgeKinds(examples: Json[]): string[] {
   const kinds = new Set<string>();
   const walk = (v: Json): void => {
     if (typeof v === "string") kinds.add('""');
@@ -1082,8 +1087,12 @@ export function thinExamples(examples: Json[]): string | null {
     else if (Array.isArray(v)) (kinds.add("[]"), v.forEach(walk));
     else if (v && typeof v === "object" && !("$fake" in v)) (kinds.add("{}"), Object.values(v).forEach(walk));
   };
-  args.forEach((a) => (Array.isArray(a) ? a.forEach(walk) : walk(a)));
-  return kinds.size ? `${detail}; try: ${[...kinds].join(", ")}` : detail;
+  for (const e of examples) {
+    const a = ((e as { args?: Json }).args ?? []) as Json;
+    if (Array.isArray(a)) a.forEach(walk);
+    else walk(a);
+  }
+  return [...kinds];
 }
 
 /** What graph, inspect and watch show: a compiler-owned region whose spec (or, when known, fingerprint) no longer matches
@@ -2784,11 +2793,13 @@ export const showDisagreement = (d: { name: string; actual?: Json }): string => 
 
 // ───────────────────────────── check --mutants ─────────────────────────────
 
-export const MUTANT_OPS = ["trivial", "boundary", "comparison", "constant", "logical"] as const;
+export const MUTANT_OPS = ["trivial", "boundary", "comparison", "constant", "logical", "guard", "swap"] as const;
 export type MutantOp = (typeof MUTANT_OPS)[number];
 /** One single-change variant of a region's body: `text` replaces the file's [start, end). */
 export interface Mutant { op: MutantOp; line: number; before: string; after: string; start: number; end: number; text: string }
-export interface MutantReport { id: string; skipped?: string; total: number; killed: number; survived: Mutant[]; invalid: number; timeout: number }
+/** survived: no example or test caught it and an input tells it from the original (or none could be tried); `suggest` says
+ *  which. equivalent: it agrees with the original on every oracle input, so it is not scored. */
+export interface MutantReport { id: string; skipped?: string; total: number; killed: number; survived: (Mutant & { suggest: string })[]; equivalent: Mutant[]; invalid: number; timeout: number }
 
 const SWAPS: Record<string, [MutantOp, ts.SyntaxKind][]> = {
   ">=": [["boundary", ts.SyntaxKind.GreaterThanToken], ["comparison", ts.SyntaxKind.LessThanToken]],
@@ -2803,9 +2814,10 @@ const SWAPS: Record<string, [MutantOp, ts.SyntaxKind][]> = {
   "||": [["logical", ts.SyntaxKind.AmpersandAmpersandToken]],
 };
 const UNUSED = new Set([6133, 6138, 6192, 6196, 6198, 6205]); // a trivial body leaves parameters unused: not a type error of the mutant
+const exits = (s: ts.Statement): boolean => ts.isReturnStatement(s) || ts.isThrowStatement(s) || (ts.isBlock(s) && s.statements.length > 0 && exits(s.statements.at(-1)!));
 
 /** Deterministic mutants of function region `r` in its file `sf`: trivial bodies first (the return type's zero value,
- *  the first argument when assignable, a throw), then single operator changes in source order; at most `cap`. */
+ *  the first argument when assignable, a throw), then single changes in source order; at most `cap`. */
 export function mutants(r: RegionInfo, sf: ts.SourceFile, checker: ts.TypeChecker, ops: readonly MutantOp[] = MUTANT_OPS, cap = 40): Mutant[] {
   const text = sf.text, ls = linesOf(text);
   const b = ls.findIndex((l) => l.trim() === `// @openarc:begin ${r.id}`);
@@ -2842,10 +2854,14 @@ export function mutants(r: RegionInfo, sf: ts.SourceFile, checker: ts.TypeChecke
     for (const s of [...[...zeros, ...echo].map((v) => `return ${v};`), 'throw new Error("openarc mutant");'])
       out.push({ op: "trivial", line: lineAt(lo), before: "body", after: s, start: lo, end: hi, text: cf ? `${r.indent}${s}\n` : `{ ${s} }` });
   }
-  const at = (op: MutantOp, node: ts.Node, start: number, end: number, rep: string) => {
+  const at = (op: MutantOp, node: ts.Node, start: number, end: number, rep: string, shown?: string) => {
     if (!ops.includes(op)) return;
     const s = node.getStart();
-    out.push({ op, line: lineAt(start), before: show(text.slice(s, node.end)), after: show(text.slice(s, start) + rep + text.slice(end, node.end)), start, end, text: rep });
+    out.push({ op, line: lineAt(start), before: show(text.slice(s, node.end)), after: shown ?? show(text.slice(s, start) + rep + text.slice(end, node.end)), start, end, text: rep });
+  };
+  const sameType = (a: ts.Expression, b: ts.Expression) => {
+    const [x, y] = [a, b].map((e) => checker.getBaseTypeOfLiteralType(checker.getTypeAtLocation(e))) as [ts.Type, ts.Type];
+    return checker.isTypeAssignableTo(x, y) && checker.isTypeAssignableTo(y, x);
   };
   const walk = (n: ts.Node): void => {
     if (n.end <= lo || n.getStart() >= hi || ts.isTypeNode(n)) return;
@@ -2853,6 +2869,11 @@ export function mutants(r: RegionInfo, sf: ts.SourceFile, checker: ts.TypeChecke
       if (ts.isBinaryExpression(n)) for (const [op, kind] of SWAPS[n.operatorToken.getText()] ?? []) at(op, n, n.operatorToken.getStart(), n.operatorToken.end, ts.tokenToString(kind)!);
       else if (ts.isNumericLiteral(n)) for (const d of [1, -1]) at("constant", ts.isBinaryExpression(n.parent) ? n.parent : n, n.getStart(), n.end, String(Number(n.text) + d)); // shown with its comparison
       else if (ts.isPrefixUnaryExpression(n) && n.operator === ts.SyntaxKind.ExclamationToken) at("logical", n, n.getStart(), n.operand.getStart(), "");
+      else if (ts.isIfStatement(n) && !n.elseStatement && exits(n.thenStatement)) at("guard", n, n.getStart(), n.end, ";", "(guard dropped)"); // ";": it may be the body of an else or a loop
+      else if (ts.isCallExpression(n)) n.arguments.forEach((a, i) => {
+        const b = n.arguments[i + 1];
+        if (b && !ts.isSpreadElement(a) && !ts.isSpreadElement(b) && a.getText() !== b.getText() && sameType(a, b)) at("swap", n, a.getStart(), b.end, b.getText() + text.slice(a.end, b.getStart()) + a.getText());
+      });
     }
     n.forEachChild(walk);
   };
@@ -2861,15 +2882,22 @@ export function mutants(r: RegionInfo, sf: ts.SourceFile, checker: ts.TypeChecke
 }
 
 /** `openarc check <id> --mutants`: an implemented function region whose examples/tests pass (the baseline), then each
- *  mutant through tsc and the same sandbox run. Killed: an example or test fails. No model call; only the stage is written. */
+ *  mutant through tsc and the same sandbox run. Killed: an example or test fails. Each survivor then runs against the
+ *  original on the oracle inputs: no difference is `equivalent`, a difference is its suggested example. No model call;
+ *  only the stage is written. ponytail: "equivalent" is only as good as those inputs (a constant far from the examples'
+ *  values can pass as one); static proof or line coverage would be the upgrade. */
 export async function mutantCheck(ports: Ports, req: CompileRequest, p: Project, id: string, ops: readonly MutantOp[] = MUTANT_OPS): Promise<MutantReport> {
-  const rep: MutantReport = { id, total: 0, killed: 0, survived: [], invalid: 0, timeout: 0 };
+  const rep: MutantReport = { id, total: 0, killed: 0, survived: [], equivalent: [], invalid: 0, timeout: 0 };
   const skip = (why: string): MutantReport => ({ ...rep, skipped: why });
   const r = p.regions.find((x) => x.id === id);
   if (!r || r.kind !== "function") return skip("no function region");
   if (r.pending || (r.state !== "compiler" && r.state !== "developer")) return skip(`not implemented (${r.pending ? "pending" : r.state})`);
   if (!hasChecks(p.specs.get(r.root))) return skip("no examples or tests");
   const base = p.files.get(r.file)!;
+  // the original runs from a twin next to the file, so its imports resolve. Not for a UI region (the harness ignores the
+  // oracle) or a spec in another file (the twin would not hold the symbol).
+  const inputs = r.spec.ui || r.spec.file !== r.file ? [] : oracleInputs(r.spec.examples);
+  const twin = posix.join(posix.dirname(r.file), `__openarc_original_${posix.basename(r.file)}`);
   const run = async (text: string): Promise<string> => {
     const overlay = new Map(p.files).set(r.file, text);
     const prog = makeProgram(p, overlay, p.program);
@@ -2885,10 +2913,15 @@ export async function mutantCheck(ports: Ports, req: CompileRequest, p: Project,
     if (baseline !== "survived") return skip(`baseline does not pass: ${baseline === "killed" ? "an example or test fails" : baseline}`);
     const sf = p.program!.getSourceFile(abs(p, r.file))!;
     for (const m of mutants(r, sf, p.program!.getTypeChecker(), ops)) {
-      const v = await run(base.slice(0, m.start) + m.text + base.slice(m.end));
+      const mutated = base.slice(0, m.start) + m.text + base.slice(m.end);
+      const v = await run(mutated);
       rep.total++;
-      if (v === "survived") rep.survived.push(m);
-      else if (v === "killed" || v === "invalid" || v === "timeout") rep[v]++;
+      if (v === "survived") {
+        // no input beyond the examples (which pass by construction): agreeing would say nothing
+        const d = inputs.length > r.spec.examples.length ? await runSandbox(ports, req, p, r.id, new Map(p.files).set(r.file, mutated).set(twin, base), { module: twin, export: r.spec.symbol, inputs }) : undefined;
+        if (d?.complete && !d.error && !d.failed.length) rep.equivalent.push(m);
+        else rep.survived.push({ ...m, suggest: suggestion(d?.failed.find((f) => f.actual)?.actual, r.spec.examples, m.line) });
+      } else if (v === "killed" || v === "invalid" || v === "timeout") rep[v]++;
       else return skip(v);
     }
     return rep;
@@ -2898,12 +2931,23 @@ export async function mutantCheck(ports: Ports, req: CompileRequest, p: Project,
   }
 }
 
-/** The report: one summary line per region, then one line per surviving mutant. */
+/** A survivor's next example: the input where it differs from the original, else W044's edge values, else the line to reach. */
+function suggestion(actual: Json | undefined, examples: Json[], line: number): string {
+  if (actual) {
+    const a = actual as { args?: Json; got?: Json; oracle?: Json };
+    return `args ${showValue(a.args)} (original ${showValue(a.oracle)}, mutant ${showValue(a.got)})`;
+  }
+  return edgeKinds(examples).join(", ") || `an input or test that reaches line ${line}`;
+}
+
+/** The report: one summary line per region, then one line per surviving and per likely equivalent mutant.
+ *  Score: killed / (killed + survived); invalid, timeout and equivalent are not scored. */
 export function mutantLines(m: MutantReport): string[] {
   if (m.skipped) return [`mutants ${m.id}: skipped (${m.skipped})`];
   const scored = m.killed + m.survived.length;
   return [
-    `mutants ${m.id}: killed ${m.killed}/${scored} (${scored ? Math.round((100 * m.killed) / scored) : 100}%), survived ${m.survived.length}, invalid ${m.invalid}, timeout ${m.timeout}`,
-    ...m.survived.map((s) => `survived ${m.id} line ${s.line}: ${s.before} -> ${s.after}${s.op === "trivial" ? " (the examples pass for a vacuous body)" : ""}`),
+    `mutants ${m.id}: killed ${m.killed}/${scored} (${scored ? Math.round((100 * m.killed) / scored) : 100}%), survived ${m.survived.length}, equivalent ${m.equivalent.length}, invalid ${m.invalid}, timeout ${m.timeout}`,
+    ...m.survived.map((s) => `survived ${m.id} line ${s.line}: ${s.before} -> ${s.after}${s.op === "trivial" ? " (the examples pass for a vacuous body)" : ""}; try: ${s.suggest}`),
+    ...m.equivalent.map((s) => `equivalent ${m.id} line ${s.line}: ${s.before} -> ${s.after}`),
   ];
 }
