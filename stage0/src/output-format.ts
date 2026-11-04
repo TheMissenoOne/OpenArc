@@ -94,8 +94,14 @@ export function parseCodeOutput(raw: string): ModelOutput {
     if (fences) return bad("no-ts-fence");
     code = text; // ponytail: no fence at all: take the reply as code; prose fails the same guards (syntax, tsc)
   }
+  return liftImports(code);
+}
+
+/** Lift the leading import declarations of a body into `imports` (added to `imports` already given). Also used for
+ *  "json" replies: a model told to use a declared package writes the import line into the body (TS1232, bench/deps). */
+export function liftImports(code: string, given: ImportDecl[] = []): ModelOutput {
   const sf = ts.createSourceFile("reply.ts", code, ts.ScriptTarget.Latest, true);
-  const imports: ImportDecl[] = [];
+  const imports: ImportDecl[] = [...given];
   let end = 0;
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st)) break;

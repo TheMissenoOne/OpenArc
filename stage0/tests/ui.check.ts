@@ -85,6 +85,7 @@ assert.deepStrictEqual(await bad("arc.defineRegion<LoginPageFn>", "arc.defineReg
   assert.match(ctx, /## Structure \(required; checked in the rendered DOM\)\n<Form title="Sign in" onSubmit=\{props\.onLogin\} onSuccess=\{props\.onSuccess\}>\n {2}<Field name="email" type="email" label="Email" required autoComplete="username" \/>/);
   assert.match(ctx, /## What the structure words mean\nForm: a <form>/);
   assert.match(ctx, /## Allowed new imports\nreact\n/);
+  assert.match(ctx, /The spec declares react for this body: import and call it instead of re-implementing what it does\./, "a declared package nothing imports yet is stated as one to use");
   assert.match(ctx, /"script":\[\{"fill":\{"label":"Email","value":"ana@x\.io"\}\}/);
 }
 

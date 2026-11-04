@@ -3,7 +3,7 @@
 // for a small model to regenerate. Regionizing the engine itself is the next self-hosting step.
 import ts from "typescript";
 import type { Json } from "open-arc";
-import type { Candidate, ChildSpan, CompileRequest, Diagnostic, ImportDecl, ManifestView, Ports, RegionState, StagedFile } from "./types.ts";
+import type { Candidate, ChildSpan, CompileRequest, Diagnostic, ImportDecl, ManifestView, ModelOutput, Ports, RegionState, StagedFile } from "./types.ts";
 import type { BackendConfig, ContextLevel, OpenArcConfig } from "./config.ts";
 import { DEFAULT_OUTPUT_RESERVE, hostOf, parseConfig } from "./config.ts";
 import { buildRegionTree } from "./markers.ts";
@@ -14,7 +14,8 @@ import { checkRestrictions } from "./block.ts";
 import { selectTargets } from "./plan.ts";
 import { BATCH_PROMPT_TEMPLATE, PROMPT_TEMPLATE_VERSION, PROMPT_TEMPLATE, renderTemplate, parseOutput } from "./model.ts";
 import { OUTPUT_SCHEMA, STRICT_OUTPUT_SCHEMA, addTokens, baseUrlOf, completeWithUsage, isOllamaCompat, type Tokens } from "./backends.ts";
-import { BATCH_CODE_PROMPT_TEMPLATE, BATCH_CODE_SYSTEM, CODE_PROMPT_TEMPLATE, CODE_PROMPT_TEMPLATE_VERSION, CODE_SYSTEM, codeRules, parseCodeOutput, splitCodeSections } from "./output-format.ts";
+import { BATCH_CODE_PROMPT_TEMPLATE, BATCH_CODE_SYSTEM, CODE_PROMPT_TEMPLATE, CODE_PROMPT_TEMPLATE_VERSION, CODE_SYSTEM, codeRules, liftImports, parseCodeOutput, splitCodeSections } from "./output-format.ts";
+const liftJson = (o: ModelOutput): ModelOutput => (o.ok && /^\s*import[\s{*]/.test(o.body) ? liftImports(o.body, o.imports) : o);
 import { buildArgv, readHarnessOutput } from "./sandbox.ts";
 import { readFileSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -573,7 +574,7 @@ const initialLevel = (p: Project, r: RegionInfo): ContextLevel =>
   Math.max(p.config.regions?.[r.id]?.contextLevel ?? p.config.compilation.context.initialLevel, r.kind === "block" ? 1 : 0) as ContextLevel;
 
 /** stage 0 = default (or per-region) backend, stage 1 = fallback backend */
-function backendFor(p: Project, id: string, stage: 0 | 1): BackendConfig & { name: string } {
+export function backendFor(p: Project, id: string, stage: 0 | 1): BackendConfig & { name: string } {
   const c = p.config.compilation;
   const code = p.specs.get(id); // code-first: `@arc backend|outputFormat` are defaults; openarc.config.json regions[id] wins
   const name = stage === 1 && c.fallbackBackend ? c.fallbackBackend : (p.config.regions?.[id]?.backend ?? code?.backend ?? c.defaultBackend);
@@ -754,13 +755,16 @@ function defaultExportName(sf: ts.SourceFile | undefined): string | undefined {
   return undefined;
 }
 
+/** A default, namespace or non-`type` named binding: `import { type X } from "pkg"` binds no runtime value. */
+const bindsValue = (c: ts.ImportClause): boolean =>
+  !!c.name || !c.namedBindings || ts.isNamespaceImport(c.namedBindings) || c.namedBindings.elements.some((e) => !e.isTypeOnly);
 /** The import declaration most often used for package `spec` across the project (value imports only), or null. */
 function canonicalImport(p: Project, spec: string): string | null {
   const counts = new Map<string, number>();
   for (const rel of p.files.keys()) {
     const sf = p.program?.getSourceFile(abs(p, rel));
     for (const d of sf?.statements.filter(ts.isImportDeclaration) ?? [])
-      if ((d.moduleSpecifier as ts.StringLiteral).text === spec && d.importClause && !d.importClause.isTypeOnly) {
+      if ((d.moduleSpecifier as ts.StringLiteral).text === spec && d.importClause && !d.importClause.isTypeOnly && bindsValue(d.importClause)) {
         const t = d.getText(sf).replace(/\s+/g, " ");
         counts.set(t, (counts.get(t) ?? 0) + 1);
       }
@@ -774,7 +778,11 @@ function canonicalImport(p: Project, spec: string): string | null {
 function allowedImports(p: Project, deps: string[]): string {
   const pkgs = deps.filter((d) => !d.startsWith("."));
   const forms = pkgs.map((d) => canonicalImport(p, d) ?? d);
-  return [deps.join(", ") || "none", ...(forms.length ? ["Use exactly these import forms:", ...forms] : [])].join("\n");
+  // a package dep no file imports yet was declared for this body (e.g. by `deps suggest`): say to use it, or the model
+  // re-implements it with the standard library (bench/deps, issue #50)
+  const fresh = pkgs.filter((d) => !canonicalImport(p, d));
+  return [deps.join(", ") || "none", ...(forms.length ? ["Use exactly these import forms:", ...forms] : []),
+    ...(fresh.length ? [`The spec declares ${fresh.join(", ")} for this body: import and call ${fresh.length > 1 ? "them" : "it"} instead of re-implementing what ${fresh.length > 1 ? "they do" : "it does"}.`] : [])].join("\n");
 }
 
 const RULES = [
@@ -1748,7 +1756,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
         modelCalls++;
       }
       const split = code ? { raw, defaults: new Map<number, string>() } : splitDefaults(raw);
-      const parsed = code ? parseCodeOutput(raw) : r.spec.sketch ? sketch.parseFills(split.raw, r.spec.sketch) : parseOutput(split.raw); // palette: fills
+      const parsed = code ? parseCodeOutput(raw) : r.spec.sketch ? sketch.parseFills(split.raw, r.spec.sketch) : liftJson(parseOutput(split.raw)); // palette: fills
       lap(p, "model", tm);
       const varied = sampling ? ` (retry sampling: temperature ${sampling.temperature}, seed ${sampling.seed})` : "";
       ports.log(`  ${id}: attempt ${attempt} via ${backend.name} (${backend.model}), context L${level} ${contextChars} chars${varied}${batch ? `, batched with ${batch.length - 1} other region${batch.length === 2 ? "" : "s"}` : ""}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
