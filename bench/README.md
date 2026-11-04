@@ -75,7 +75,7 @@ The model never sees held-out tests, in either arm.
 | C | OpenArc, `initialLevel: 2` (full file) |
 | D | baseline: system prompt + one user message with instructions, the typed stub file and the public examples; asks for the complete file in a code block. Each repair appends the reply and the failing public-example output (jest's diff) to the conversation |
 
-OpenArc gets `expandOnFailure: false`, so each config stays at its level (with the default `true`, A would escalate to L1 and L2 on name errors and the levels would blur). `intent` is the exercise's `instructions.md` (+ `instructions.append.md`), paragraphs as an array, prefixed with `Exercise "<name>": implement <fn>.`. Examples are the public tests, with the test name as the example name.
+OpenArc gets `expandOnFailure: false`, so each config stays at its level (with the default `true`, A would escalate to L1 and L2 on name errors and the levels would blur). `intent` is the exercise's `instructions.md` (+ `instructions.append.md`), as one string with line breaks kept, prefixed with `Exercise "<name>": implement <fn>.`. Examples are the public tests, with the test name as the example name.
 
 Same for every arm: the model and server, `temperature 0`, `seed 1`, context 8192, output cap 4096 tokens (from `matrix.json` `backend`), thinking off, 3 attempts. Models: `qwen3.5:9b` (A, B, C, D) and `qwen2.5:7b-instruct-q4_K_M` (A, D).
 
@@ -123,7 +123,7 @@ Why does OpenArc trail the plain prompt? `matrix-ablations.json` holds one arm p
 | arm | what changes (vs `A`, OpenArc L0) | hypothesis |
 |---|---|---|
 | `A`, `D` | controls: OpenArc L0 and the whole-file baseline | |
-| `A-same-info` | intent is ONE string: the full instructions verbatim, line breaks kept, no 2500-char cap, plus the original stub's comments. The default intent is an array of paragraphs that OpenArc joins with spaces, so code blocks (song lyrics, matrices, transpose examples) lose their line structure | requirement loss |
+| `A-same-info` | intent is ONE string: the full instructions verbatim, line breaks kept, no 2500-char cap, plus the original stub's comments. Since 2026-11-04 the default intent also keeps line breaks (before, it was an array of paragraphs OpenArc joined with spaces, so lyrics, matrices and pictures lost their line structure), so this arm now differs only by the cap and the stub comments | requirement loss |
 | `B-oracle` | default intent + `gold/<exercise>.md` (types, built-in signatures, the domain facts the instructions state; written from instructions and stubs only, no solution code, no held-out values) | context selection |
 | `C-sketch` | 0.8.0 sketch per function from `sketches/<exercise>.<fn>.ts`: only structure the stub and instructions imply, holes for the logic; every hole sits on a path the public examples reach (else `OARC-W045` blocks the commit) | generation scope |
 | `D-min` | `OPENARC_MIN_PROMPT=1` in a locally patched 0.8.0 (`patches/min-prompt.patch`): drops the Rules section, empty Effects/Allowed-imports sections, the long equality note of Examples and the template's imports line. Verification is unchanged. Unset, the patched build is byte-for-byte 0.8.0 behaviour, so every arm runs on it | instruction overhead |

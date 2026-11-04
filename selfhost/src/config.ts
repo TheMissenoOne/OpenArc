@@ -139,7 +139,7 @@ export const DEFAULT_CONFIG: OpenArcConfig = {
   version: 1,
   backends: {
     // llama.cpp's llama-server (`llama-server -m <gguf> --port 8080`); model is only a label there
-    local: { provider: "openai", baseUrl: "http://127.0.0.1:8080/v1", model: "qwen2.5-coder-7b", maxContextTokens: 8192 },
+    local: { provider: "openai", baseUrl: "http://127.0.0.1:8080/v1", model: "qwen3.5-9b", maxContextTokens: 8192 },
   },
   compilation: {
     defaultBackend: "local",

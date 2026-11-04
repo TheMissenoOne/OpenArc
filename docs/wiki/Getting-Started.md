@@ -36,7 +36,7 @@ npx openarc init
 
 OpenArc projects are ES modules. Recent npm versions make `npm init -y` write `"type": "commonjs"`, and `tsc` then fails with `TS1295`; that is what `npm pkg set type=module` above fixes. If you skip it, `init` prints a one-line note telling you to run it. It never edits your `package.json` itself.
 
-Plain `init` sets up a local llama.cpp `llama-server` at `http://127.0.0.1:8080/v1` (`qwen2.5-coder-7b`; the name is only a label there). To start with another backend instead, pass a preset, for example `npx openarc init --backend openrouter --model qwen/qwen3-coder` or `npx openarc init --backend ollama` (Ollama, `qwen3.5:9b`). Then `npx openarc backends test` sends one small request and tells you whether the backend works, and why not if it doesn't. See "Connecting providers" in [[Configuration]].
+Plain `init` sets up a local llama.cpp `llama-server` at `http://127.0.0.1:8080/v1` (`qwen3.5-9b`; the name is only a label there. Recommended weights: Qwen3.5-9B Q5_K_M or higher, see [docs/local-llm-setup.md](https://github.com/TheMissenoOne/OpenArc/blob/main/docs/local-llm-setup.md)). To start with another backend instead, pass a preset, for example `npx openarc init --backend openrouter --model qwen/qwen3-coder` or `npx openarc init --backend ollama` (Ollama, `qwen3.5:9b`). Then `npx openarc backends test` sends one small request and tells you whether the backend works, and why not if it doesn't. See "Connecting providers" in [[Configuration]].
 
 ## Your first region
 
@@ -92,7 +92,7 @@ npx openarc compile
 The log looks like this (illustrative: the timings and sizes depend on the model and machine):
 
 ```
-  hello.friendlyGreeter.greet: attempt 1 via local (qwen2.5-coder-7b), context L0 2012 chars, 1.4s
+  hello.friendlyGreeter.greet: attempt 1 via local (qwen3.5-9b), context L0 2012 chars, 1.4s
   hello.friendlyGreeter.greet: ✓ tsc, static, tests:2/2
 done: exit 0 · 1 model call(s) · 2.3s
 ```
