@@ -57,7 +57,7 @@ export interface OpenArcConfig {
     defaultBackend: string;
     fallbackBackend?: string;
     maxAttempts: number;
-    context: { initialLevel: ContextLevel; expandOnFailure: boolean };
+    context: { initialLevel: ContextLevel; expandOnFailure: boolean; relevance?: boolean }; // relevance: experimental, see engine contextSections
     /** "file" (default): a file's pending, independent function regions share ONE first request (engine.batchReply);
      *  each reply is still verified and committed per region, and retries go region by region. "off": one request per region. */
     batch?: "file" | "off";
@@ -197,7 +197,7 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
         fallbackBackend: c.compilation?.fallbackBackend,
         maxAttempts: c.compilation?.maxAttempts ?? 2,
         batch: c.compilation?.batch ?? "file",
-        context: { initialLevel: c.compilation?.context?.initialLevel ?? 0, expandOnFailure: c.compilation?.context?.expandOnFailure ?? true },
+        context: { initialLevel: c.compilation?.context?.initialLevel ?? 0, expandOnFailure: c.compilation?.context?.expandOnFailure ?? true, ...(c.compilation?.context?.relevance ? { relevance: true } : {}) },
       },
     },
   };
