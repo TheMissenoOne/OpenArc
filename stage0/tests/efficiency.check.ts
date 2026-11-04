@@ -10,6 +10,7 @@
 //    "none" sections; the Examples heading keeps only the conventions its examples use; a function region whose file
 //    imports only open-arc doesn't see that import (a 7B called arc.flatten); open regions are unchanged.
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import type { Json } from "open-arc";
 import type { CompileRequest, Ports } from "../src/types.ts";
 import fakePorts from "./fakes/ports.memory.ts";
@@ -240,4 +241,13 @@ console.log("efficiency: ok");
     assert.ok(logs.some((l) => /ef\.inc: tsc errors outside the regions .*no model call/.test(l)), logs.join("\n"));
   }
   console.log("efficiency: spec type errors before the model ok");
+}
+
+// ── a package nothing imports yet whose declarations use `export = X` is shown as a default import (TS2595 otherwise)
+{
+  const root = fileURLToPath(new URL("..", import.meta.url)).replace(/[\\/]$/, "");
+  assert.equal(engine.exportEqualsImport({ root }, "typescript"), 'import ts from "typescript";');
+  assert.equal(engine.exportEqualsImport({ root }, "no-such-package-xyz"), null, "unresolved: no form");
+  assert.equal(engine.exportEqualsImport({ root }, "node:path"), null, "no export = : no form");
+  console.log("efficiency: export = default import form ok");
 }
