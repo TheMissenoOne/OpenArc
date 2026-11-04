@@ -1,0 +1,48 @@
+{
+  "_doc": "Type-constrained decoding (issue #52), dev split, arm A only. Typed server (bench/typed/server.py) on :8091 holds the GPU: stop llama-server first. Run TYPED_OFF=1 for the unconstrained control on the same engine (same out dir suffix -off).",
+  "backend": {
+    "provider": "openai",
+    "baseUrl": "http://127.0.0.1:8091/v1",
+    "maxContextTokens": 8192,
+    "outputReserveTokens": 4096,
+    "openarc": {
+      "outputFormat": "code"
+    },
+    "info": {
+      "label": "typed-llama-cpp-python-vulkan-code",
+      "engine": "bench/typed/server.py (llama-cpp-python, eth-sri/type-constrained-code-generation 3486122)",
+      "quant": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+      "ctx": 8192,
+      "flags": "TYPED_NGL=-1 TYPED_CTX=8192 TYPED_TIMEOUT=300"
+    }
+  },
+  "memory": {
+    "minStartGb": 4,
+    "abortGb": 1.5
+  },
+  "configs": {
+    "A-typed": {
+      "kind": "openarc",
+      "level": 0,
+      "label": "OpenArc L0, code format, type-constrained decoding"
+    }
+  },
+  "runs": [
+    {
+      "model": "qwen2.5-coder-7b",
+      "configs": [
+        "A-typed"
+      ]
+    }
+  ],
+  "exercises": [
+    "acronym",
+    "binary-search",
+    "flatten-array",
+    "food-chain",
+    "relative-distance",
+    "spiral-matrix",
+    "transpose",
+    "wordy"
+  ]
+}
