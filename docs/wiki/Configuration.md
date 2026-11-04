@@ -98,6 +98,7 @@ Export the key in your shell (`export OPENROUTER_API_KEY=...`) and point `compil
 | `backends.*.outputFormat` | how the model returns a body: `"json"` (default) or `"code"`. See [Output format](#output-format) |
 | `compilation.fallbackBackend` | used on the last attempt |
 | `regions.<id>` | per-region `backend`, starting `contextLevel` and `outputFormat` (wins over the backend's) |
+| `traces` | `true` (default `false`; or env `OPENARC_TRACES=1`): append every model attempt to `.openarc/traces.jsonl`, one JSON line with the prompt as sent, the raw reply, the extracted body and the outcome (`verified`, `failed`, ...), for fine-tuning a model on verified outputs. See [[CLI Reference]] |
 | `sandbox.nodeBin` | defaults to the running Node's resolved binary (never a version-manager shim) |
 | `ui.dom` | `"jsdom"` (since 0.8.0): opt into UI regions. Their checks render components in the project's own `jsdom`, `react` and `react-dom` (devDependencies). Without it a UI region is `OARC-E092` (`dom:not-configured`). See "UI specs" in [[Writing Specs]] |
 | `sandbox.isolation` | `"auto"` (default): `bwrap` on Linux when it works, `sandbox-exec` on macOS, else `node` (`OARC-W046`). Or one of `"bwrap"`, `"sandbox-exec"`, `"node"`, `"container"`, `"unsafe-none"`; a tier that isn't available here is `OARC-E092`. `"none"` is invalid: only `"unsafe-none"` turns the sandbox off, with an error-level `OARC-W047` on every run. See [[Safety Model]] |

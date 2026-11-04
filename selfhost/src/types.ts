@@ -147,6 +147,8 @@ export type Command =
 export interface FsPort {
   read(path: string): Promise<string | null>;
   write(path: string, data: string): Promise<void>;
+  /** Optional: append without reading the file back (traces). Absent: callers read + write. */
+  append?(path: string, data: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   remove(path: string): Promise<void>;
   list(dir: string): Promise<string[]>;

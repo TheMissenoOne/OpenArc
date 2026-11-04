@@ -76,6 +76,9 @@ export interface OpenArcConfig {
   /** UI regions (§2.6): the DOM the harness renders components in, from the project's devDependencies. Without it, UI
    *  regions fail with OARC-E092 (dom:not-configured); there is no unverified fallback. */
   ui?: { dom?: "jsdom" };
+  /** Append every model attempt and its outcome to .openarc/traces.jsonl (engine.trace), for fine-tuning. Default off;
+   *  OPENARC_TRACES=1 turns it on too. */
+  traces?: boolean;
   /** `openarc lint` (src/lint.ts): which spec rules run at which severity. Never read by compile. */
   lint?: LintConfig;
 }
@@ -179,6 +182,7 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
   }
   if (c.compilation?.batch !== undefined && !["file", "off"].includes(c.compilation.batch))
     return { config: DEFAULT_CONFIG, error: 'openarc.config.json: compilation.batch must be "file" or "off"' };
+  if (c.traces !== undefined && typeof c.traces !== "boolean") return { config: DEFAULT_CONFIG, error: "openarc.config.json: traces must be true or false" };
   const lint = lintProblem(c.lint);
   if (lint) return { config: DEFAULT_CONFIG, error: `openarc.config.json: lint: ${lint}` };
   for (const [id, r] of Object.entries(c.regions ?? {}))

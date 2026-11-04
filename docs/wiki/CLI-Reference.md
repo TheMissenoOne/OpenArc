@@ -102,6 +102,7 @@ A candidate is `better` when, with it, the region verifies, the body imports it,
 | `.openarc/harness.mjs` | yes | sandbox entry point |
 | `.openarc/sandbox/`, `txn/`, `lock` | no | runtime only (`.openarc/.gitignore`). `lock` holds the PID of its holder; a lock whose holder is gone is removed with a warning |
 | `.openarc/watch-history.jsonl` | no | `openarc watch` dispatch log, last 1000 entries (`.openarc/.gitignore`) |
+| `.openarc/traces.jsonl` | no | only with `"traces": true` or `OPENARC_TRACES=1`: one line per model attempt, `{v: 1, ts, runId, id, file, backend, model, level, attempt, messages: [{role: "system", content}, {role: "user", content}], raw, body, outcome, problems, tokens, compilerVersion}`; `outcome` is `verified`, `provisional`, `unverified`, `failed`, `invalid` or `repeat`; one `runId` per compile (`.openarc/.gitignore`) |
 | `.openarc/attempts/<id>/<n>.json` | no | every failed attempt: body (or the raw invalid output), imports, problems, output format, context level, prompt hash, sampling, tokens (`{prompt, completion}` as the backend reported them: Ollama `prompt_eval_count`/`eval_count`, OpenAI `usage.prompt_tokens`/`completion_tokens`, Anthropic `usage.input_tokens`/`output_tokens`; `null` when it reports none); the last 20 per region (`.openarc/.gitignore`; `openarc init` adds the line to an existing file) |
 
 ## Diagnostics
