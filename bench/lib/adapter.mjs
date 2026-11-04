@@ -12,27 +12,27 @@ export const stubComments = (dataset, ex) =>
 
 /**
  * The spec file. Types are written out by hand in exercises.json. Intent, per arm (matrix config):
- * - default: the instructions split into paragraphs, as an array (OpenArc joins the array with single spaces, so line
- *   breaks inside a paragraph are lost);
+ * - default: ONE string, the header and the (capped) instructions with their line breaks kept. Until 2026-11-04 this
+ *   was an array of paragraphs flattened to single lines, and OpenArc joins an array with spaces (arrays split one long
+ *   text), so pictures, verses and lists arrived as one line: Qwen3.5-9B A 16% vs A-same-info 29% (results/2026-11-03-*);
  * - `intent: "full"` (A-same-info): ONE string, the instructions verbatim as the baseline sees them (line breaks kept),
  *   plus the original stub file's comments;
- * - `gold: true` (B-oracle): the default intent plus bench/gold/<ex>.md as one more string (line breaks kept);
+ * - `gold: true` (B-oracle): the default intent plus bench/gold/<ex>.md;
  * - `sketch: true` (C-sketch): the default intent plus `sketch:` from bench/sketches/<ex>.<fn>.ts.
  */
 export function specSource(dataset, ex, splitInfo, cfg = {}) {
   const e = EXERCISES.functions[ex];
   const text = instructions(dataset, ex);
-  const intro = text.split(/\n\s*\n/).map((p) => p.replace(/\s*\n\s*/g, " ").trim()).filter(Boolean);
   let s = `import * as arc from "open-arc";\n\n${e.types ? e.types + "\n\n" : ""}`;
   for (const [f, t] of Object.entries(e.fns)) {
     const T = f[0].toUpperCase() + f.slice(1) + "Fn";
     const head = `Exercise "${ex}": implement \`${f}\`.`;
-    let intent = [head, ...intro];
+    let intent = `${head}\n\n${text.trim()}`;
     if (cfg.intent === "full") {
       const comments = stubComments(dataset, ex);
       intent = `${head}\n\n${instructions(dataset, ex, { cap: false })}${comments.length ? `\n\nComments in the stub file:\n${comments.join("\n")}` : ""}`;
     }
-    if (cfg.gold) intent.push(readFileSync(join(BENCH, "gold", `${ex}.md`), "utf8").trim());
+    if (cfg.gold) intent += `\n\n${readFileSync(join(BENCH, "gold", `${ex}.md`), "utf8").trim()}`;
     let spec = JSON.stringify({ id: `${camel(ex)}.${f}`, intent, examples: splitInfo.examples[f] }, null, 2);
     if (cfg.sketch && existsSync(sketchFile(ex, f))) spec = spec.replace(/\n\}$/, `,\n  sketch: ${readFileSync(sketchFile(ex, f), "utf8").trim().replace(/\n/g, "\n  ")}\n}`);
     s += `export type ${T} = ${t};\n\n`;

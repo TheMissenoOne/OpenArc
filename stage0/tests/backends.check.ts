@@ -193,7 +193,7 @@ const strictSchema = { ...schemaWith(["from", "names", "default"], { type: ["str
 {
   const { config } = parseConfig(null);
   const b = config.backends[config.compilation.defaultBackend]!;
-  assert.deepStrictEqual([b.provider, b.baseUrl, b.model], ["openai", "http://127.0.0.1:8080/v1", "qwen2.5-coder-7b"]);
+  assert.deepStrictEqual([b.provider, b.baseUrl, b.model], ["openai", "http://127.0.0.1:8080/v1", "qwen3.5-9b"]);
   const { ports, seen } = fake(openaiReply);
   assert.equal(await complete(ports, b, "S", "U", env), OUT);
   assert.deepStrictEqual([seen[0]!.url, seen[0]!.headers?.authorization], ["http://127.0.0.1:8080/v1/chat/completions", undefined]);

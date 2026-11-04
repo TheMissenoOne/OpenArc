@@ -6,7 +6,7 @@ The project chooses its agents, the same way `package.json` chooses dependencies
 {
   "version": 1,
   "backends": {
-    "local": { "provider": "openai", "baseUrl": "http://127.0.0.1:8080/v1", "model": "qwen2.5-coder-7b", "maxContextTokens": 8192 },
+    "local": { "provider": "openai", "baseUrl": "http://127.0.0.1:8080/v1", "model": "qwen3.5-9b", "maxContextTokens": 8192 },
     "big":   { "provider": "ollama", "model": "qwen2.5-coder:14b", "maxContextTokens": 32768 }
   },
   "compilation": {

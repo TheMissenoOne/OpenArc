@@ -74,13 +74,13 @@ Notes:
 
 ```
 /mnt/data/tools/llama.cpp/build-vulkan/bin/llama-server \
-  -m /mnt/data/models/gguf/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -a qwen2.5-coder-7b --host 127.0.0.1 --port 8080 \
-  -ngl 99 -c 16384 -fa on -np 1 --cache-ram 0 --sleep-idle-seconds 900 --jinja --reasoning off --no-webui
+  -m /mnt/data/models/gguf/Qwen3.5-9B-Q5_K_M.gguf -a qwen3.5-9b --host 127.0.0.1 --port 8080 \
+  --fit on -c 16384 -fa on -np 1 --cache-ram 0 --sleep-idle-seconds 900 --jinja --reasoning off --no-webui
 ```
 
 | flag | why |
 |---|---|
-| `-ngl 99` | full offload; 6.1 GiB VRAM at 16k context (measured, qwen2.5-coder 7B; qwen3.5 9B: 6.2) |
+| `--fit on` | offload as many layers as fit (Q5_K_M ran fully on the 8 GB card at 8k context in the dev run; 16k not measured yet); was `-ngl 99`, which fails instead of spilling when VRAM is short. Q4_K_M measured 6.1 GiB at 16k (qwen2.5-coder 7B; qwen3.5 9B: 6.2) |
 | `-c 16384` | twice the context OpenArc used before, still about 1.3 GiB VRAM headroom |
 | `-fa on` | +4% prompt speed on Vulkan |
 | f16 KV (default) | fits at 16k for the 7-9B models; q8_0 costs 1-3% speed. Use `-ctk q8_0 -ctv q8_0` for 12-14B models or contexts above 16k |
@@ -88,7 +88,9 @@ Notes:
 | `--cache-ram 0` | **memory safety**: the default 8 GiB host prompt cache grows per request |
 | `--sleep-idle-seconds 900` | unloads weights and KV after 15 min idle (llama-server's keep_alive); the next request reloads (15-40 s cached, about 2 min from a cold HDD) |
 | `--reasoning off` | turns thinking off server-side for reasoning models (qwen3.5); OpenArc's `local`/`openai` provider sends no thinking switch. Harmless for qwen2.5-coder |
-| models in `/mnt/data/models/gguf/` | `Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf` (recommended), `Seed-Coder-8B-Instruct-Q4_K_M.gguf` (fallback), `Qwen3.5-9B-Q4_K_M.gguf` (a **hard link** to Ollama's qwen3.5:9b blob: no extra disk). `MODEL_KEY=<name> apply.sh` switches |
+| models in `/mnt/data/models/gguf/` | `Qwen3.5-9B-Q5_K_M.gguf` (recommended since 2026-11-04), `Qwen3.5-9B-Q6_K.gguf` (best OpenArc score; a 7.5 GB file, so it may not fully fit next to the desktop at 16k), `Qwen3.5-9B-Q4_K_M.gguf` (a **hard link** to Ollama's qwen3.5:9b blob), `Qwen3.5-9B-Q3_K_M.gguf`, `Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf`, `Seed-Coder-8B-Instruct-Q4_K_M.gguf`/`-Q6_K.gguf`. `MODEL_KEY=<name> apply.sh` switches (and restarts the server) |
+
+**Quantization (dev set, 2026-11-03, `bench/results/2026-11-03-dev-quant`).** OpenArc's accepted-and-correct rate on Qwen3.5-9B rises with weight precision while the whole-file baseline stays flat: Q3_K_M 18%, Q4_K_M 16%, Q5_K_M 29%, Q6_K 35% (baseline 41-49% throughout). Use Q5_K_M or higher when it fits in VRAM; Q5_K_M was also the fastest A arm of the four (15 s/task at 8k context).
 
 ### Memory-safety settings (the OOM earlier today was two models resident)
 
