@@ -1,0 +1,260 @@
+From afe8e64e0eb963e255ae70c622dbc5758a88a617 Mon Sep 17 00:00:00 2001
+From: TheMissenoOne <39657810+TheMissenoOne@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 19:25:27 -0300
+Subject: [PATCH] context: opt-in verified exemplars
+
+compilation.context.exemplars = k adds up to k accepted, verified bodies ranked by shared signature words and calls. Not in the fingerprint; the first section dropped over budget. Refs #10.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VbzjgFRyfySALFX2qtqhpZ
+---
+ bench/matrix-evolve-multi.json      | 23 ++++++++++++++
+ selfhost/src/config.ts              |  4 +--
+ selfhost/src/engine.ts              | 27 +++++++++++++++-
+ stage0/src/config.ts                |  4 +--
+ stage0/src/engine.ts                | 27 +++++++++++++++-
+ stage0/tests/watch-context.check.ts | 49 +++++++++++++++++++++++++++++
+ 6 files changed, 128 insertions(+), 6 deletions(-)
+
+diff --git a/bench/matrix-evolve-multi.json b/bench/matrix-evolve-multi.json
+index f10f136..a03f567 100644
+--- a/bench/matrix-evolve-multi.json
++++ b/bench/matrix-evolve-multi.json
+@@ -82,6 +82,29 @@
+         "previousBody": true
+       },
+       "label": "previous body on spec change"
++    },
++    "Cx": {
++      "kind": "openarc",
++      "context": {
++        "expandOnFailure": true
++      },
++      "label": "control: expand context on failure"
++    },
++    "Ce1": {
++      "kind": "openarc",
++      "context": {
++        "expandOnFailure": true,
++        "exemplars": 1
++      },
++      "label": "1 verified exemplar(s), expand on failure"
++    },
++    "Ce2": {
++      "kind": "openarc",
++      "context": {
++        "expandOnFailure": true,
++        "exemplars": 2
++      },
++      "label": "2 verified exemplar(s), expand on failure"
+     }
+   },
+   "runs": [
+diff --git a/selfhost/src/config.ts b/selfhost/src/config.ts
+index 97cc5a7..78aef03 100644
+--- a/selfhost/src/config.ts
++++ b/selfhost/src/config.ts
+@@ -57,7 +57,7 @@ export interface OpenArcConfig {
+     defaultBackend: string;
+     fallbackBackend?: string;
+     maxAttempts: number;
+-    context: { initialLevel: ContextLevel; expandOnFailure: boolean };
++    context: { initialLevel: ContextLevel; expandOnFailure: boolean; exemplars?: number }; // exemplars: experimental, see engine exemplars()
+     /** "file" (default): a file's pending, independent function regions share ONE first request (engine.batchReply);
+      *  each reply is still verified and committed per region, and retries go region by region. "off": one request per region. */
+     batch?: "file" | "off";
+@@ -197,7 +197,7 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
+         fallbackBackend: c.compilation?.fallbackBackend,
+         maxAttempts: c.compilation?.maxAttempts ?? 2,
+         batch: c.compilation?.batch ?? "file",
+-        context: { initialLevel: c.compilation?.context?.initialLevel ?? 0, expandOnFailure: c.compilation?.context?.expandOnFailure ?? true },
++        context: { initialLevel: c.compilation?.context?.initialLevel ?? 0, expandOnFailure: c.compilation?.context?.expandOnFailure ?? true, ...(c.compilation?.context?.exemplars ? { exemplars: c.compilation.context.exemplars } : {}) },
+       },
+     },
+   };
+diff --git a/selfhost/src/engine.ts b/selfhost/src/engine.ts
+index 02e5b42..192a105 100644
+--- a/selfhost/src/engine.ts
++++ b/selfhost/src/engine.ts
+@@ -966,6 +966,10 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
+     const lines = xs.map((x) => `${x.file} ${x.spec.symbol}: ${x.spec.signature} // intent: ${x.spec.intent.replace(/\s+/g, " ").trim()}`).sort();
+     if (lines.length) sections.push(["Imported regions", lines.join("\n")]);
+   }
++  if (!opts.stable && r.kind === "function") { // compilation.context.exemplars: not in the fingerprint
++    const shown = exemplars(p, r, p.config.compilation.context.exemplars ?? 0);
++    if (shown.length) sections.push([EXEMPLARS_HEADING, shown.join("\n\n")]);
++  }
+   if (level >= 2 && !opts.stable) { // ponytail: holds sibling bodies, so not in the fingerprint
+     // a hidden test in the region's own file stays out of the package here too (SPEC §8.5)
+     let full = p.files.get(r.file)!;
+@@ -983,7 +987,7 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
+     sections[ti] = ["Tests your body must pass (summary: the test source did not fit)", testsPlan.summarySection(cf!.tests)];
+     text = render();
+   }
+-  for (const optional of [`Full file ${r.file}`, "Helpers you may call", `Already in ${r.file} (call these, don't re-implement them)`, "Imports already in the file"]) {
++  for (const optional of [EXEMPLARS_HEADING, `Full file ${r.file}`, "Helpers you may call", `Already in ${r.file} (call these, don't re-implement them)`, "Imports already in the file"]) {
+     if (text.length <= budget) break;
+     const i = sections.findIndex(([h]) => h === optional);
+     if (i >= 0) sections.splice(i, 1);
+@@ -992,6 +996,27 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
+   return { sections, types };
+ }
+ 
++const EXEMPLARS_HEADING = "Verified bodies from this project (other tasks: for style and API use, don't copy them)";
++const sigWords = (r: RegionInfo) => new Set(r.spec.signature.replace(/[\w$]+\??:/g, " ").match(/[A-Za-z_$][\w$]*/g));
++
++/** Up to `k` accepted bodies that passed verification, most shared signature words first, then shared `calls`, then id;
++ *  none without overlap. ponytail: words of the signature text, not the type graph; resolve types if this earns its keep. */
++export function exemplars(p: Project, r: RegionInfo, k: number): string[] {
++  if (k <= 0) return [];
++  const own = sigWords(r), calls = new Set(r.spec.calls ?? []);
++  const verified = (x: RegionInfo) => { // this run's, or the manifest's while the body is still the one it verified (no hand edit since)
++    const m = p.manifest.regions[x.id];
++    const by = (p.provenance.get(x.id) ?? (m?.hash === x.hash ? m.provenance : undefined))?.verifiedBy;
++    return Array.isArray(by) && by.length > 0;
++  };
++  const shared = (x: RegionInfo) => [...sigWords(x)].filter((w) => own.has(w)).length + (x.spec.calls ?? []).filter((c) => calls.has(c)).length;
++  return p.regions
++    .filter((x) => x.kind === "function" && x.id !== r.id && !x.pending && !x.stale && !x.childSpans.length && verified(x) && shared(x) > 0)
++    .sort((a, b) => shared(b) - shared(a) || (a.id < b.id ? -1 : 1))
++    .slice(0, k)
++    .map((x) => `// ${x.spec.symbol}: ${x.spec.signature}\n${x.bodyLines.join("\n")}`);
++}
++
+ function blockScopeTypeRoots(sf: ts.SourceFile, r: RegionInfo): ts.Node[] {
+   const out: ts.Node[] = [];
+   const visit = (n: ts.Node) => {
+diff --git a/stage0/src/config.ts b/stage0/src/config.ts
+index 97cc5a7..78aef03 100644
+--- a/stage0/src/config.ts
++++ b/stage0/src/config.ts
+@@ -57,7 +57,7 @@ export interface OpenArcConfig {
+     defaultBackend: string;
+     fallbackBackend?: string;
+     maxAttempts: number;
+-    context: { initialLevel: ContextLevel; expandOnFailure: boolean };
++    context: { initialLevel: ContextLevel; expandOnFailure: boolean; exemplars?: number }; // exemplars: experimental, see engine exemplars()
+     /** "file" (default): a file's pending, independent function regions share ONE first request (engine.batchReply);
+      *  each reply is still verified and committed per region, and retries go region by region. "off": one request per region. */
+     batch?: "file" | "off";
+@@ -197,7 +197,7 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
+         fallbackBackend: c.compilation?.fallbackBackend,
+         maxAttempts: c.compilation?.maxAttempts ?? 2,
+         batch: c.compilation?.batch ?? "file",
+-        context: { initialLevel: c.compilation?.context?.initialLevel ?? 0, expandOnFailure: c.compilation?.context?.expandOnFailure ?? true },
++        context: { initialLevel: c.compilation?.context?.initialLevel ?? 0, expandOnFailure: c.compilation?.context?.expandOnFailure ?? true, ...(c.compilation?.context?.exemplars ? { exemplars: c.compilation.context.exemplars } : {}) },
+       },
+     },
+   };
+diff --git a/stage0/src/engine.ts b/stage0/src/engine.ts
+index 02e5b42..192a105 100644
+--- a/stage0/src/engine.ts
++++ b/stage0/src/engine.ts
+@@ -966,6 +966,10 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
+     const lines = xs.map((x) => `${x.file} ${x.spec.symbol}: ${x.spec.signature} // intent: ${x.spec.intent.replace(/\s+/g, " ").trim()}`).sort();
+     if (lines.length) sections.push(["Imported regions", lines.join("\n")]);
+   }
++  if (!opts.stable && r.kind === "function") { // compilation.context.exemplars: not in the fingerprint
++    const shown = exemplars(p, r, p.config.compilation.context.exemplars ?? 0);
++    if (shown.length) sections.push([EXEMPLARS_HEADING, shown.join("\n\n")]);
++  }
+   if (level >= 2 && !opts.stable) { // ponytail: holds sibling bodies, so not in the fingerprint
+     // a hidden test in the region's own file stays out of the package here too (SPEC §8.5)
+     let full = p.files.get(r.file)!;
+@@ -983,7 +987,7 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
+     sections[ti] = ["Tests your body must pass (summary: the test source did not fit)", testsPlan.summarySection(cf!.tests)];
+     text = render();
+   }
+-  for (const optional of [`Full file ${r.file}`, "Helpers you may call", `Already in ${r.file} (call these, don't re-implement them)`, "Imports already in the file"]) {
++  for (const optional of [EXEMPLARS_HEADING, `Full file ${r.file}`, "Helpers you may call", `Already in ${r.file} (call these, don't re-implement them)`, "Imports already in the file"]) {
+     if (text.length <= budget) break;
+     const i = sections.findIndex(([h]) => h === optional);
+     if (i >= 0) sections.splice(i, 1);
+@@ -992,6 +996,27 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
+   return { sections, types };
+ }
+ 
++const EXEMPLARS_HEADING = "Verified bodies from this project (other tasks: for style and API use, don't copy them)";
++const sigWords = (r: RegionInfo) => new Set(r.spec.signature.replace(/[\w$]+\??:/g, " ").match(/[A-Za-z_$][\w$]*/g));
++
++/** Up to `k` accepted bodies that passed verification, most shared signature words first, then shared `calls`, then id;
++ *  none without overlap. ponytail: words of the signature text, not the type graph; resolve types if this earns its keep. */
++export function exemplars(p: Project, r: RegionInfo, k: number): string[] {
++  if (k <= 0) return [];
++  const own = sigWords(r), calls = new Set(r.spec.calls ?? []);
++  const verified = (x: RegionInfo) => { // this run's, or the manifest's while the body is still the one it verified (no hand edit since)
++    const m = p.manifest.regions[x.id];
++    const by = (p.provenance.get(x.id) ?? (m?.hash === x.hash ? m.provenance : undefined))?.verifiedBy;
++    return Array.isArray(by) && by.length > 0;
++  };
++  const shared = (x: RegionInfo) => [...sigWords(x)].filter((w) => own.has(w)).length + (x.spec.calls ?? []).filter((c) => calls.has(c)).length;
++  return p.regions
++    .filter((x) => x.kind === "function" && x.id !== r.id && !x.pending && !x.stale && !x.childSpans.length && verified(x) && shared(x) > 0)
++    .sort((a, b) => shared(b) - shared(a) || (a.id < b.id ? -1 : 1))
++    .slice(0, k)
++    .map((x) => `// ${x.spec.symbol}: ${x.spec.signature}\n${x.bodyLines.join("\n")}`);
++}
++
+ function blockScopeTypeRoots(sf: ts.SourceFile, r: RegionInfo): ts.Node[] {
+   const out: ts.Node[] = [];
+   const visit = (n: ts.Node) => {
+diff --git a/stage0/tests/watch-context.check.ts b/stage0/tests/watch-context.check.ts
+index 3bea532..6ba5c9c 100644
+--- a/stage0/tests/watch-context.check.ts
++++ b/stage0/tests/watch-context.check.ts
+@@ -78,3 +78,52 @@ const caller = async (text: string) => {
+   assert.notEqual(edited.fingerprint, pending.fingerprint, "the callee's intent is part of the caller's fingerprint");
+ }
+ console.log("watch-context: .tsx queued, reused analyses see edits, pending siblings by signature ok");
++
++// ── 5. compilation.context.exemplars: an accepted body sharing signature types is shown; a pending or unrelated one is not
++{
++  const code = [
++    'import * as arc from "open-arc";',
++    "type Done = (xs: number[]) => number;",
++    "type Open = (ys: number[]) => number;",
++    "type Text = (t: string) => string;",
++    "type Main = (zs: number[]) => number;",
++    'export const doneSpec = arc.defineRegion<Done>({ id: "x.done", intent: "sum" });',
++    'export const openSpec = arc.defineRegion<Open>({ id: "x.open", intent: "max" });',
++    'export const textSpec = arc.defineRegion<Text>({ id: "x.text", intent: "trim" });',
++    'export const mainSpec = arc.defineRegion<Main>({ id: "x.main", intent: "min" });',
++    "// @openarc:begin x.done",
++    "export const done: Done = (xs) => { return xs.reduce((a, b) => a + b, 0); };",
++    "// @openarc:end x.done",
++    "// @openarc:begin x.open",
++    'export const open: Open = (ys) => arc.todo("x.open");',
++    "// @openarc:end x.open",
++    "// @openarc:begin x.text",
++    "export const text: Text = (t) => { return t.trim(); };",
++    "// @openarc:end x.text",
++    "// @openarc:begin x.main",
++    'export const main: Main = (zs) => arc.todo("x.main");',
++    "// @openarc:end x.main",
++    "",
++  ].join("\n");
++  const fake = fakePorts({ files: { "src/x.ts": code } }).instance;
++  const p = await engine.parse(fake, req, []);
++  await engine.analyze(fake, req, p, [], { offline: true });
++  const r = p.regions.find((x) => x.id === "x.main")!;
++  const b = p.config.backends.local!;
++  for (const id of ["x.done", "x.text"]) p.provenance.set(id, { source: "generated", verifiedBy: ["tsc"] } as never);
++  assert.deepEqual(engine.exemplars(p, r, 0), [], "off by default");
++  const stable = engine.buildContext(p, r, 0, b, { stable: true });
++  p.config.compilation.context.exemplars = 2;
++  const shown = engine.exemplars(p, r, 2);
++  assert.equal(shown.length, 1, `only the accepted, overlapping body: ${shown.join("|")}`);
++  assert.ok(shown[0]!.includes("xs.reduce"));
++  assert.ok(engine.buildContext(p, r, 0, b).includes("xs.reduce"), "it reaches the prompt");
++  assert.equal(engine.buildContext(p, r, 0, b, { stable: true }), stable, "fingerprint input unchanged");
++  p.provenance.delete("x.done");
++  assert.deepEqual(engine.exemplars(p, r, 2), [], "an unverified body is not shown");
++  const done = p.regions.find((x) => x.id === "x.done")!;
++  p.manifest.regions["x.done"] = { hash: done.hash, provenance: { verifiedBy: ["tsc"] } } as never;
++  assert.equal(engine.exemplars(p, r, 2).length, 1, "a body verified in an earlier run counts");
++  p.manifest.regions["x.done"] = { hash: "edited", provenance: { verifiedBy: ["tsc"] } } as never;
++  assert.deepEqual(engine.exemplars(p, r, 2), [], "not after a hand edit");
++}
+-- 
+2.56.0
+
