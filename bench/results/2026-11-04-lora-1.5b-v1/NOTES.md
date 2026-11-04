@@ -34,3 +34,16 @@ Reading
 Checks
 - The untuned arm reproduced an earlier run from the same day exactly (A 4/51, D 6/51, identical failure counts), so these runs are deterministic at temperature 0 and the two arms differ only in the adapter.
 - More seeds of the same pool would add little training data for the same reason: first attempts repeat. More data needs more tasks or sampled attempts.
+
+## evolve-multi (arm A, 3 seeds, same adapter)
+
+Four files over 9 steps; `evolve-multi/` holds the raw rows. No step had a backend error.
+
+| Model | Tokens | Correct function-steps | Final functions passing | Final held-out |
+|---|---|---|---|---|
+| Untuned 1.5B | 29,230 | 5.0 | 1.0/9 | 8.0/80 |
+| LoRA v1 | 26,862 | 1.7 | 0.3/9 | 14.0/80 |
+
+The paired difference is -3.3 correct function-steps [-10.0, 0.0], so no gain, and if anything a loss. Tokens fell 8%. Held-out passes rose, but the adapter passed fewer functions completely: it gets partway on more functions (flatten-array 2/3, transpose 4/9) and loses spiral-matrix on 2 of 3 seeds. Only one function separates the arms, and at most temperature-0 repeats between seeds, so this is thin evidence either way.
+
+Together with the dev split, v1 improves compliance on single functions and shows no lift on correctness. It isn't worth shipping as is.
