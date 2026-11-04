@@ -121,12 +121,15 @@ async function compile(maxAttempts: number, bodies: string[]) {
     [`return function (n: number) { return 1; };`, "return 1;"],
     [`(n: number) => {\n  return 1;\n}`, "return 1;"],
     [`return ((n: number) => 1);`, "return 1;"],
+    [`export ${helper}\nreturn (n: number) => animals[n]!;`, `${helper}\nreturn animals[n]!;`], // export dropped, as in unwrapOwn
   ];
   for (const [reply, want] of returned) for (const r of [reply, fence(reply)]) assert.equal(engine.unwrapBody(r, "function", false, self), want, r);
   // left alone: other parameters, an earlier return, not the last statement, a block region
   for (const r of [`return (k: number) => 1;`, `return (n: number, m: number) => 1;`, `if (n < 0) return () => 0;\nreturn (n: number) => 1;`, `return (n: number) => 1;\nconst x = 1;`])
     assert.equal(engine.unwrapBody(r, "function", false, self), r, r);
   assert.equal(engine.unwrapBody(`return (n: number) => 1;`, "block", false, self), `return (n: number) => 1;`);
+  // a region whose own result is a function: the returned arrow IS the answer
+  assert.equal(engine.unwrapBody(`return (n: number) => n + 1;`, "function", false, { ...self, returnsFn: true }), `return (n: number) => n + 1;`);
   // end to end: helpers + the whole function compiles on attempt 1 (was TS2322 "(n: number) => void")
   const { res, sent, snap } = await compile(3, ["const ONE = 1;\nexport const inc: Inc = (n) => {\n  return n + ONE;\n};"]);
   assert.equal(res.exit, 0, JSON.stringify(res.diagnostics));

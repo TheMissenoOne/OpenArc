@@ -61,6 +61,7 @@ export interface SpecInfo {
   signature: string; // printed call signature, e.g. "(id: string) => boolean"
   params: string[];
   isAsync: boolean;
+  returnsFn?: boolean; // the result is itself callable: a returned arrow is the answer, never unwrapped
   typeNode?: ts.TypeNode;
   sketch?: sketch.SketchInfo; // palette: the body as typed code with holes (§3.7)
   ui?: ui.UiInfo; // palette: the component's structure, read from a *.spec.tsx file (§2.6)
@@ -323,7 +324,7 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: "calls must be an array of strings" }));
           continue;
         }
-        let signature = "", params: string[] = [], isAsync = false, typeText = "", typeNode: ts.TypeNode | undefined;
+        let signature = "", params: string[] = [], isAsync = false, returnsFn = false, typeText = "", typeNode: ts.TypeNode | undefined;
         if (kind === "function") {
           typeNode = init.typeArguments?.[0];
           const sigs = typeNode ? checker.getTypeFromTypeNode(typeNode).getCallSignatures() : [];
@@ -336,6 +337,7 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           signature = checker.signatureToString(sig, undefined, ts.TypeFormatFlags.NoTruncation);
           params = sig.getParameters().map((s) => s.name);
           isAsync = checker.typeToString(sig.getReturnType()).startsWith("Promise<");
+          returnsFn = sig.getReturnType().getCallSignatures().length > 0;
           if (literal.refine === "next") diagnostics.push(err("OARC-E041", { id, file: rel }));
         }
         let sk: sketch.SketchInfo | undefined; // palette: a sketch fixes the parameter names and joins the spec hash
@@ -373,7 +375,7 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           examples: (literal.examples as Json[] | undefined) ?? [],
           intent: intentText(literal.intent),
           ...(Array.isArray(literal.calls) ? { calls: literal.calls as string[] } : {}),
-          typeText, signature, params, isAsync, typeNode, ...(sk ? { sketch: sk } : {}), ...(u ? { ui: u } : {}),
+          typeText, signature, params, isAsync, returnsFn, typeNode, ...(sk ? { sketch: sk } : {}), ...(u ? { ui: u } : {}),
         });
       }
     }
@@ -1082,15 +1084,16 @@ const sameParams = (fn: ts.FunctionLikeDeclaration, sf: ts.SourceFile, params: s
 /** A reply whose last statement returns (or just is) a function with the region's own parameters, e.g. helpers then
  *  `return (start, end) => {...};`: the model wrote the function, not its body (Seed-Coder, dev bench 2026-11-03).
  *  The helpers followed by that function's body. null when another statement already returns.
- *  ponytail: syntactic; a region whose result is a function taking the same parameter names would be unwrapped too. */
-function unwrapReturned(sf: ts.SourceFile, self: { params: string[] }): string | null {
+ *  Skipped when the region's own result is a function (`self.returnsFn`): then the returned arrow is the answer. */
+function unwrapReturned(sf: ts.SourceFile, self: { params: string[]; returnsFn?: boolean }): string | null {
+  if (self.returnsFn) return null;
   const last = sf.statements.at(-1);
   let e = last && (ts.isReturnStatement(last) || ts.isExpressionStatement(last)) ? last.expression : undefined;
   while (e && ts.isParenthesizedExpression(e)) e = e.expression;
   if (!e || !(ts.isArrowFunction(e) || ts.isFunctionExpression(e)) || !sameParams(e, sf, self.params)) return null;
-  const rest = sf.statements.slice(0, -1);
+  const rest = sf.statements.slice(0, -1).filter((st) => !ts.isExportAssignment(st) && !ts.isExportDeclaration(st)); // `export default f;`, `export { f };`
   if (rest.some(returns)) return null;
-  return [...rest.map((st) => st.getText(sf)), bodyText(e, sf)].join("\n");
+  return [...rest.map((st) => st.getText(sf).replace(/^export\s+(default\s+)?/, "")), bodyText(e, sf)].join("\n");
 }
 
 /** A reply of helper statements plus the region's own declaration (same name, same parameter names), e.g.
@@ -1108,7 +1111,7 @@ function unwrapOwn(sf: ts.SourceFile, self: { name: string; params: string[] }):
 
 /** Normalise model output (F13): strip fences; unwrap a whole function when only a body was asked for. With `self`
  *  (the region's own name and parameter names), also a whole declaration of it that follows helper statements. */
-export function unwrapBody(body: string, kind: "function" | "block", tsx = false, self?: { name: string; params: string[] }): string {
+export function unwrapBody(body: string, kind: "function" | "block", tsx = false, self?: { name: string; params: string[]; returnsFn?: boolean }): string {
   let b = body.trim().replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/, "").trim();
   if (kind !== "function") return b;
   const sf = ts.createSourceFile(tsx ? "b.tsx" : "b.ts", b, ts.ScriptTarget.Latest, true);
@@ -1765,7 +1768,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       imports = parsed.imports.map((im, i) => (split.defaults.has(i) ? { ...im, default: split.defaults.get(i)! } : im));
     }
     const tsx = r.file.endsWith(".tsx"); // palette: UI components are parsed as TSX
-    body = unwrapBody(body, r.kind, tsx, { name: r.spec.symbol, params: r.spec.params });
+    body = unwrapBody(body, r.kind, tsx, { name: r.spec.symbol, params: r.spec.params, returnsFn: r.spec.returnsFn });
     const clean = stripMarkerComments(body, tsx);
     if (clean.stripped) {
       ports.log(`  ${id}: stripped ${clean.stripped} comment${clean.stripped === 1 ? "" : "s"} mentioning @openarc: (markers belong to the compiler)`);
