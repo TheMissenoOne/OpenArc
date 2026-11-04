@@ -44,6 +44,6 @@ Four files over 9 steps; `evolve-multi/` holds the raw rows. No step had a backe
 | Untuned 1.5B | 29,230 | 5.0 | 1.0/9 | 8.0/80 |
 | LoRA v1 | 26,862 | 1.7 | 0.3/9 | 14.0/80 |
 
-The paired difference is -3.3 correct function-steps [-10.0, 0.0], so no gain, and if anything a loss. Tokens fell 8%. Held-out passes rose, but the adapter passed fewer functions completely: it gets partway on more functions (flatten-array 2/3, transpose 4/9) and loses spiral-matrix on 2 of 3 seeds. Only one function separates the arms, and at most temperature-0 repeats between seeds, so this is thin evidence either way.
+The paired difference is -3.3 correct function-steps [-10.0, 0.0], so no gain, and if anything a loss. Tokens fell 8%. Held-out passes rose, but the adapter passed fewer functions completely: it gets partway on more functions (flatten-array 2/3, transpose 4/9) and loses spiral-matrix on 2 of 3 seeds. One function (spiral-matrix) accounts for the difference, and seeds mostly repeat at temperature 0, so this is thin evidence either way.
 
 Together with the dev split, v1 improves compliance on single functions and shows no lift on correctness. It isn't worth shipping as is.
