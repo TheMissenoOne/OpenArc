@@ -134,6 +134,7 @@ export interface Project {
   codeFirstIds?: Set<string>; // code-first: every code-first region id (pending or with markers), known before extractSpecs
   targets?: string[]; // plan's targets, in order: batchReply looks ahead for a region's file siblings
   batched?: Map<string, BatchShare>; // a batched first reply waiting for its region's generate
+  runId?: string; // traces: one id per compile invocation, so a failed attempt and the verified one can be joined
 }
 
 const err = (code: Diagnostic["code"], extra: Omit<Diagnostic, "code"> = {}): Diagnostic => ({ code, ...extra });
@@ -1537,6 +1538,17 @@ async function saveAttempt(ports: Ports, id: string, record: { [k: string]: Json
   for (const old of ns.slice(0, Math.max(0, ns.length + 1 - ATTEMPTS_KEPT))) await ports.fs.remove(`${dir}/${old}.json`);
 }
 
+export const TRACES = ".openarc/traces.jsonl";
+/** Opt-in training traces (`"traces": true` in the config or OPENARC_TRACES=1): one JSONL line per model attempt, with
+ *  the prompt exactly as sent, the raw reply and its outcome. Only "verified" lines are positive examples. No headers or
+ *  keys: the messages are the prompt text alone. */
+async function trace(ports: Ports, p: Project, record: { [k: string]: Json }): Promise<void> {
+  if (!p.config.traces && process.env.OPENARC_TRACES !== "1") return;
+  const line = JSON.stringify({ v: 1, ts: ports.now(), runId: (p.runId ??= crypto.randomUUID()), ...record, compilerVersion: COMPILER_VERSION });
+  // ponytail: read + rewrite per line (FsPort has no append), like watch-history; add FsPort.append if the file gets big
+  await ports.fs.write(TRACES, ((await ports.fs.read(TRACES)) ?? "") + line + "\n");
+}
+
 /** Sampling of an attempt: the backend's own on attempt 1; every retry varies it (temperature 0.4 on attempt 2, 0.7
  *  after that, seed + attempt - 1), because at temperature 0 a small model mostly repeats its body whatever the repair
  *  prompt says (issue #19: 14 of 24 retries were byte-identical to the previous body). */
@@ -1562,7 +1574,7 @@ const BATCH_JSON_SYSTEM = "You are a compiler backend. You output JSON only: an 
 
 /** A region's part of a batched first request: its slice of the reply ("json": its entry as JSON, "code": its
  *  section), the shared prompt's hash, and its share of the tokens and of the one call (the first region holds it). */
-interface BatchShare { raw: string; tokens: Tokens | null; promptHash: string; ids: string[]; calls: number; contextChars: number }
+interface BatchShare { raw: string; tokens: Tokens | null; promptHash: string; ids: string[]; calls: number; contextChars: number; sent: { system: string; user: string } }
 
 /** Regions that can share a request: plain function regions (no sketch, UI, class member or nested blocks). */
 const batchable = (r: RegionInfo) => r.kind === "function" && !r.spec.sketch && !r.spec.ui && !r.spec.codeFirst?.cls && r.childSpans.length === 0;
@@ -1640,7 +1652,7 @@ async function batchReply(ports: Ports, req: CompileRequest, p: Project, r: Regi
   }
   const n = ids.length;
   const share = (v: number, i: number) => Math.floor(v / n) + (i === 0 ? v % n : 0);
-  const shares = ids.map((_, i): BatchShare => ({ raw: parts[i]!, tokens: tokens && { prompt: share(tokens.prompt, i), completion: share(tokens.completion, i) }, promptHash: sha256Tagged(rendered.text), ids, calls: i === 0 ? 1 : 0, contextChars: context.length }));
+  const shares = ids.map((_, i): BatchShare => ({ raw: parts[i]!, tokens: tokens && { prompt: share(tokens.prompt, i), completion: share(tokens.completion, i) }, promptHash: sha256Tagged(rendered.text), ids, calls: i === 0 ? 1 : 0, contextChars: context.length, sent: { system, user: rendered.text } }));
   p.batched ??= new Map();
   ids.forEach((id, i) => i > 0 && p.batched!.set(id, shares[i]!));
   return shares[0]!;
@@ -1736,6 +1748,10 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     let promptHash: string | null = null;
     let tokens: Tokens | null = null;
     let batch: string[] | null = null; // the region ids that shared this attempt's request
+    let raw = "";
+    let sent: { system: string; user: string } | null = null; // the prompt as sent (null: a cache hit, no model call)
+    const traced = (outcome: string, body: string | null, problems: string[] = []) =>
+      sent && trace(ports, p, { id, file: r.file, backend: backend.name, model: backend.model, level, attempt, messages: [{ role: "system", content: sent.system }, { role: "user", content: sent.user }], raw, body, outcome, problems: problems.map((x) => x.slice(0, 300)), tokens });
     const code = backend.outputFormat === "code";
     if (attempt === 1 && cached) {
       ({ body, imports, sampling = null, tokens: cachedTokens = null } = JSON.parse(cached) as { body: string; imports: ImportDecl[]; sampling?: { temperature: number; seed: number }; tokens?: Tokens });
@@ -1746,7 +1762,6 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       if (digest === null) return backendDown();
       const t0 = Date.now();
       let tm = performance.now(); // "model": the request(s) and parsing the reply; a context built here is "context"
-      let raw: string;
       let contextChars: number;
       let shared: BatchShare | null;
       const cx0 = p.timings?.context ?? 0;
@@ -1758,7 +1773,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       }
       tm += (p.timings?.context ?? 0) - cx0; // batchReply's pre-request work was lapped as "context"
       if (shared) {
-        ({ raw, tokens, promptHash, ids: batch, contextChars } = shared);
+        ({ raw, tokens, promptHash, ids: batch, contextChars, sent } = shared);
         spent = addTokens(spent, tokens);
         modelCalls += shared.calls;
       } else {
@@ -1773,12 +1788,13 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
         if (!rendered.ok) throw new Error(`prompt template is missing ${rendered.missing.join(", ")}`);
         promptHash = sha256Tagged(rendered.text);
         sampling = retrySampling(backend, attempt);
+        sent = { system: r.spec.sketch ? (code ? sketch.SKETCH_CODE_SYSTEM : sketch.SKETCH_SYSTEM) : code ? CODE_SYSTEM : JSON_SYSTEM, user: rendered.text };
         try {
           ({ text: raw, tokens } = await completeWithUsage(
             ports,
             { ...(sampling ? { ...backend, ...sampling } : backend), ...(r.spec.sketch && !code ? { outputSchema: sketch.fillsSchema(r.spec.sketch) } : {}) },
-            r.spec.sketch ? (code ? sketch.SKETCH_CODE_SYSTEM : sketch.SKETCH_SYSTEM) : code ? CODE_SYSTEM : JSON_SYSTEM,
-            rendered.text,
+            sent.system,
+            sent.user,
           ));
           spent = addTokens(spent, tokens);
         } catch (e) {
@@ -1798,6 +1814,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
         ports.log(`  ${id}: ✗ ${problem} (${raw.length} chars${raw.length ? `, ends ${JSON.stringify(raw.slice(-40))}` : ""})`);
         logTimings();
         await saveAttempt(ports, id, { attempt, backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, ...(batch ? { batch } : {}), raw, problems: [problem], timings: p.timings });
+        await traced("invalid", null, [problem]);
         if (repeated(raw)) {
           const stop = afterRepeat();
           if (stop) return stop;
@@ -1819,6 +1836,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     const replyKey = body + (imports.length ? `\n${JSON.stringify(imports)}` : "");
     if (repeated(replyKey)) { // the same reply again: same verdict
       await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, body, imports: imports as unknown as Json, problems: ["repeat of an earlier attempt (not verified again)"], timings: p.timings });
+      await traced("repeat", body);
       logTimings();
       const stop = afterRepeat();
       if (stop) return stop;
@@ -1828,6 +1846,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     logTimings();
     if (!result.ok && result.problems[0]?.startsWith("OARC-E091")) seen.delete(repeatKey(replyKey)); // a timeout is no verdict: an identical retry runs again
     if (result.ok) {
+      await traced(result.holes?.length || result.unverified ? "unverified" : result.verifiedBy.includes("unreached") ? "provisional" : "verified", body);
       if (attempt === 1 && cached) spent = cachedTokens;
       if (result.holes?.length) { // palette: a hole no passing example reaches is unverified (W045): not cached, not committed
         for (const n of result.holes) diagnostics.push(err("OARC-W045", { id, detail: `hole:${id}#${n}` }));
@@ -1852,6 +1871,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     }
     ports.log(`  ${id}: ✗ ${result.problems[0]?.slice(0, 160)}`);
     await saveAttempt(ports, id, { attempt, source: promptHash ? "model" : "cache", backend: backend.name, model: backend.model, outputFormat: backend.outputFormat!, contextLevel: level, promptHash, sampling, tokens, ...(batch ? { batch } : {}), body, imports: imports as unknown as Json, problems: result.problems, timings: p.timings });
+    await traced("failed", body, result.problems);
     previous = { body, problems: result.problems };
     if (result.stop) { // palette: OARC-E100, no fill can fix it
       diagnostics.push(result.stop);

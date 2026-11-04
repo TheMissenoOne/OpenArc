@@ -616,6 +616,8 @@ The fix is in the examples: `compile.run` gained one that compiles a one-region 
 
 Every failed attempt (invalid output, STATIC, or SANDBOX failure, including a cache hit that no longer verifies) is written to `.openarc/attempts/<id>/<n>.json`: `{n, at, attempt, source?, backend, model, outputFormat, contextLevel, promptHash, sampling, tokens, body | raw, imports?, problems}` (`tokens`: §8.4.2). `n` counts up across runs; only the 20 highest are kept per region. `.openarc/.gitignore` lists `attempts/` (`openarc init` adds missing lines to an existing file). Nothing reads these files: they are for the developer.
 
+With `"traces": true` in `openarc.config.json` (default off) or `OPENARC_TRACES=1`, every attempt that called the model also appends one line to `.openarc/traces.jsonl`: `{v: 1, ts, runId, id, file, backend, model, level, attempt, messages: [{role: "system", content}, {role: "user", content}], raw, body, outcome, problems, tokens, compilerVersion}`. `messages` is the prompt exactly as sent (no headers, no keys); `raw` the reply; `body` the extracted body (`null` for invalid output); `outcome` is `verified`, `provisional`, `unverified`, `failed`, `invalid` or `repeat`, with `problems` (each cut to 300 chars). `runId` is one per compile, so a failed attempt and a later verified one of the same region join on `runId` + `id`. A cache hit writes no line. `.openarc/.gitignore` lists `traces.jsonl`. Nothing reads the file: it is training data (keep `verified` lines).
+
 ## 9. Verification
 
 ### 9.1 Tiers
@@ -900,6 +902,7 @@ The configuration sits at the project root, like `package.json`, and selects the
 - `outputFormat`: `"json"` (default) or `"code"`, on a backend or in `regions.<id>` (which wins); §8.4.1. Any other value is `OARC-E051`.
 - `sandbox.isolation`: `"auto"` (default), `"bwrap"`, `"sandbox-exec"`, `"node"`, `"container"` or `"unsafe-none"` (§9.2). `sandbox.containerImage` sets the container tier's image.
 - Code-first (since 0.9.0) needs no configuration: module ids are derived from paths under `src/`, and test files are the `.ts`/`.tsx` files under `src/` and `tests/` (not `tests/fakes/` or `tests/fixtures/`) that call `arc.test`, `arc.law` or `arc.configure`. `regions.<id>` applies to code-first ids as to any other.
+- `traces`: `true` records every model attempt to `.openarc/traces.jsonl` (§8.11); default `false`. Not a boolean is `OARC-E051`.
 - `ui.dom`: `"jsdom"` (since 0.8.0) opts into UI regions (§2.6): their checks render components in the project's own `jsdom` (with `react` and `react-dom`), installed as devDependencies. Any other value is E051.
 
 - `provider` is one of:

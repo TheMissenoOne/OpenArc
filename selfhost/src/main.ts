@@ -455,7 +455,7 @@ async function depsCmd(root: string, ports: Ports, args: string[]): Promise<numb
   const view: RegionView = { id, file: r.file, specFile: r.spec.file, intent: r.spec.intent, signature: r.spec.signature, deps: r.spec.deps, codeFirst: !!r.spec.codeFirst, ownership: r.state };
   const backend = engine.backendFor(project, id, 0); // the region's backend, as compile picks it: the intent goes nowhere else
   const scratch: string[] = [];
-  const NOISE = new Set([".git", ".openarc/sandbox", ".openarc/txn", ".openarc/lock", ".openarc/attempts", ".openarc/watch-history.jsonl"]);
+  const NOISE = new Set([".git", ".openarc/sandbox", ".openarc/txn", ".openarc/lock", ".openarc/attempts", ".openarc/watch-history.jsonl", ".openarc/traces.jsonl"]);
   try {
     const rep = await suggest({
       http: ports.http,
@@ -575,7 +575,7 @@ async function main(argv: string[]): Promise<number> {
       await put(manifestPath, '{\n  "schema": 1,\n  "regions": {}\n}\n');
       await put(".openarc/harness.mjs", HARNESS_ENTRY);
       if (example && (await ports.fs.list("src")).length === 0) for (const [rel, text] of Object.entries(STARTER)) await put(rel, text); // code-first starter
-      const ignore = ["lock", "sandbox/", "txn/", "watch-history.jsonl", "attempts/"];
+      const ignore = ["lock", "sandbox/", "txn/", "watch-history.jsonl", "attempts/", "traces.jsonl"];
       const had = await ports.fs.read(".openarc/.gitignore");
       const missing = ignore.filter((l) => !(had ?? "").split("\n").includes(l));
       if (missing.length) {
