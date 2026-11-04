@@ -786,6 +786,18 @@ function canonicalImport(p: Project, spec: string): string | null {
 
 /** No file imports `spec` yet: if its declarations use `export = X` (typescript does), the only form that compiles is a
  *  default import (TS2595), which a model rarely guesses (selfhost stage 1: `import { ts }`, `import * as ts`). */
+/** A model often names an `export =` package's binding as a named import as well as (or instead of) the default:
+ *  {names:["ts"], default:"ts"} renders `import ts, { ts }` (TS2300), {names:["ts"]} is TS2595 and {names:["default"]}
+ *  is TS1003, none of which a body can fix. Rewrite them to the one default import tsc accepts. */
+export function normalizeImports(p: Pick<Project, "root">, imports: ImportDecl[]): ImportDecl[] {
+  return imports.map((i) => {
+    const eq = /^import (\S+) from/.exec(exportEqualsImport(p, i.from) ?? "")?.[1];
+    const def = i.default ?? (eq && i.names.includes(eq) ? eq : undefined);
+    const names = i.names.filter((n) => n !== "default" && n !== def);
+    return names.length === i.names.length && def === i.default ? i : { ...i, names, ...(def ? { default: def } : {}) };
+  });
+}
+
 export function exportEqualsImport(p: Pick<Project, "root">, spec: string): string | null {
   const dts = ts.resolveModuleName(spec, `${p.root}/index.ts`, compilerOptions(p.root), ts.sys).resolvedModule?.resolvedFileName;
   if (!dts?.endsWith(".d.ts") && !dts?.endsWith(".d.mts") && !dts?.endsWith(".d.cts")) return null;
@@ -1929,6 +1941,7 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
   const allowed = new Set([...r.spec.deps, "open-arc", ...importedSpecifiers(base)]);
   const shownType = (i: ImportDecl) => !i.default && !i.namespace && i.names.length > 0 && i.names.every((n) => r.typeImports.get(n) === i.from);
   const bad = imports.filter((i) => !allowed.has(i.from) && !shownType(i));
+  imports = normalizeImports(p, imports);
   if (bad.length) return fail(bad.map((i) => `OARC-E071 import "${i.from}" is not allowed (allowed: ${[...allowed].join(", ")}, or a type shown as not in scope from its own file)`));
   // Closure types the body names but the file doesn't import: the compiler adds the type-only import (§8.8).
   const autoTypes = [...r.typeImports].filter(([name]) => new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}(?![\\w$])`).test(body));
