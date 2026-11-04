@@ -94,7 +94,7 @@ Code-first is the main way, and every earlier form stays fully supported. They m
 
 | | |
 |---|---|
-| Release | [`open-arc` on npm](https://www.npmjs.com/package/open-arc): 0.10.0 published (`lint`, `compile --timings`, failed-region memory, spec checks before the model, faster watch, llama-server default). Unreleased on main: `openarc deps suggest`, import lifting for JSON bodies, returned-function and redeclared-parameter repairs, Qwen3.5-9B Q5_K_M as the default local model |
+| Release | [`open-arc` on npm](https://www.npmjs.com/package/open-arc): 0.11.0 (`openarc deps suggest`, import lifting for JSON bodies, returned-function and redeclared-parameter repairs, Qwen3.5-9B Q5_K_M as the default local model) |
 | CI | Linux (bwrap), macOS (sandbox-exec), Windows (Node permission model) on Node 25, plus Linux on Node 23 |
 | Benchmark | On the held-out test split (21 exercises, 3 seeds, Qwen3.5-9B Q5_K_M, run once), OpenArc is accepted and correct on 62% against 52% for a plain prompt, using 12% fewer tokens. The difference is not significant (+9.5 points, 95% CI [-7.9, +27.0]); on the dev split it was -3.9, also not significant. Read it as parity on correctness at lower cost. See [`bench/results/2026-11-04-test-q5`](bench/results/2026-11-04-test-q5/NOTES.md) and issue [#10](https://github.com/TheMissenoOne/OpenArc/issues/10) |
 | Self-hosting | 27 of 53 `selfhost/` regions are compiled and verified by OpenArc; the 9 `compile.run` blocks and 16 other regions are pending or stale. Stage 1, then stage 2: issue [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) |
