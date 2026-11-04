@@ -241,3 +241,12 @@ console.log("efficiency: ok");
   }
   console.log("efficiency: spec type errors before the model ok");
 }
+
+// ── a package nothing imports yet whose declarations use `export = X` is shown as a default import (TS2595 otherwise)
+{
+  const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+  assert.equal(engine.exportEqualsImport({ root }, "typescript"), 'import ts from "typescript";');
+  assert.equal(engine.exportEqualsImport({ root }, "no-such-package-xyz"), null, "unresolved: no form");
+  assert.equal(engine.exportEqualsImport({ root }, "node:path"), null, "no export = : no form");
+  console.log("efficiency: export = default import form ok");
+}

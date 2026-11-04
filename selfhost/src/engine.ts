@@ -570,6 +570,16 @@ function blockScope(p: Project, checker: ts.TypeChecker, rel: string, beginLine:
 
 // ───────────────────────────── backends ─────────────────────────────
 
+/** The next context level whose package differs from `level`'s, capped at 1 for sketches and 2 otherwise. */
+function nextLevel(p: Project, r: RegionInfo, level: ContextLevel, backend: BackendConfig): ContextLevel {
+  const max = r.spec.sketch ? 1 : 2;
+  if (level >= max) return level;
+  const now = buildContext(p, r, level, backend);
+  let next = (level + 1) as ContextLevel;
+  while (next < max && buildContext(p, r, next, backend) === now) next = (next + 1) as ContextLevel;
+  return next;
+}
+
 const initialLevel = (p: Project, r: RegionInfo): ContextLevel =>
   Math.max(p.config.regions?.[r.id]?.contextLevel ?? p.config.compilation.context.initialLevel, r.kind === "block" ? 1 : 0) as ContextLevel;
 
@@ -774,10 +784,19 @@ function canonicalImport(p: Project, spec: string): string | null {
   return best;
 }
 
+/** No file imports `spec` yet: if its declarations use `export = X` (typescript does), the only form that compiles is a
+ *  default import (TS2595), which a model rarely guesses (selfhost stage 1: `import { ts }`, `import * as ts`). */
+export function exportEqualsImport(p: Pick<Project, "root">, spec: string): string | null {
+  const dts = ts.resolveModuleName(spec, `${p.root}/index.ts`, compilerOptions(p.root), ts.sys).resolvedModule?.resolvedFileName;
+  if (!dts?.endsWith(".d.ts") && !dts?.endsWith(".d.mts") && !dts?.endsWith(".d.cts")) return null;
+  const name = /^\s*export\s*=\s*([A-Za-z_$][\w$]*)\s*;/m.exec(ts.sys.readFile(dts) ?? "")?.[1];
+  return name ? `import ${name} from "${spec}";` : null;
+}
+
 /** "Allowed new imports": the deps, then the exact import form for each package dep (e.g. typescript needs a default import, TS2595). */
 function allowedImports(p: Project, deps: string[]): string {
   const pkgs = deps.filter((d) => !d.startsWith("."));
-  const forms = pkgs.map((d) => canonicalImport(p, d) ?? d);
+  const forms = pkgs.map((d) => canonicalImport(p, d) ?? exportEqualsImport(p, d) ?? d);
   // a package dep no file imports yet was declared for this body (e.g. by `deps suggest`): say to use it, or the model
   // re-implements it with the standard library (bench/deps, issue #50)
   const fresh = pkgs.filter((d) => !canonicalImport(p, d));
@@ -1840,7 +1859,9 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     }
     // Escalation by failure type: a missing name means a context problem, so expand; otherwise repair at the same level.
     // The last attempt switches to the fallback backend when one is configured.
-    if (c.context.expandOnFailure && result.missingContext && level < (r.spec.sketch ? 1 : 2)) level = (level + 1) as ContextLevel;
+    // A level that adds nothing to this region's context (no types or callers to add) would spend the next attempt on
+    // the same prompt: go on to the first level that differs.
+    if (c.context.expandOnFailure && result.missingContext) level = nextLevel(p, r, level, backend);
   }
   return exhausted(previous?.problems[0] ?? "");
 }
