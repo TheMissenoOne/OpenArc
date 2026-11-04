@@ -175,6 +175,18 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
     assert.equal(typeof args[2], "boolean");
   }
   assert.ok(a.some((args) => (args[0] as Json[]).length !== 2 && (args[0] as Json[]).length !== 3), "the top-level array's length varies (the examples' lengths differ)");
+  assert.deepStrictEqual(engine.oracleInputs(exs), engine.oracleInputs(exs, 60, 1), "the defaults are a fixed count and seed");
+  assert.equal(engine.oracleInputs(exs).length, 60);
+  // lengths vary even when every example shows the same one (a length bug), a tuple parameter's excepted
+  const same = engine.oracleInputs([{ args: [[1, 2, 3], "abc", { k: [1, 2] }] }, { args: [[4, 5, 6], "xyz", { k: [3, 4] }] }]);
+  const lens = (k: number) => new Set(same.map((args) => (args[k] as string | Json[]).length));
+  assert.ok(same.some((args) => (args[0] as Json[]).length === 0 && args[1] === "abc"), "an empty array, the other args as in the example");
+  assert.ok(same.some((args) => args[1] === "" && (args[0] as Json[]).length === 3), "an empty string, the other args as in the example");
+  for (const k of [0, 1]) assert.ok([0, 1].every((n) => lens(k).has(n)) && [...lens(k)].some((n) => n > 3), `arg ${k}: empty, single and longer: ${[...lens(k)]}`);
+  assert.ok(same.every((args) => (args[2] as { k: Json[] }).k.length === 2), "object fields keep their lengths");
+  assert.ok(same.filter((args) => (args[0] as Json[]).length === 3).length > same.length / 2, "most inputs keep the examples' shape");
+  assert.ok(engine.oracleInputs([{ args: [[1, 2], "abc"] }], 60, 1, [0]).every((args) => (args[0] as Json[]).length === 2), "a tuple parameter stays a tuple");
+  assert.deepStrictEqual(engine.oracleInputs([{ args: ["$NaN"] }]), [["$NaN"]], "a value token is not a string to resize");
 
   // the harness side: agree on equal values (with tolerance) and on both throwing
   const sq = (n: number) => { if (n < 0) throw new Error("neg"); return Math.sqrt(n) * Math.sqrt(n); };
@@ -204,6 +216,17 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
   assert.deepStrictEqual([entry.oracle.module, entry.oracle.export, entry.oracle.inputs.length], ["legacy/g.js", "f", 5]);
   assert.ok([...written.keys()].some((f) => f.endsWith("/legacy/g.js")), "the oracle module is staged into the sandbox");
   assert.ok(!Object.keys((o.snapshot() as Snap).files).some((f) => f.startsWith(".openarc/sandbox/")), "the stage is removed");
+  // a tuple parameter is found from the region's type
+  const tf = files["src/g.ts"].replace("(n: number) => number", "(p: [number, number], xs: number[]) => number").replace("{ args: [1], expected: 1 }, { args: [4], expected: 4 }", "{ args: [[1, 2], [3]], expected: 1 }").replace("(n) => n", "(p) => p[0]");
+  const t = fakePorts({ files: { ...files, "src/g.ts": tf }, proc: [{ code: 0, stdout: "", timedOut: false }, { code: 0, stdout: '{"done":0}\n', timedOut: false }] });
+  const tWritten = new Map<string, string>();
+  const tPorts = { ...(t.instance as Ports), fs: { ...t.instance.fs, write: async (f: string, x: string) => (tWritten.set(f, x), t.instance.fs.write(f, x)) } };
+  const tp = await engine.parse(tPorts, req, []);
+  await engine.analyze(tPorts, req, tp, [], { offline: true });
+  await engine.oracleCheck(tPorts, req, tp, "g.f", "legacy/g.js#f", { count: 40 });
+  const tInputs: Json[][] = JSON.parse([...tWritten].find(([f]) => f.endsWith(".openarc/harness-plan.json"))![1])["g.f"].oracle.inputs;
+  assert.ok(tInputs.every((args) => (args[0] as Json[]).length === 2), "[number, number] keeps its length");
+  assert.ok(tInputs.some((args) => (args[1] as Json[]).length === 0), "number[] does not");
   assert.match((await engine.oracleCheck(ports, req, op, "g.f", "../x.js#f")).error!, /inside the project/);
   assert.match((await engine.oracleCheck(ports, req, op, "g.f", "legacy/g.js")).error!, /<module>#<export>/);
 }
