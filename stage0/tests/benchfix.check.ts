@@ -21,7 +21,7 @@ import fakePorts from "./fakes/ports.memory.ts";
 import { run } from "../src/compile.ts";
 import * as engine from "../src/engine.ts";
 import { completeWithUsage } from "../src/backends.ts";
-import { CODE_SYSTEM, parseCodeOutput } from "../src/output-format.ts";
+import { CODE_SYSTEM, liftImports, parseCodeOutput } from "../src/output-format.ts";
 
 const root = process.cwd(); // the stage0 checkout, so "open-arc" and "typescript" resolve for the type checker
 const req: CompileRequest = { root, ids: [], model: { host: "http://h", model: "m", seed: 1, numCtx: 8192 }, sandbox: { nodeBin: "/n/bin/node", nodePrefix: "/n", heapMb: 256, addressSpaceBytes: 2 ** 32, cpuSeconds: 10 } };
@@ -48,6 +48,9 @@ const fence = (code: string, tag = "ts") => "```" + tag + "\n" + code + "\n```";
   assert.deepStrictEqual(ok("<think>maybe ```ts\nreturn 0;\n``` no</think>\nSure:\n" + fence("return 1;", "typescript") + "\ntrailing prose"), { body: "return 1;", imports: [] }, "think blocks are dropped");
   assert.deepStrictEqual(ok(fence('{"a":1}', "json") + "\n" + fence("return 2;", "")), { body: "return 2;", imports: [] }, "the first ts/typescript/untagged fence, not a json one");
   assert.deepStrictEqual(ok("return 3;"), { body: "return 3;", imports: [] }, "no fence at all: the whole reply");
+  // a "json" body with the import line written into it (bench/deps): lifted next to the imports already given
+  assert.deepStrictEqual(liftImports('import { compareVersions } from "compare-versions";\nreturn compareVersions(a, b);', [{ from: "x", names: ["y"] }]),
+    { ok: true, body: "return compareVersions(a, b);", imports: [{ from: "x", names: ["y"] }, { from: "compare-versions", names: ["compareVersions"] }] });
   assert.deepStrictEqual(ok("\r\n" + fence('import half, { twice } from "./lib.ts";\nimport * as lib from "./lib.ts";\nimport type { T } from "./t.ts";\n\nreturn lib.twice(half(n));').replaceAll("\n", "\r\n")), {
     body: "return lib.twice(half(n));",
     imports: [{ from: "./lib.ts", names: ["twice"], default: "half" }, { from: "./lib.ts", names: [], namespace: "lib" }, { from: "./t.ts", names: ["T"] }],

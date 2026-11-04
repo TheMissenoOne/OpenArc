@@ -114,6 +114,22 @@ async function compile(maxAttempts: number, bodies: string[]) {
     `const verse = (n: number) => 1;\nreturn verse(n);`, `const verse = (n: number) => 1;\nif (n > 0) return verse(n);`, `${helper}\nfunction verse(n: number) { return 1; }\nfunction verse(n: number) { return 2; }`])
     assert.equal(engine.unwrapBody(r, "function", false, self), r, r);
   assert.equal(engine.unwrapBody(`${helper}\nconst verse = (n: number) => 1;`, "block", false, self), `${helper}\nconst verse = (n: number) => 1;`);
+  // a returned (or bare) function with the region's own parameters: Seed-Coder's habit (dev bench 2026-11-03, TS2322)
+  const returned: [string, string][] = [
+    [`${helper}\nreturn (n: number) => {\n  return animals[n]!;\n};`, `${helper}\nreturn animals[n]!;`],
+    [`${helper}\nreturn (n) => animals[n]!;`, `${helper}\nreturn animals[n]!;`],
+    [`return function (n: number) { return 1; };`, "return 1;"],
+    [`(n: number) => {\n  return 1;\n}`, "return 1;"],
+    [`return ((n: number) => 1);`, "return 1;"],
+    [`export ${helper}\nreturn (n: number) => animals[n]!;`, `${helper}\nreturn animals[n]!;`], // export dropped, as in unwrapOwn
+  ];
+  for (const [reply, want] of returned) for (const r of [reply, fence(reply)]) assert.equal(engine.unwrapBody(r, "function", false, self), want, r);
+  // left alone: other parameters, an earlier return, not the last statement, a block region
+  for (const r of [`return (k: number) => 1;`, `return (n: number, m: number) => 1;`, `if (n < 0) return () => 0;\nreturn (n: number) => 1;`, `return (n: number) => 1;\nconst x = 1;`])
+    assert.equal(engine.unwrapBody(r, "function", false, self), r, r);
+  assert.equal(engine.unwrapBody(`return (n: number) => 1;`, "block", false, self), `return (n: number) => 1;`);
+  // a region whose own result is a function: the returned arrow IS the answer
+  assert.equal(engine.unwrapBody(`return (n: number) => n + 1;`, "function", false, { ...self, returnsFn: true }), `return (n: number) => n + 1;`);
   // end to end: helpers + the whole function compiles on attempt 1 (was TS2322 "(n: number) => void")
   const { res, sent, snap } = await compile(3, ["const ONE = 1;\nexport const inc: Inc = (n) => {\n  return n + ONE;\n};"]);
   assert.equal(res.exit, 0, JSON.stringify(res.diagnostics));
@@ -168,4 +184,55 @@ console.log("efficiency: ok");
   await run({ ...(fakePorts({ files: project(1), http: [TAGS, chat("return n + 1;")] }).instance as Ports), log: (l: string) => quiet.push(l) }, req);
   assert.ok(!quiet.some((l) => l.includes("timings")), "no timings without the flag");
   console.log("efficiency: timings ok");
+}
+
+// ── failed-region memory: a region that exhausted its attempts is skipped by later compiles until its fingerprint
+//    changes; naming it or --retry-failed retries it (multi-file evolution benchmark)
+{
+  const go = async (files: Record<string, string>, bodies: string[], extra: Partial<CompileRequest> = {}) => {
+    const logs: string[] = [];
+    const fake = fakePorts({ files, http: [TAGS, ...bodies.map(chat)] });
+    const res = await run({ ...(fake.instance as Ports), log: (l: string) => logs.push(l) }, { ...req, keepGoing: true, ...extra });
+    const snap = fake.snapshot() as Snap;
+    return { res, logs, files: snap.files, calls: chats(snap).length };
+  };
+  const first = await go(project(2), ['return "a";', 'return "b";']);
+  assert.equal(first.calls, 2);
+  assert.match(JSON.parse(first.files[".openarc/failed.json"]!)["ef.inc"].detail, /^OARC-E070 TS2322/);
+  const again = await go(first.files, []);
+  assert.equal(again.calls, 0, "same fingerprint: no model call");
+  assert.equal(again.res.exit, 1);
+  assert.match(again.res.diagnostics.find((d) => d.code === "OARC-E082")!.detail!, /^failed before: OARC-E070 TS2322/);
+  assert.ok(again.logs.some((l) => /ef\.inc: failed before with this spec and context; skipped/.test(l)));
+  const named = await go(first.files, ["return n + 1;"], { ids: ["ef.inc"] });
+  assert.equal(named.calls, 1, "naming the region retries it");
+  assert.equal(named.res.exit, 0, JSON.stringify(named.res.diagnostics));
+  assert.deepStrictEqual(JSON.parse(named.files[".openarc/failed.json"]!), {}, "a pass forgets the failure");
+  assert.equal((await go(first.files, ["return n + 1;"], { retryFailed: true })).calls, 1, "--retry-failed retries it");
+  const edited = { ...first.files, "src/ef.ts": first.files["src/ef.ts"]!.replace('"add one"', '"add one to n"') };
+  assert.equal((await go(edited, ["return n + 1;"])).calls, 1, "a spec change retries it");
+  for (const bad of ["null", "[]", "{"]) assert.equal((await go({ ...project(1), ".openarc/failed.json": bad }, ["return n + 1;"])).res.exit, 0, `failed.json ${bad} is ignored`);
+  console.log("efficiency: failed-region memory ok");
+}
+
+// ── a spec that fails tsc on its own (issue #15): OARC-E070 spec:TS<code> before any model call (was 3 calls, each E070)
+{
+  const cases: [string, string, string[]][] = [
+    ["a bad type in the signature", SRC.replace("(n: number)", "(n: Nmber)"), ["spec:TS2552"]],
+    ["a mistyped example", SRC.replace('intent: "add one"', 'intent: "add one", examples: [{ args: ["1"], expected: 2 }]'), ["spec:TS2322"]],
+    ["an import that doesn't resolve (only it is reported)", `import { two } from "./nope.ts";\n${SRC.replace("(n: number)", "(n: typeof two)")}`, ["spec:TS2307"]],
+  ];
+  for (const [what, src, details] of cases) {
+    const logs: string[] = [];
+    const fake = fakePorts({ files: { ...project(3), "src/ef.ts": src }, http: [TAGS, ...["return n + 1;", "return n + 2;", "return n + 3;"].map(chat)] });
+    const res = await run({ ...(fake.instance as Ports), log: (l: string) => logs.push(l) }, { ...req, keepGoing: true });
+    assert.equal(res.exit, 1, what);
+    assert.equal(res.modelCalls, 0, `${what}: no model call`);
+    assert.equal(chats(fake.snapshot() as Snap).length, 0, `${what}: no chat request`);
+    const e070 = res.diagnostics.filter((d) => d.code === "OARC-E070");
+    assert.deepStrictEqual(e070.map((d) => [d.id, d.file, d.detail]), details.map((d) => ["ef.inc", "src/ef.ts", d]), `${what}: ${JSON.stringify(res.diagnostics)}`);
+    assert.ok(!res.diagnostics.some((d) => d.code === "OARC-E082"), `${what}: not charged to the model as exhausted attempts`);
+    assert.ok(logs.some((l) => /ef\.inc: tsc errors outside the regions .*no model call/.test(l)), logs.join("\n"));
+  }
+  console.log("efficiency: spec type errors before the model ok");
 }

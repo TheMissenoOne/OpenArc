@@ -3,7 +3,7 @@
 // for a small model to regenerate. Regionizing the engine itself is the next self-hosting step.
 import ts from "typescript";
 import type { Json } from "open-arc";
-import type { Candidate, ChildSpan, CompileRequest, Diagnostic, ImportDecl, ManifestView, Ports, RegionState, StagedFile } from "./types.ts";
+import type { Candidate, ChildSpan, CompileRequest, Diagnostic, ImportDecl, ManifestView, ModelOutput, Ports, RegionState, StagedFile } from "./types.ts";
 import type { BackendConfig, ContextLevel, OpenArcConfig } from "./config.ts";
 import { DEFAULT_OUTPUT_RESERVE, hostOf, parseConfig } from "./config.ts";
 import { buildRegionTree } from "./markers.ts";
@@ -14,7 +14,8 @@ import { checkRestrictions } from "./block.ts";
 import { selectTargets } from "./plan.ts";
 import { BATCH_PROMPT_TEMPLATE, PROMPT_TEMPLATE_VERSION, PROMPT_TEMPLATE, renderTemplate, parseOutput } from "./model.ts";
 import { OUTPUT_SCHEMA, STRICT_OUTPUT_SCHEMA, addTokens, baseUrlOf, completeWithUsage, isOllamaCompat, type Tokens } from "./backends.ts";
-import { BATCH_CODE_PROMPT_TEMPLATE, BATCH_CODE_SYSTEM, CODE_PROMPT_TEMPLATE, CODE_PROMPT_TEMPLATE_VERSION, CODE_SYSTEM, codeRules, parseCodeOutput, splitCodeSections } from "./output-format.ts";
+import { BATCH_CODE_PROMPT_TEMPLATE, BATCH_CODE_SYSTEM, CODE_PROMPT_TEMPLATE, CODE_PROMPT_TEMPLATE_VERSION, CODE_SYSTEM, codeRules, liftImports, parseCodeOutput, splitCodeSections } from "./output-format.ts";
+const liftJson = (o: ModelOutput): ModelOutput => (o.ok && /^\s*import[\s{*]/.test(o.body) ? liftImports(o.body, o.imports) : o);
 import { buildArgv, readHarnessOutput } from "./sandbox.ts";
 import { readFileSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -61,6 +62,7 @@ export interface SpecInfo {
   signature: string; // printed call signature, e.g. "(id: string) => boolean"
   params: string[];
   isAsync: boolean;
+  returnsFn?: boolean; // the result is itself callable: a returned arrow is the answer, never unwrapped
   typeNode?: ts.TypeNode;
   sketch?: sketch.SketchInfo; // palette: the body as typed code with holes (§3.7)
   ui?: ui.UiInfo; // palette: the component's structure, read from a *.spec.tsx file (§2.6)
@@ -323,7 +325,7 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           diagnostics.push(err("OARC-E010", { id, file: rel, line, detail: "calls must be an array of strings" }));
           continue;
         }
-        let signature = "", params: string[] = [], isAsync = false, typeText = "", typeNode: ts.TypeNode | undefined;
+        let signature = "", params: string[] = [], isAsync = false, returnsFn = false, typeText = "", typeNode: ts.TypeNode | undefined;
         if (kind === "function") {
           typeNode = init.typeArguments?.[0];
           const sigs = typeNode ? checker.getTypeFromTypeNode(typeNode).getCallSignatures() : [];
@@ -336,6 +338,7 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           signature = checker.signatureToString(sig, undefined, ts.TypeFormatFlags.NoTruncation);
           params = sig.getParameters().map((s) => s.name);
           isAsync = checker.typeToString(sig.getReturnType()).startsWith("Promise<");
+          returnsFn = sig.getReturnType().getCallSignatures().length > 0;
           if (literal.refine === "next") diagnostics.push(err("OARC-E041", { id, file: rel }));
         }
         let sk: sketch.SketchInfo | undefined; // palette: a sketch fixes the parameter names and joins the spec hash
@@ -373,7 +376,7 @@ function extractSpecs(p: Project, checker: ts.TypeChecker, diagnostics: Diagnost
           examples: (literal.examples as Json[] | undefined) ?? [],
           intent: intentText(literal.intent),
           ...(Array.isArray(literal.calls) ? { calls: literal.calls as string[] } : {}),
-          typeText, signature, params, isAsync, typeNode, ...(sk ? { sketch: sk } : {}), ...(u ? { ui: u } : {}),
+          typeText, signature, params, isAsync, returnsFn, typeNode, ...(sk ? { sketch: sk } : {}), ...(u ? { ui: u } : {}),
         });
       }
     }
@@ -571,7 +574,7 @@ const initialLevel = (p: Project, r: RegionInfo): ContextLevel =>
   Math.max(p.config.regions?.[r.id]?.contextLevel ?? p.config.compilation.context.initialLevel, r.kind === "block" ? 1 : 0) as ContextLevel;
 
 /** stage 0 = default (or per-region) backend, stage 1 = fallback backend */
-function backendFor(p: Project, id: string, stage: 0 | 1): BackendConfig & { name: string } {
+export function backendFor(p: Project, id: string, stage: 0 | 1): BackendConfig & { name: string } {
   const c = p.config.compilation;
   const code = p.specs.get(id); // code-first: `@arc backend|outputFormat` are defaults; openarc.config.json regions[id] wins
   const name = stage === 1 && c.fallbackBackend ? c.fallbackBackend : (p.config.regions?.[id]?.backend ?? code?.backend ?? c.defaultBackend);
@@ -752,13 +755,16 @@ function defaultExportName(sf: ts.SourceFile | undefined): string | undefined {
   return undefined;
 }
 
+/** A default, namespace or non-`type` named binding: `import { type X } from "pkg"` binds no runtime value. */
+const bindsValue = (c: ts.ImportClause): boolean =>
+  !!c.name || !c.namedBindings || ts.isNamespaceImport(c.namedBindings) || c.namedBindings.elements.some((e) => !e.isTypeOnly);
 /** The import declaration most often used for package `spec` across the project (value imports only), or null. */
 function canonicalImport(p: Project, spec: string): string | null {
   const counts = new Map<string, number>();
   for (const rel of p.files.keys()) {
     const sf = p.program?.getSourceFile(abs(p, rel));
     for (const d of sf?.statements.filter(ts.isImportDeclaration) ?? [])
-      if ((d.moduleSpecifier as ts.StringLiteral).text === spec && d.importClause && !d.importClause.isTypeOnly) {
+      if ((d.moduleSpecifier as ts.StringLiteral).text === spec && d.importClause && !d.importClause.isTypeOnly && bindsValue(d.importClause)) {
         const t = d.getText(sf).replace(/\s+/g, " ");
         counts.set(t, (counts.get(t) ?? 0) + 1);
       }
@@ -772,7 +778,11 @@ function canonicalImport(p: Project, spec: string): string | null {
 function allowedImports(p: Project, deps: string[]): string {
   const pkgs = deps.filter((d) => !d.startsWith("."));
   const forms = pkgs.map((d) => canonicalImport(p, d) ?? d);
-  return [deps.join(", ") || "none", ...(forms.length ? ["Use exactly these import forms:", ...forms] : [])].join("\n");
+  // a package dep no file imports yet was declared for this body (e.g. by `deps suggest`): say to use it, or the model
+  // re-implements it with the standard library (bench/deps, issue #50)
+  const fresh = pkgs.filter((d) => !canonicalImport(p, d));
+  return [deps.join(", ") || "none", ...(forms.length ? ["Use exactly these import forms:", ...forms] : []),
+    ...(fresh.length ? [`The spec declares ${fresh.join(", ")} for this body: import and call ${fresh.length > 1 ? "them" : "it"} instead of re-implementing what ${fresh.length > 1 ? "they do" : "it does"}.`] : [])].join("\n");
 }
 
 const RULES = [
@@ -1072,6 +1082,28 @@ function declaredFunction(st: ts.Statement, name: string): ts.FunctionLikeDeclar
 const bodyText = (fn: ts.FunctionLikeDeclaration, sf: ts.SourceFile): string =>
   ts.isBlock(fn.body!) ? fn.body.statements.map((s) => s.getText(sf)).join("\n") : `return ${fn.body!.getText(sf)};`;
 
+/** A return anywhere in `n` (an `if (…) return verse(n);` too), not counting nested functions' own returns. */
+const returns = (n: ts.Node): boolean => ts.isReturnStatement(n) || (!ts.isFunctionLike(n) && !!ts.forEachChild(n, (c) => returns(c) || undefined));
+
+/** Same parameter count and names as the region's own (whitespace ignored). */
+const sameParams = (fn: ts.FunctionLikeDeclaration, sf: ts.SourceFile, params: string[]): boolean =>
+  fn.parameters.length === params.length && fn.parameters.every((x, i) => x.name.getText(sf).replace(/\s+/g, "") === params[i]!.replace(/\s+/g, ""));
+
+/** A reply whose last statement returns (or just is) a function with the region's own parameters, e.g. helpers then
+ *  `return (start, end) => {...};`: the model wrote the function, not its body (Seed-Coder, dev bench 2026-11-03).
+ *  The helpers followed by that function's body. null when another statement already returns.
+ *  Skipped when the region's own result is a function (`self.returnsFn`): then the returned arrow is the answer. */
+function unwrapReturned(sf: ts.SourceFile, self: { params: string[]; returnsFn?: boolean }): string | null {
+  if (self.returnsFn) return null;
+  const last = sf.statements.at(-1);
+  let e = last && (ts.isReturnStatement(last) || ts.isExpressionStatement(last)) ? last.expression : undefined;
+  while (e && ts.isParenthesizedExpression(e)) e = e.expression;
+  if (!e || !(ts.isArrowFunction(e) || ts.isFunctionExpression(e)) || !sameParams(e, sf, self.params)) return null;
+  const rest = sf.statements.slice(0, -1).filter((st) => !ts.isExportAssignment(st) && !ts.isExportDeclaration(st)); // `export default f;`, `export { f };`
+  if (rest.some(returns)) return null;
+  return [...rest.map((st) => st.getText(sf).replace(/^export\s+(default\s+)?/, "")), bodyText(e, sf)].join("\n");
+}
+
 /** A reply of helper statements plus the region's own declaration (same name, same parameter names), e.g.
  *  `const animals = [...];\nconst verse: VerseFn = (n) => {...};`: the helpers (export dropped) followed by the own
  *  body. null when no single statement declares it, or another statement already returns (then it is a real body). */
@@ -1079,21 +1111,20 @@ function unwrapOwn(sf: ts.SourceFile, self: { name: string; params: string[] }):
   const own = sf.statements.filter((st) => declaredFunction(st, self.name));
   if (own.length !== 1) return null;
   const fn = declaredFunction(own[0]!, self.name)!;
-  const norm = (s: string) => s.replace(/\s+/g, "");
-  if (!fn.body || fn.parameters.length !== self.params.length || fn.parameters.some((x, i) => norm(x.name.getText(sf)) !== norm(self.params[i]!))) return null;
+  if (!fn.body || !sameParams(fn, sf, self.params)) return null;
   const rest = sf.statements.filter((st) => st !== own[0] && !ts.isExportAssignment(st) && !ts.isExportDeclaration(st)); // `export default f;`, `export { f };`
-  // a return anywhere in the rest (an `if (…) return verse(n);` too), not counting nested functions' own returns
-  const returns = (n: ts.Node): boolean => ts.isReturnStatement(n) || (!ts.isFunctionLike(n) && !!ts.forEachChild(n, (c) => returns(c) || undefined));
   if (rest.some(returns)) return null;
   return [...rest.map((st) => st.getText(sf).replace(/^export\s+(default\s+)?/, "")), bodyText(fn, sf)].join("\n");
 }
 
 /** Normalise model output (F13): strip fences; unwrap a whole function when only a body was asked for. With `self`
  *  (the region's own name and parameter names), also a whole declaration of it that follows helper statements. */
-export function unwrapBody(body: string, kind: "function" | "block", tsx = false, self?: { name: string; params: string[] }): string {
+export function unwrapBody(body: string, kind: "function" | "block", tsx = false, self?: { name: string; params: string[]; returnsFn?: boolean }): string {
   let b = body.trim().replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/, "").trim();
   if (kind !== "function") return b;
   const sf = ts.createSourceFile(tsx ? "b.tsx" : "b.ts", b, ts.ScriptTarget.Latest, true);
+  const returned = self ? unwrapReturned(sf, self) : null;
+  if (returned !== null) return returned;
   if (sf.statements.length !== 1) { // code-first: a whole method (`pick(key: string): T { … }`)
     const own = self && sf.statements.length > 1 ? unwrapOwn(sf, self) : null;
     if (own !== null) return own;
@@ -1725,7 +1756,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
         modelCalls++;
       }
       const split = code ? { raw, defaults: new Map<number, string>() } : splitDefaults(raw);
-      const parsed = code ? parseCodeOutput(raw) : r.spec.sketch ? sketch.parseFills(split.raw, r.spec.sketch) : parseOutput(split.raw); // palette: fills
+      const parsed = code ? parseCodeOutput(raw) : r.spec.sketch ? sketch.parseFills(split.raw, r.spec.sketch) : liftJson(parseOutput(split.raw)); // palette: fills
       lap(p, "model", tm);
       const varied = sampling ? ` (retry sampling: temperature ${sampling.temperature}, seed ${sampling.seed})` : "";
       ports.log(`  ${id}: attempt ${attempt} via ${backend.name} (${backend.model}), context L${level} ${contextChars} chars${varied}${batch ? `, batched with ${batch.length - 1} other region${batch.length === 2 ? "" : "s"}` : ""}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
@@ -1745,7 +1776,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
       imports = parsed.imports.map((im, i) => (split.defaults.has(i) ? { ...im, default: split.defaults.get(i)! } : im));
     }
     const tsx = r.file.endsWith(".tsx"); // palette: UI components are parsed as TSX
-    body = unwrapBody(body, r.kind, tsx, { name: r.spec.symbol, params: r.spec.params });
+    body = unwrapBody(body, r.kind, tsx, { name: r.spec.symbol, params: r.spec.params, returnsFn: r.spec.returnsFn });
     const clean = stripMarkerComments(body, tsx);
     if (clean.stripped) {
       ports.log(`  ${id}: stripped ${clean.stripped} comment${clean.stripped === 1 ? "" : "s"} mentioning @openarc: (markers belong to the compiler)`);
