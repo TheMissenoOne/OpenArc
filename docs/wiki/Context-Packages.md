@@ -66,3 +66,7 @@ A code-first region (see [[Code First]]) gets a **Contract** section instead of 
 Most of what a large model contributes on a repo-wide task is *finding* the relevant context. OpenArc does that deterministically from the type graph, which leaves the model only the part it's best at: writing a small, well-specified body.
 
 That's the hypothesis to benchmark, measured as implementations that pass per unit of compute, by model size and context level.
+
+## Relevance ranking (experimental)
+
+`compilation.context.relevance: true` keeps a same-file sibling's signature and types at level 0 only when the spec names it; other siblings are listed by name, and a failed attempt expands to level 1. It is off by default and doesn't enter the fingerprint. Results: `bench/results/2026-11-04-relevance-context`.
