@@ -10,6 +10,9 @@
 //    "none" sections; the Examples heading keeps only the conventions its examples use; a function region whose file
 //    imports only open-arc doesn't see that import (a 7B called arc.flatten); open regions are unchanged.
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Json } from "open-arc";
 import type { CompileRequest, Ports } from "../src/types.ts";
@@ -256,4 +259,45 @@ console.log("efficiency: ok");
   assert.deepEqual(n(["SyntaxKind"]), { from: "typescript", names: ["SyntaxKind"] }, "other named imports stay");
   assert.deepEqual(engine.normalizeImports({ root }, [{ from: "node:path", names: ["join"] }])[0], { from: "node:path", names: ["join"] });
   console.log("efficiency: export = default import form ok");
+}
+
+// ── a package nothing imports yet with ordinary exports shows them (semver-compare, csv-parse in bench/deps)
+{
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "openarc-forms-")));
+  try {
+    const pkg = (name: string, dts: string) => {
+      mkdirSync(join(dir, "node_modules", name), { recursive: true });
+      writeFileSync(join(dir, "node_modules", name, "package.json"), JSON.stringify({ name, types: "index.d.ts" }));
+      writeFileSync(join(dir, "node_modules", name, "index.d.ts"), dts);
+    };
+    pkg("named-lib", 'export declare function compare(a: string, b: string): number;\nexport interface Options { x: number }\nexport type Kind = "a";\nexport * from "./more";\nimport { hidden } from "./more";\nexport { hidden as parse };\n');
+    writeFileSync(join(dir, "node_modules", "named-lib", "more.d.ts"), "export declare const extra: number;\nexport declare const hidden: number;\nexport declare class Thing {}\n");
+    pkg("default-lib", "export default function run(): void;\n");
+    pkg("both-lib", "export default function run(): void;\nexport declare const helper: number;\n");
+    pkg("types-only", "export interface Only { x: number }\n");
+    pkg("huge", Array.from({ length: 52 }, (_, i) => `export declare const n${i}: number;`).join("\n"));
+    assert.equal(engine.exportsImport({ root: dir }, "named-lib"), 'import { compare, parse, extra, hidden, Thing } from "named-lib"; // import only the names you call');
+    assert.equal(engine.exportsImport({ root: dir }, "default-lib"), 'import defaultLib from "default-lib";');
+    assert.equal(engine.exportsImport({ root: dir }, "both-lib"), 'import bothLib, { helper } from "both-lib"; // import only the names you call');
+    assert.equal(engine.exportsImport({ root: dir }, "types-only"), null, "nothing to call");
+    assert.equal(engine.exportsImport({ root: dir }, "no-such-package-xyz"), null, "unresolved");
+    assert.match(engine.exportsImport({ root: dir }, "huge")!, /n49 \} from "huge"; \/\/ import only the names you call; 2 more not listed$/);
+    assert.equal(engine.exportEqualsImport({ root: dir }, "named-lib"), null, "normalizeImports still sees no export =");
+
+    // in the prompt: the form, not the bare specifier; a form the project already uses still wins
+    symlinkSync(join(root, "core"), join(dir, "node_modules", "open-arc"), "junction");
+    const prompt = async (extra: Record<string, string>) => {
+      const src = 'import * as arc from "open-arc";\ntype F = (a: string) => number;\nexport const fSpec = arc.defineRegion<F>({ id: "x.f", intent: "x", deps: ["named-lib"], examples: [{ args: ["a"], expected: 1 }] });\n// @openarc:begin x.f\nexport const f: F = (a) => arc.todo("x.f");\n// @openarc:end x.f\n';
+      const fake = fakePorts({ files: { "src/x.ts": src, ...extra } });
+      const r = { ...req, root: dir };
+      const p = await engine.parse(fake.instance as Ports, r, []);
+      await engine.analyze(fake.instance as Ports, r, p, [], { offline: true });
+      return engine.buildContext(p, p.regions.find((x) => x.id === "x.f")!, 0, p.config.backends.local!);
+    };
+    assert.match(await prompt({}), /Use exactly these import forms:\nimport \{ compare, parse, extra, hidden, Thing \} from "named-lib"; \/\/ import only the names you call\nThe spec declares named-lib for this body/);
+    assert.match(await prompt({ "src/y.ts": 'import { compare } from "named-lib";\nexport const k = compare("a", "b");\n' }), /Use exactly these import forms:\nimport \{ compare \} from "named-lib";\n/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  console.log("efficiency: declared package import form ok");
 }

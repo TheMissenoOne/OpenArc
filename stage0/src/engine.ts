@@ -800,16 +800,42 @@ export function normalizeImports(p: Pick<Project, "root">, imports: ImportDecl[]
 }
 
 export function exportEqualsImport(p: Pick<Project, "root">, spec: string): string | null {
-  const dts = ts.resolveModuleName(spec, `${p.root}/index.ts`, compilerOptions(p.root), ts.sys).resolvedModule?.resolvedFileName;
-  if (!dts?.endsWith(".d.ts") && !dts?.endsWith(".d.mts") && !dts?.endsWith(".d.cts")) return null;
+  const dts = declarationFile(p, spec);
+  if (!dts) return null;
   const name = /^\s*export\s*=\s*([A-Za-z_$][\w$]*)\s*;/m.exec(ts.sys.readFile(dts) ?? "")?.[1];
   return name ? `import ${name} from "${spec}";` : null;
+}
+
+function declarationFile(p: Pick<Project, "root">, spec: string): string | null {
+  const dts = ts.resolveModuleName(spec, `${p.root}/index.ts`, compilerOptions(p.root), ts.sys).resolvedModule?.resolvedFileName;
+  return dts && /\.d\.[mc]?ts$/.test(dts) ? dts : null;
+}
+
+/** No file imports `spec` and it has no `export =`: the form its declarations allow, default and value names, which a
+ *  model otherwise guesses (bench/deps: semver-compare and csv-parse failed on it).
+ *  ponytail: at most 50 names, in declaration order, so a huge package (lodash) may hide the one a body needs. */
+export function exportsImport(p: Pick<Project, "root">, spec: string): string | null {
+  const dts = declarationFile(p, spec);
+  if (!dts) return null;
+  const prog = ts.createProgram([dts], { ...compilerOptions(p.root), noLib: true, types: [] });
+  const checker = prog.getTypeChecker();
+  const sf = prog.getSourceFile(dts);
+  const mod = sf && checker.getSymbolAtLocation(sf);
+  if (!mod) return null;
+  const isValue = (s: ts.Symbol) => ((s.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(s) : s).flags & ts.SymbolFlags.Value) !== 0;
+  const values = checker.getExportsOfModule(mod).filter(isValue).map((s) => s.name);
+  const names = values.filter((n) => n !== "default");
+  const head = values.includes("default") ? [(spec.split("/").pop() ?? spec).replace(/\W+(\w?)/g, (_, c: string) => c.toUpperCase())] : [];
+  if (names.length) head.push(`{ ${names.slice(0, 50).join(", ")} }`);
+  if (!head.length) return null;
+  const more = names.length > 50 ? `; ${names.length - 50} more not listed` : "";
+  return `import ${head.join(", ")} from "${spec}";${names.length ? ` // import only the names you call${more}` : ""}`;
 }
 
 /** "Allowed new imports": the deps, then the exact import form for each package dep (e.g. typescript needs a default import, TS2595). */
 function allowedImports(p: Project, deps: string[]): string {
   const pkgs = deps.filter((d) => !d.startsWith("."));
-  const forms = pkgs.map((d) => canonicalImport(p, d) ?? exportEqualsImport(p, d) ?? d);
+  const forms = pkgs.map((d) => canonicalImport(p, d) ?? exportEqualsImport(p, d) ?? exportsImport(p, d) ?? d);
   // a package dep no file imports yet was declared for this body (e.g. by `deps suggest`): say to use it, or the model
   // re-implements it with the standard library (bench/deps, issue #50)
   const fresh = pkgs.filter((d) => !canonicalImport(p, d));

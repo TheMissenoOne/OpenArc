@@ -578,7 +578,7 @@ Block regions always start at L1, plus the variables in scope (`let`/`const`/par
 
 The **budget** is `(maxContextTokens − outputReserveTokens) × 3.5` characters for the selected backend (§13). Optional sections are dropped (full file first, then helpers from other modules, then same-file values, then imports) until the package fits.
 
-Under "Allowed new imports", each package (non-relative) dep is followed by the exact import declaration the project already uses for it, most frequent value import first (e.g. `import ts from "typescript";`, which needs a default import), or by the bare specifier if the project never imports it.
+Under "Allowed new imports", each package (non-relative) dep is followed by the exact import declaration the project already uses for it, most frequent value import first (e.g. `import ts from "typescript";`, which needs a default import), or, if the project never imports it, by the form its declarations allow: `import X from "p";` for `export = X`, otherwise its default export and up to 50 value exports, `import p, { a, b } from "p"; // import only the names you call`. A package with no resolvable declarations or no value export is shown as the bare specifier.
 
 **Escalation by failure type.** If attempt *n* fails with a missing name, property or export (TS2304/2305/2339/2551/2552/2724), or with the wrong import form for a module (TS2595/TS2614/TS1259/TS2497), that's a context problem, so attempt *n+1* expands one level. Any other failure is repaired at the same level, with the diagnostics. The last attempt uses `fallbackBackend` if one is configured.
 
