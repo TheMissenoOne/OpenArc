@@ -772,7 +772,11 @@ function canonicalImport(p: Project, spec: string): string | null {
 function allowedImports(p: Project, deps: string[]): string {
   const pkgs = deps.filter((d) => !d.startsWith("."));
   const forms = pkgs.map((d) => canonicalImport(p, d) ?? d);
-  return [deps.join(", ") || "none", ...(forms.length ? ["Use exactly these import forms:", ...forms] : [])].join("\n");
+  // a package dep no file imports yet was declared for this body (e.g. by `deps suggest`): say to use it, or the model
+  // re-implements it with the standard library (bench/deps, issue #50)
+  const fresh = pkgs.filter((d) => !canonicalImport(p, d));
+  return [deps.join(", ") || "none", ...(forms.length ? ["Use exactly these import forms:", ...forms] : []),
+    ...(fresh.length ? [`The spec declares ${fresh.join(", ")} for this body: import and call ${fresh.length > 1 ? "them" : "it"} instead of re-implementing what ${fresh.length > 1 ? "they do" : "it does"}.`] : [])].join("\n");
 }
 
 const RULES = [
