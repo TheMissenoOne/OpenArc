@@ -3,7 +3,7 @@
 // for a small model to regenerate. Regionizing the engine itself is the next self-hosting step.
 import ts from "typescript";
 import type { Json } from "open-arc";
-import type { Candidate, ChildSpan, CompileRequest, Diagnostic, ImportDecl, ManifestView, Ports, RegionState, StagedFile } from "./types.ts";
+import type { Candidate, ChildSpan, CompileRequest, Diagnostic, ImportDecl, ManifestView, ModelOutput, Ports, RegionState, StagedFile } from "./types.ts";
 import type { BackendConfig, ContextLevel, OpenArcConfig } from "./config.ts";
 import { DEFAULT_OUTPUT_RESERVE, hostOf, parseConfig } from "./config.ts";
 import { buildRegionTree } from "./markers.ts";
@@ -14,7 +14,8 @@ import { checkRestrictions } from "./block.ts";
 import { selectTargets } from "./plan.ts";
 import { BATCH_PROMPT_TEMPLATE, PROMPT_TEMPLATE_VERSION, PROMPT_TEMPLATE, renderTemplate, parseOutput } from "./model.ts";
 import { OUTPUT_SCHEMA, STRICT_OUTPUT_SCHEMA, addTokens, baseUrlOf, completeWithUsage, isOllamaCompat, type Tokens } from "./backends.ts";
-import { BATCH_CODE_PROMPT_TEMPLATE, BATCH_CODE_SYSTEM, CODE_PROMPT_TEMPLATE, CODE_PROMPT_TEMPLATE_VERSION, CODE_SYSTEM, codeRules, parseCodeOutput, splitCodeSections } from "./output-format.ts";
+import { BATCH_CODE_PROMPT_TEMPLATE, BATCH_CODE_SYSTEM, CODE_PROMPT_TEMPLATE, CODE_PROMPT_TEMPLATE_VERSION, CODE_SYSTEM, codeRules, liftImports, parseCodeOutput, splitCodeSections } from "./output-format.ts";
+const liftJson = (o: ModelOutput): ModelOutput => (o.ok && /^\s*import[\s{*]/.test(o.body) ? liftImports(o.body, o.imports) : o);
 import { buildArgv, readHarnessOutput } from "./sandbox.ts";
 import { readFileSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -1729,7 +1730,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
         modelCalls++;
       }
       const split = code ? { raw, defaults: new Map<number, string>() } : splitDefaults(raw);
-      const parsed = code ? parseCodeOutput(raw) : r.spec.sketch ? sketch.parseFills(split.raw, r.spec.sketch) : parseOutput(split.raw); // palette: fills
+      const parsed = code ? parseCodeOutput(raw) : r.spec.sketch ? sketch.parseFills(split.raw, r.spec.sketch) : liftJson(parseOutput(split.raw)); // palette: fills
       lap(p, "model", tm);
       const varied = sampling ? ` (retry sampling: temperature ${sampling.temperature}, seed ${sampling.seed})` : "";
       ports.log(`  ${id}: attempt ${attempt} via ${backend.name} (${backend.model}), context L${level} ${contextChars} chars${varied}${batch ? `, batched with ${batch.length - 1} other region${batch.length === 2 ? "" : "s"}` : ""}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
