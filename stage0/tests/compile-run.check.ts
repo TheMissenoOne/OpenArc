@@ -207,11 +207,14 @@ const chat = (content: string) => JSON.stringify({ message: { role: "assistant",
   const compile = async (traces: boolean) => {
     const fake = fakePorts({ files: { "openarc.config.json": config(traces), "src/fixture.ts": src, [M]: '{"schema":1,"regions":{}}' }, http: [TAGS, chat("nope"), chat('{"body":"return n + 1;"}')] });
     assert.equal((await run(fake.instance as Ports, req)).exit, 0);
-    return (fake.snapshot() as Snap).files[engine.TRACES];
+    const files = (fake.snapshot() as Snap).files;
+    if (traces) assert.match(files[".openarc/.gitignore"] ?? "", /^traces\.jsonl$/m, "tracing adds its ignore rule");
+    return files[engine.TRACES];
   };
   const lines = (await compile(true))!.trim().split("\n").map((l) => JSON.parse(l));
   assert.deepStrictEqual(lines.map((l) => [l.v, l.id, l.attempt, l.outcome, l.body]), [[1, "fixture.inc", 1, "invalid", null], [1, "fixture.inc", 2, "verified", "return n + 1;"]]);
   const [bad, ok] = lines;
+  assert.equal(typeof bad.runId, "string");
   assert.equal(bad.runId, ok.runId, "one runId per compile: the failed attempt and the verified one join on it");
   assert.equal(bad.raw, "nope");
   assert.match(bad.problems[0], /output was not valid/);

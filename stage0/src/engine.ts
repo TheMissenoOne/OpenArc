@@ -1544,9 +1544,17 @@ export const TRACES = ".openarc/traces.jsonl";
  *  keys: the messages are the prompt text alone. */
 async function trace(ports: Ports, p: Project, record: { [k: string]: Json }): Promise<void> {
   if (!p.config.traces && process.env.OPENARC_TRACES !== "1") return;
-  const line = JSON.stringify({ v: 1, ts: ports.now(), runId: (p.runId ??= crypto.randomUUID()), ...record, compilerVersion: COMPILER_VERSION });
-  if (ports.fs.append) await ports.fs.append(TRACES, line + "\n");
-  else await ports.fs.write(TRACES, ((await ports.fs.read(TRACES)) ?? "") + line + "\n"); // fakes without append
+  try {
+    if (!p.runId) { // first line of this compile: a project made before traces existed has no ignore rule (prompts stay local)
+      const gi = (await ports.fs.read(".openarc/.gitignore")) ?? "";
+      if (!gi.split("\n").includes("traces.jsonl")) await ports.fs.write(".openarc/.gitignore", gi + (gi && !gi.endsWith("\n") ? "\n" : "") + "traces.jsonl\n");
+    }
+    const line = JSON.stringify({ v: 1, ts: ports.now(), runId: (p.runId ??= crypto.randomUUID()), ...record, compilerVersion: COMPILER_VERSION });
+    if (ports.fs.append) await ports.fs.append(TRACES, line + "\n");
+    else await ports.fs.write(TRACES, ((await ports.fs.read(TRACES)) ?? "") + line + "\n"); // fakes without append
+  } catch (e) { // optional output: never fail a compile over it
+    ports.log(`  trace not written: ${String(e)}`);
+  }
 }
 
 /** Sampling of an attempt: the backend's own on attempt 1; every retry varies it (temperature 0.4 on attempt 2, 0.7
@@ -1574,7 +1582,7 @@ const BATCH_JSON_SYSTEM = "You are a compiler backend. You output JSON only: an 
 
 /** A region's part of a batched first request: its slice of the reply ("json": its entry as JSON, "code": its
  *  section), the shared prompt's hash, and its share of the tokens and of the one call (the first region holds it). */
-interface BatchShare { raw: string; tokens: Tokens | null; promptHash: string; ids: string[]; calls: number; contextChars: number; sent: { system: string; user: string } }
+interface BatchShare { raw: string; tokens: Tokens | null; promptHash: string; ids: string[]; calls: number; contextChars: number; sent: { system: string; user: string; reply: string } }
 
 /** Regions that can share a request: plain function regions (no sketch, UI, class member or nested blocks). */
 const batchable = (r: RegionInfo) => r.kind === "function" && !r.spec.sketch && !r.spec.ui && !r.spec.codeFirst?.cls && r.childSpans.length === 0;
@@ -1652,7 +1660,7 @@ async function batchReply(ports: Ports, req: CompileRequest, p: Project, r: Regi
   }
   const n = ids.length;
   const share = (v: number, i: number) => Math.floor(v / n) + (i === 0 ? v % n : 0);
-  const shares = ids.map((_, i): BatchShare => ({ raw: parts[i]!, tokens: tokens && { prompt: share(tokens.prompt, i), completion: share(tokens.completion, i) }, promptHash: sha256Tagged(rendered.text), ids, calls: i === 0 ? 1 : 0, contextChars: context.length, sent: { system, user: rendered.text } }));
+  const shares = ids.map((_, i): BatchShare => ({ raw: parts[i]!, tokens: tokens && { prompt: share(tokens.prompt, i), completion: share(tokens.completion, i) }, promptHash: sha256Tagged(rendered.text), ids, calls: i === 0 ? 1 : 0, contextChars: context.length, sent: { system, user: rendered.text, reply: raw } }));
   p.batched ??= new Map();
   ids.forEach((id, i) => i > 0 && p.batched!.set(id, shares[i]!));
   return shares[0]!;
@@ -1749,9 +1757,9 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     let tokens: Tokens | null = null;
     let batch: string[] | null = null; // the region ids that shared this attempt's request
     let raw = "";
-    let sent: { system: string; user: string } | null = null; // the prompt as sent (null: a cache hit, no model call)
+    let sent: { system: string; user: string; reply?: string } | null = null; // the prompt as sent (null: a cache hit, no model call)
     const traced = (outcome: string, body: string | null, problems: string[] = []) =>
-      sent && trace(ports, p, { id, file: r.file, backend: backend.name, model: backend.model, level, attempt, messages: [{ role: "system", content: sent.system }, { role: "user", content: sent.user }], raw, body, outcome, problems: problems.map((x) => x.slice(0, 300)), tokens });
+      sent && trace(ports, p, { id, file: r.file, backend: backend.name, model: backend.model, level, attempt, messages: [{ role: "system", content: sent.system }, { role: "user", content: sent.user }], raw: sent.reply ?? raw, body, outcome, problems: problems.map((x) => x.slice(0, 300)), tokens });
     const code = backend.outputFormat === "code";
     if (attempt === 1 && cached) {
       ({ body, imports, sampling = null, tokens: cachedTokens = null } = JSON.parse(cached) as { body: string; imports: ImportDecl[]; sampling?: { temperature: number; seed: number }; tokens?: Tokens });
