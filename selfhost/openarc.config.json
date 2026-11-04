@@ -77,6 +77,81 @@
     },
     "p2p.handshake": {
       "backend": "q14"
+    },
+    "cli.parseArgv": {
+      "backend": "qwen35"
+    },
+    "hash.canonicalJson": {
+      "backend": "qwen35"
+    },
+    "plan.selectTargets": {
+      "backend": "qwen35"
+    },
+    "sandbox.buildArgv": {
+      "backend": "qwen35"
+    },
+    "sandbox.readHarnessOutput": {
+      "backend": "qwen35"
+    },
+    "block.checkRestrictions": {
+      "backend": "qwen35"
+    },
+    "hash.normalizeOwnedText": {
+      "backend": "qwen35"
+    },
+    "markers.scanMarkers": {
+      "backend": "qwen35"
+    },
+    "markers.buildRegionTree": {
+      "backend": "qwen35"
+    },
+    "model.parseOutput": {
+      "backend": "qwen35"
+    },
+    "txn.recover": {
+      "backend": "qwen35"
+    },
+    "auth.apiKey": {
+      "backend": "qwen35"
+    },
+    "lb.healthCheck": {
+      "backend": "qwen35"
+    },
+    "ui.loginPage": {
+      "backend": "qwen35"
+    },
+    "p2p.decodeVarint": {
+      "backend": "qwen35"
+    },
+    "p2p.broadcast": {
+      "backend": "qwen35"
+    },
+    "compile.run.lock": {
+      "backend": "qwen35"
+    },
+    "compile.run.recover": {
+      "backend": "qwen35"
+    },
+    "compile.run.parse": {
+      "backend": "qwen35"
+    },
+    "compile.run.analyze": {
+      "backend": "qwen35"
+    },
+    "compile.run.plan": {
+      "backend": "qwen35"
+    },
+    "compile.run.generate": {
+      "backend": "qwen35"
+    },
+    "compile.run.stage": {
+      "backend": "qwen35"
+    },
+    "compile.run.commit": {
+      "backend": "qwen35"
+    },
+    "compile.run.unlock": {
+      "backend": "qwen35"
     }
   }
 }

@@ -354,6 +354,39 @@
         "at": "2026-11-03T06:26:19.408Z"
       }
     },
+    "auth.apiKey": {
+      "kind": "function",
+      "parent": null,
+      "file": "src/palette/auth.ts",
+      "symbol": "apiKey",
+      "ownership": "compiler",
+      "hash": "sha256:33723cc92fb4641b97951ad282a89298e8d4210e8dfd3dad38e9d38b949b71eb",
+      "specHash": "sha256:cbd7daada5e7619a4639e1a85e4afd3aecdf7a3819e8a22233926384c4fc4580",
+      "fingerprint": "sha256:86022c2a711da9ee3fa39d0cbb6cb48a31eb10be86c05c0131140ca203c7d4f4",
+      "provenance": {
+        "source": "generated",
+        "backend": "qwen35",
+        "model": "qwen3.5-9b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen3.5-9b",
+        "outputFormat": "json",
+        "contextLevel": 0,
+        "attempts": 2,
+        "verifiedBy": [
+          "tsc",
+          "static",
+          "examples:8/8"
+        ],
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
+        },
+        "tokens": {
+          "prompt": 3964,
+          "completion": 510
+        },
+        "at": "2026-11-04T14:17:01.967Z"
+      }
+    },
     "auth.magicLink": {
       "kind": "function",
       "parent": null,
@@ -792,27 +825,31 @@
       "file": "src/plan.ts",
       "symbol": "selectTargets",
       "ownership": "compiler",
-      "hash": "sha256:15e2aeba20303db853b2ea9dc2714f11a2a58cfb420ca8d10c1dc2a3621c8bf3",
-      "specHash": "sha256:816e00e762826931c7e0d0496cb7d1c8ee7f1d45d9be7a6e12273036536958f4",
-      "fingerprint": "sha256:6b91ad1ecc7d0dc115ed3b527f55f80ac70511293d115d1ca5bad2abe6db8166",
+      "hash": "sha256:d406b6dc72ac05b7daa1c201c0ac09f17b3eda7f87bed00b99f08806e30d4b71",
+      "specHash": "sha256:a2158e62ef64e8f67bd0c181f225b58842d93e86eca340caaf0ef4cb35fdef70",
+      "fingerprint": "sha256:3e8b17d3be7d09d47e061be9cbfa221ea8917d4579877ffc7eca53ce42c815b8",
       "provenance": {
         "source": "generated",
-        "backend": "seed",
-        "model": "seed-coder-8b",
-        "digest": "openai:http://127.0.0.1:8080/v1:seed-coder-8b",
+        "backend": "qwen35",
+        "model": "qwen3.5-9b",
+        "digest": "openai:http://127.0.0.1:8080/v1:qwen3.5-9b",
         "outputFormat": "json",
         "contextLevel": 0,
-        "attempts": 1,
+        "attempts": 2,
         "verifiedBy": [
           "tsc",
           "static",
-          "examples:3/3"
+          "examples:5/5"
         ],
-        "tokens": {
-          "prompt": 1048,
-          "completion": 439
+        "sampling": {
+          "temperature": 0.4,
+          "seed": 2
         },
-        "at": "2026-11-03T06:09:43.114Z"
+        "tokens": {
+          "prompt": 3025,
+          "completion": 1173
+        },
+        "at": "2026-11-04T14:17:01.967Z"
       }
     },
     "sandbox.buildArgv": {
