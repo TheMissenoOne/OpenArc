@@ -1145,6 +1145,20 @@ export function unwrapBody(body: string, kind: "function" | "block", tsx = false
   return fn?.body ? bodyText(fn, sf) : b;
 }
 
+/** `const question = question.trim();` at the top of a body redeclares a parameter (TS2300); repair never fixed it
+ *  (dev set 2026-11-04, Qwen3.5-9B Q5: 13 of A's 24 compile failures). Such a declaration becomes an assignment. */
+export function assignRedeclaredParams(body: string, params: string[], tsx = false): string {
+  const sf = ts.createSourceFile(tsx ? "b.tsx" : "b.ts", body, ts.ScriptTarget.Latest, true);
+  let out = body;
+  for (const st of [...sf.statements].reverse()) { // from the end, so earlier offsets stay valid
+    if (!ts.isVariableStatement(st) || st.declarationList.declarations.length !== 1) continue;
+    const d = st.declarationList.declarations[0]!;
+    if (!ts.isIdentifier(d.name) || !params.includes(d.name.text) || !d.initializer || d.type) continue;
+    out = out.slice(0, st.getStart(sf)) + `${d.name.text} = ${d.initializer.getText(sf)};` + out.slice(st.getEnd());
+  }
+  return out;
+}
+
 /** Names bound at module level in a file (imports and top-level declarations; only imports with `importsOnly`). */
 export function fileBindings(text: string, importsOnly = false): Set<string> {
   const sf = parseText(text);
@@ -1777,6 +1791,7 @@ export async function generate(ports: Ports, req: CompileRequest, p: Project, id
     }
     const tsx = r.file.endsWith(".tsx"); // palette: UI components are parsed as TSX
     body = unwrapBody(body, r.kind, tsx, { name: r.spec.symbol, params: r.spec.params, returnsFn: r.spec.returnsFn });
+    if (r.kind === "function") body = assignRedeclaredParams(body, r.spec.params, tsx);
     const clean = stripMarkerComments(body, tsx);
     if (clean.stripped) {
       ports.log(`  ${id}: stripped ${clean.stripped} comment${clean.stripped === 1 ? "" : "s"} mentioning @openarc: (markers belong to the compiler)`);

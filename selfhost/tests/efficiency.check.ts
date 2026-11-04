@@ -130,6 +130,11 @@ async function compile(maxAttempts: number, bodies: string[]) {
   assert.equal(engine.unwrapBody(`return (n: number) => 1;`, "block", false, self), `return (n: number) => 1;`);
   // a region whose own result is a function: the returned arrow IS the answer
   assert.equal(engine.unwrapBody(`return (n: number) => n + 1;`, "function", false, { ...self, returnsFn: true }), `return (n: number) => n + 1;`);
+  // a parameter redeclared at the top of the body becomes an assignment; typed or nested declarations are left alone
+  assert.equal(engine.assignRedeclaredParams("const question = question.trim();\nlet limit = limit || 1000;\nreturn question + limit;", ["question", "limit"]),
+    "question = question.trim();\nlimit = limit || 1000;\nreturn question + limit;");
+  for (const r of ["const q: string[] = question.split(\" \");\nreturn q;", "const question2 = question;\nreturn question2;", "const question: string = question.trim();\nreturn question;", "if (x) { const question = 1; }\nreturn 0;"])
+    assert.equal(engine.assignRedeclaredParams(r, ["question"]), r, r);
   // end to end: helpers + the whole function compiles on attempt 1 (was TS2322 "(n: number) => void")
   const { res, sent, snap } = await compile(3, ["const ONE = 1;\nexport const inc: Inc = (n) => {\n  return n + ONE;\n};"]);
   assert.equal(res.exit, 0, JSON.stringify(res.diagnostics));
