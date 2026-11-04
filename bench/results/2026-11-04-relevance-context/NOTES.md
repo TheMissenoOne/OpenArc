@@ -20,7 +20,7 @@ By function, Cr gains diamond (0 to 2/2), wordy (0 to 12/20, 9/20 on seed 3) and
 Seed 1 of Cx was rerun: the original hit `503 Loading model` on its first step because the 9B took about 4 minutes to load and the queue waited 3. That row was dropped. No kept row has a backend error.
 
 ## Self-host retry (Qwen3.5-9B Q5)
-The failed stage 1 regions, flag on: 43 calls, 17 minutes. `lb.healthCheck` verified (6/6 examples, second attempt, level 0), a region the 9B without the flag and the 14B both failed. The other regions in the retry still fail (`selfhost-retry.txt`). The earlier flag-off 9B runs aren't a controlled comparison: any prompt change can flip a deterministic outcome, so one region shows little by itself.
+The failed stage 1 regions, flag on: 43 calls, 17 minutes. `lb.healthCheck` verified (6/6 examples, second attempt, level 0), a region the 9B without the flag and the 14B both failed. The other regions in the retry still fail or are held back (`selfhost-retry.txt`). The earlier flag-off 9B runs aren't a controlled comparison: any prompt change can flip a deterministic outcome, so one region shows little by itself.
 
 ## Reading
 Promising and cheap, with no sign of harm beyond rectangles, but not enough to make it the default. A proper test needs more multi-function tasks than evolve-multi's nine functions.
