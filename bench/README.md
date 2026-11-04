@@ -75,7 +75,7 @@ The model never sees held-out tests, in either arm.
 | C | OpenArc, `initialLevel: 2` (full file) |
 | D | baseline: system prompt + one user message with instructions, the typed stub file and the public examples; asks for the complete file in a code block. Each repair appends the reply and the failing public-example output (jest's diff) to the conversation |
 
-OpenArc gets `expandOnFailure: false`, so each config stays at its level (with the default `true`, A would escalate to L1 and L2 on name errors and the levels would blur). `intent` is the exercise's `instructions.md` (+ `instructions.append.md`), paragraphs as an array, prefixed with `Exercise "<name>": implement <fn>.`. Examples are the public tests, with the test name as the example name.
+OpenArc gets `expandOnFailure: false`, so each config stays at its level (with the default `true`, A would escalate to L1 and L2 on name errors and the levels would blur). `intent` is the exercise's `instructions.md` (+ `instructions.append.md`), as one string with line breaks kept, prefixed with `Exercise "<name>": implement <fn>.`. Examples are the public tests, with the test name as the example name.
 
 Same for every arm: the model and server, `temperature 0`, `seed 1`, context 8192, output cap 4096 tokens (from `matrix.json` `backend`), thinking off, 3 attempts. Models: `qwen3.5:9b` (A, B, C, D) and `qwen2.5:7b-instruct-q4_K_M` (A, D).
 

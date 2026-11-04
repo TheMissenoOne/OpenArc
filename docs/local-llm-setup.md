@@ -81,7 +81,7 @@ Notes:
 | flag | why |
 |---|---|
 | `--fit on` | offload as many layers as fit (Q5_K_M ran fully on the 8 GB card at 8k context in the dev run; 16k not measured yet); was `-ngl 99`, which fails instead of spilling when VRAM is short. Q4_K_M measured 6.1 GiB at 16k (qwen2.5-coder 7B; qwen3.5 9B: 6.2) |
-| `-c 16384` | twice the context OpenArc used before, still about 1.3 GiB VRAM headroom |
+| `-c 16384` | twice the context OpenArc used before. About 1.3 GiB VRAM headroom with Q4_K_M; Q5_K_M weights are about 0.9 GiB larger, which leaves roughly 0.4 GiB (not measured at 16k; `--fit on` moves layers to the CPU if it does not fit) |
 | `-fa on` | +4% prompt speed on Vulkan |
 | f16 KV (default) | fits at 16k for the 7-9B models; q8_0 costs 1-3% speed. Use `-ctk q8_0 -ctv q8_0` for 12-14B models or contexts above 16k |
 | `-np 1` | OpenArc sends one request at a time; one slot means no KV split |
