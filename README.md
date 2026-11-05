@@ -97,13 +97,13 @@ Code-first is the main way, and every earlier form stays fully supported. They m
 | Release | [`open-arc` on npm](https://www.npmjs.com/package/open-arc): 0.11.0 (`openarc deps suggest`, import lifting for JSON bodies, returned-function and redeclared-parameter repairs, Qwen3.5-9B Q5_K_M as the default local model) |
 | CI | Linux (bwrap), macOS (sandbox-exec), Windows (Node permission model) on Node 25, plus Linux on Node 23 |
 | Benchmark | On the held-out test split (21 exercises, 3 seeds, Qwen3.5-9B Q5_K_M, run once), OpenArc is accepted and correct on 62% against 52% for a plain prompt, using 12% fewer tokens. The difference is not significant (+9.5 points, 95% CI [-7.9, +27.0]); on the dev split it was -3.9, also not significant. Read it as parity on correctness at lower cost. See [`bench/results/2026-11-04-test-q5`](bench/results/2026-11-04-test-q5/NOTES.md) and issue [#10](https://github.com/TheMissenoOne/OpenArc/issues/10) |
-| Self-hosting | 27 of 53 `selfhost/` regions are compiled and verified by OpenArc; the 9 `compile.run` blocks and 16 other regions are pending or stale. Stage 1, then stage 2: issue [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) |
+| Self-hosting | Frozen for now: 38 of 53 `selfhost/` regions are compiled by OpenArc (2 of them stale), and 15 are pending, including the 9 `compile.run` blocks. Local models did not finish stage 1, even with a 14B and stronger specs. Status: issue [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) |
 
 Alpha: the compiler's guarantees (write scope, sandbox, ownership) are tested on every commit; how often small models produce a passing body is what the benchmark measures.
 
 ## Roadmap
 
-- [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) Self-hosting: finish stage 1 (the remaining regions and the `compile.run` blocks), then stage 2 (rebuild with 0 model calls, byte-identical)
+- [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) Self-hosting: frozen at 38 of 53 regions; resumes with a stronger model. Stage 2 waits on stage 1
 - [#15](https://github.com/TheMissenoOne/OpenArc/issues/15) Known limitations, including two from the benchmark: throw cases as `{ throws }` examples in the bench adapter, and the import form for declared packages nothing imports yet
 - [#10](https://github.com/TheMissenoOne/OpenArc/issues/10) Benchmark follow-ups: the 13 skipped class-based exercises (via code-first specs), verified exemplars, region memory, more benchmarks
 - [#13](https://github.com/TheMissenoOne/OpenArc/issues/13) Code-first specs: phases 1 and 2 are in 0.9.0; next are laws over every implementation of an interface, in-place sketches, and atomic-design TSX

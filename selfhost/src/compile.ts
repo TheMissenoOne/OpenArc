@@ -77,7 +77,10 @@ export const lockSpec = arc.defineBlock({
 });
 export const recoverStepSpec = arc.defineBlock({
   id: "compile.run.recover",
-  intent: "For each txid returned by await recover(ports.fs), push { code: 'OARC-W094', detail: txid } to diagnostics.",
+  intent: [
+    "For each txid returned by await recover(ports.fs), push { code: 'OARC-W094', detail: txid } to diagnostics.",
+    "Write exactly: for (const txid of await recover(ports.fs)) diagnostics.push({ code: 'OARC-W094', detail: txid });",
+  ],
   calls: ["recover"],
 });
 export const parseStepSpec = arc.defineBlock({
@@ -92,12 +95,18 @@ export const analyzeStepSpec = arc.defineBlock({
 });
 export const planStepSpec = arc.defineBlock({
   id: "compile.run.plan",
-  intent: "If project is not null: targets = engine.plan(project, req, diagnostics).",
+  intent: [
+    "If project is not null: targets = engine.plan(project, req, diagnostics).",
+    "Write exactly: if (project !== null) targets = engine.plan(project, req, diagnostics);",
+  ],
   calls: ["engine.plan"],
 });
 export const generateStepSpec = arc.defineBlock({
   id: "compile.run.generate",
-  intent: "If project is not null: const r = await engine.generate(ports, req, project, id, diagnostics); then set candidate = r.candidate and add r.modelCalls to modelCalls.",
+  intent: [
+    "If project is not null: const r = await engine.generate(ports, req, project, id, diagnostics); then set candidate = r.candidate and add r.modelCalls to modelCalls.",
+    "candidate and modelCalls already exist in the enclosing code: assign them, don't declare them; r is the only new name, inside the if.",
+  ],
   calls: ["engine.generate"],
 });
 export const stageStepSpec = arc.defineBlock({

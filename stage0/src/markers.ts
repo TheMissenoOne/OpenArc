@@ -13,6 +13,8 @@ export const scanMarkersSpec = arc.defineRegion<ScanMarkers>({
     "A comment is a marker iff it is the only non-whitespace content of its line and equals '// @openarc:begin <id>' or '// @openarc:end <id>' (single spaces) with a valid id (ids.isValidId).",
     "Any other comment (single- or multi-line) containing '@openarc:' yields OARC-W001 with its 1-based start line. Markers are returned in line order.",
     "Line endings may be CRLF (files checked out on Windows): a trailing \\r is whitespace, never part of a marker, and line numbers are the same as with LF.",
+    "Method: this overrides any idea of a raw scanner loop. Parse with ts.createSourceFile('m.ts', text, ts.ScriptTarget.Latest, true) and walk leaves as hash.normalizeOwnedText does, collecting ts.getLeadingCommentRanges(text, n.pos) and ts.getTrailingCommentRanges(text, n.end), de-duplicated by pos and sorted by pos. Skip JSDoc nodes (kinds FirstJSDocNode..LastJSDocNode).",
+    "For each range containing '@openarc:': line = sf.getLineAndCharacterOfPosition(r.pos).line + 1; it is a marker iff r.kind === ts.SyntaxKind.SingleLineCommentTrivia, the comment's trimEnd() matches /^\\/\\/ @openarc:(begin|end) (\\S+)$/, the whole source line trimmed equals the comment trimmed, and isValidId(id). Otherwise OARC-W001. Import only isValidId from ./ids.ts; never use require.",
   ],
   deps: ["./ids.ts", "typescript"],
   examples: [
@@ -104,6 +106,7 @@ export const buildRegionTreeSpec = arc.defineRegion<BuildRegionTree>({
     "an end whose id differs from the open begin but which matches an outer open begin -> OARC-E031 at the end's line with that end's id;",
     "an end with no matching open begin, or a begin still open at the end (the innermost one) -> OARC-E030 at that marker's line with its id.",
     "Children are in source order.",
+    "Method: declare once `roots` and `stack`, both RegionNode[]. A begin creates a node with endLine 0, pushes it to the top of stack's children (or to roots when the stack is empty), then onto the stack. An end matching the top sets endLine and pops. Any other end returns its diagnostic: OARC-E031 if stack.some(n => n.id === m.id), else OARC-E030. After the loop, a non-empty stack returns OARC-E030 for its top. The success result is { roots, diagnostics: [] }.",
   ],
   examples: [
     {

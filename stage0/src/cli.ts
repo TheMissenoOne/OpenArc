@@ -12,6 +12,8 @@ export const parseArgvSpec = arc.defineRegion<ParseArgv>({
     "| watch [--debounce <ms>] (debounceMs defaults to 300; the value must be a non-negative safe integer).",
     "Missing id -> usage missing-id; resolve without a mode -> usage resolve-needs-mode; extract without a file -> usage missing-file;",
     "extract or watch with an unknown flag, a flag without a valid value (a value starting with '--' is not a value), or an extra argument -> usage bad-flag; anything else -> usage unknown-command.",
+    "For extract: argv[1] is the file (absent or starting with '--' -> missing-file). Read the rest in pairs: the flag must be --function or --id, and its value must exist and not start with '--'; otherwise return usage bad-flag at once. Never skip a bad pair or keep parsing after one.",
+    "For watch: same pairs with --debounce only; the value must match /^\\d+$/ and pass Number.isSafeInteger.",
   ],
   examples: [
     { args: [["compile"]], expected: { cmd: "compile", ids: [] } },

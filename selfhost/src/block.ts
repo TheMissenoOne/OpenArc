@@ -13,6 +13,8 @@ export const checkRestrictionsSpec = arc.defineRegion<CheckRestrictions>({
     "and binding:<name> for each top-level declaration of body whose name is in usedAfter.",
     "Non-arrow functions, methods and classes are opaque: nothing inside them is reported.",
     "ARROW functions are transparent for this/arguments/super/new.target, because arrows capture them lexically.",
+    "Method: ts.createSourceFile('b.ts', body, ts.ScriptTarget.Latest, true), then recurse with node.forEachChild, carrying loop depth, switch depth and whether you are inside an arrow.",
+    "Guards that exist: ts.isReturnStatement, isYieldExpression, isAwaitExpression, isLabeledStatement, isBreakStatement, isContinueStatement, isIterationStatement(n, false), isSwitchStatement, isFunctionDeclaration, isFunctionExpression, isMethodDeclaration, isClassLike, isArrowFunction, isMetaProperty, isVariableStatement. this and super: n.kind === ts.SyntaxKind.ThisKeyword or SuperKeyword. arguments: ts.isIdentifier(n) && n.text === 'arguments'. Nothing else from ts is needed.",
   ],
   deps: ["typescript"],
   examples: [

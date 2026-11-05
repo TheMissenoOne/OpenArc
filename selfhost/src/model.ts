@@ -111,6 +111,7 @@ export const parseOutputSpec = arc.defineRegion<ParseOutput>({
     "Parse raw (the assistant message content) as JSON and validate it against MODEL_OUTPUT_SCHEMA by hand (no schema library).",
     "On failure return OARC-E081 with the FIRST problem as detail: invalid-json | not-object | body-not-string | unexpected-property:<key> | bad-imports.",
     "imports defaults to [].",
+    "JSON.parse throws on bad input: wrap it in try/catch and return invalid-json from the catch. This function never throws. Check in this order: invalid-json, not-object (null and arrays too), body-not-string, unexpected-property (any key other than body and imports), bad-imports (not an array, or an item that isn't an object with a string `from`, a string[] `names` and no other key).",
   ],
   examples: [
     { args: ["{\"body\":\"return 1;\"}"], expected: { ok: true, body: "return 1;", imports: [] } },
@@ -135,7 +136,38 @@ export const parseOutputSpec = arc.defineRegion<ParseOutput>({
 });
 
 // @openarc:begin model.parseOutput
-export const parseOutput: ParseOutput = (raw) => arc.todo("model.parseOutput");
+export const parseOutput: ParseOutput = (raw) => {
+  try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        return { ok: false, diagnostic: { code: 'OARC-E081', detail: 'not-object' } };
+      }
+      if ('body' in parsed && typeof parsed.body !== 'string') {
+        return { ok: false, diagnostic: { code: 'OARC-E081', detail: 'body-not-string' } };
+      }
+      if ('imports' in parsed) {
+        const imports = parsed.imports;
+        if (!Array.isArray(imports)) {
+          return { ok: false, diagnostic: { code: 'OARC-E081', detail: 'bad-imports' } };
+        }
+        for (const imp of imports) {
+          if (typeof imp !== 'object' || imp === null || 
+              !('from' in imp) || !('names' in imp) || 
+              typeof imp.from !== 'string' || !Array.isArray(imp.names)) {
+            return { ok: false, diagnostic: { code: 'OARC-E081', detail: 'bad-imports' } };
+          }
+        }
+      }
+      for (const key of Object.keys(parsed)) {
+        if (key !== 'body' && key !== 'imports') {
+          return { ok: false, diagnostic: { code: 'OARC-E081', detail: `unexpected-property:${key}` } };
+        }
+      }
+      return { ok: true, body: parsed.body, imports: parsed.imports || [] };
+    } catch {
+      return { ok: false, diagnostic: { code: 'OARC-E081', detail: 'invalid-json' } };
+    }
+};
 // @openarc:end model.parseOutput
 
 // ── model.call ────────────────────────────────────────────────── spec §8.4, OARC-E080

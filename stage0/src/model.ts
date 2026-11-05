@@ -110,6 +110,7 @@ export const parseOutputSpec = arc.defineRegion<ParseOutput>({
     "Parse raw (the assistant message content) as JSON and validate it against MODEL_OUTPUT_SCHEMA by hand (no schema library).",
     "On failure return OARC-E081 with the FIRST problem as detail: invalid-json | not-object | body-not-string | unexpected-property:<key> | bad-imports.",
     "imports defaults to [].",
+    "JSON.parse throws on bad input: wrap it in try/catch and return invalid-json from the catch. This function never throws. Check in this order: invalid-json, not-object (null and arrays too), body-not-string, unexpected-property (any key other than body and imports), bad-imports (not an array, or an item that isn't an object with a string `from`, a string[] `names` and no other key).",
   ],
   examples: [
     { args: ["{\"body\":\"return 1;\"}"], expected: { ok: true, body: "return 1;", imports: [] } },

@@ -35,7 +35,8 @@
     "maxAttempts": 3,
     "context": {
       "initialLevel": 0,
-      "expandOnFailure": true
+      "expandOnFailure": true,
+      "relevance": true
     }
   },
   "regions": {
@@ -153,5 +154,8 @@
     "compile.run.unlock": {
       "backend": "qwen35"
     }
+  },
+  "ui": {
+    "dom": "jsdom"
   }
 }

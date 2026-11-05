@@ -120,7 +120,11 @@ export const encodeVarint: Encode = (message) => {
 export const decodeVarintSpec = arc.defineRegion<Decoder>({
   id: "p2p.decodeVarint",
   concept: "framing",
-  intent: "The prefix is an unsigned LEB128 varint (at most 5 bytes).",
+  intent: [
+    "The prefix is an unsigned LEB128 varint (at most 5 bytes).",
+    "Method: const buf = chunks.flat(); don't redeclare the parameter. Loop from at = 0: read at most 5 prefix bytes (n += (b & 127) * 2 ** shift); if the prefix or the payload is incomplete, stop. Decode buf.slice(i, i + n) with new TextDecoder().decode(new Uint8Array(...)), push it, set at = i + n.",
+    "Return { messages, rest: buf.slice(at) }, messages being string[].",
+  ],
   fixtures: {
     twoFrames: [[2, 104, 105, 5, 116, 104, 101, 114, 101]],
     split: [[2], [104], [105, 5, 116], [104, 101, 114, 101]],
@@ -328,6 +332,7 @@ export const broadcastSpec = arc.defineRegion<Broadcast>({
     "Run one gossip broadcast to quiescence over the transport. The origin handles msg first (from null); after that, take deliveries from net.next() until it returns null,",
     "and each receiving peer handles its message with onGossip (unknown peers ignore it). A peer that delivers records msg.body; every forward goes out with net.send and counts as sent.",
     "delivered has every peer's id, in the order of `peers`, with the bodies it delivered.",
+    "Method: states = new Map of peer.self -> peer; delivered = one [] per peer, in order; a helper handle(at, from, m) calls onGossip(state, from, m, fanout), stores r.state, pushes m.body if r.deliver, and for each f of r.forward awaits net.send(at, f.to, f.msg) and counts it. handle(origin, null, msg), then repeat handle(d.to, d.from, d.msg) until net.next() returns null.",
   ],
   examples: [
     {
