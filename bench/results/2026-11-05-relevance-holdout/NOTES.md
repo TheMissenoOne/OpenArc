@@ -28,3 +28,26 @@ Its numbers, for the record only: rounds +0.1 points [-0.6, 0.8], burst -1.4 poi
 **Seen before the rerun:** I'd read the invalid numbers before restarting, so this run isn't blind to them. The rule was committed earlier and nothing about it changes.
 
 **Retries:** in `--rounds`, a region that failed is attempted again when a later round adds a sibling, because that changes its fingerprint. Both arms get this, so it adds calls but not bias.
+
+## Result
+The flag **stays off by default and opt-in**. The rule's other two outcomes don't apply: the primary lower bound is -2.8, too low for default on, and the upper bound is above 0, so it isn't dropped. The secondary upper bound is also above 0, so it wouldn't have blocked anything.
+
+Final step, 190 functions per seed, no backend errors or load errors:
+
+| Layout | Seeds | Cx pass | Cr pass | Cr - Cx, points per function (95% CI) | Better / worse | Sign test | Tokens |
+|---|---|---|---|---|---|---|---|
+| Rounds (primary) | 5 | 793/950 (83.5%) | 781/950 (82.2%) | -1.3 [-2.8, 0.3] | 14 / 21 | p = 0.31 | -13.8% |
+| Burst (secondary) | 3 | 452/570 (79.3%) | 439/570 (77.0%) | -2.3 [-4.9, 0.2] | 12 / 22 | p = 0.12 | -10.6% |
+
+Passing functions per seed, Cx vs Cr:
+- Rounds: 158/158, 156/153, 160/158, 162/159, 157/153.
+- Burst: 157/149, 148/147, 147/143.
+
+Cr never beat Cx on a seed: 7 of the 8 are lower and 1 is tied.
+
+## Reading
+- **The earlier gain didn't replicate.** The +9 correct function-steps on evolve-multi's nine functions isn't seen here. Neither interval excludes zero, but both lean negative and no seed favours relevance.
+- **Tokens are the real effect:** 11% to 14% fewer. Someone who wants cheaper compiles can trade for them, with a possible small cost in correctness.
+- **Not tested:** these tasks are unrelated, so no spec names a sibling. The half of the feature that keeps named siblings has no controlled evidence, including the `lb.healthCheck` gain on self-host.
+
+`rounds.jsonl` and `burst.jsonl` hold every row (`node bench/paired-multi.mjs Cx Cr <file>`). `queue.sh` and `matrix.json` are the run's setup.

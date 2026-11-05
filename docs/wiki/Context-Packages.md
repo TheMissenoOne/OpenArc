@@ -69,4 +69,6 @@ That's the hypothesis to benchmark, measured as implementations that pass per un
 
 ## Relevance ranking (experimental)
 
-`compilation.context.relevance: true` keeps a same-file sibling's signature and types at level 0 only when the spec names it; other siblings are listed by name, and a failed attempt expands to level 1. It is off by default and doesn't enter the fingerprint. Results: `bench/results/2026-11-04-relevance-context`.
+`compilation.context.relevance: true` keeps a same-file sibling's signature and types at level 0 only when the spec names it; other siblings are listed by name, and a failed attempt expands to level 1. It is off by default and doesn't enter the fingerprint.
+
+On 190 held-out functions in 6-function files it used 11% to 14% fewer tokens, with no correctness gain: -1.3 points per function, 95% CI [-2.8, 0.3], when adding functions one at a time. So it is a way to trade for cheaper compiles, not a way to improve results. Results: `bench/results/2026-11-05-relevance-holdout`, and the earlier, smaller `bench/results/2026-11-04-relevance-context`.
