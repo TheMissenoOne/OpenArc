@@ -99,6 +99,7 @@ console.log("watch-context: .tsx queued, reused analyses see edits, pending sibl
     '// @openarc:begin r.main',
     'export const main: Main = (n) => arc.todo("r.main");',
     '// @openarc:end r.main',
+    "export const π: number = 3;", // a non-ASCII sibling must not break the relevance view
     "",
   ].join("\n");
   const fake = fakePorts({ files: { "src/r.ts": code } }).instance;
@@ -114,6 +115,7 @@ console.log("watch-context: .tsx queued, reused analyses see edits, pending sibl
   assert.ok(ranked.includes("const used: Used"), "a sibling the intent names keeps its signature");
   assert.ok(!ranked.includes("const other: Other") && ranked.includes("// also in this file: other"), "an unnamed sibling is a name");
   assert.ok(!ranked.includes("interface Unrelated"), "and its types stay out");
+  assert.ok(/also in this file:.*π/.test(ranked), "a non-ASCII sibling is a name too");
   assert.ok(engine.buildContext(p, r, 1, b).includes("const other: Other"), "level 1 shows it again");
   assert.equal(engine.buildContext(p, r, 0, b, { stable: true }), stable, "fingerprint input unchanged");
 }

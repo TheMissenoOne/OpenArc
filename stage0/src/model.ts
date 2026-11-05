@@ -147,7 +147,7 @@ export const parseOutput: ParseOutput = (raw) => {
   const o = v as Record<string, unknown>;
   if (typeof o.body !== "string") return bad("body-not-string");
   for (const k of Object.keys(o)) if (k !== "body" && k !== "imports") return bad(`unexpected-property:${k}`);
-  const imports = o.imports ?? [];
+  const imports = o.imports === undefined ? [] : o.imports;
   const okImport = (i: unknown) => {
     if (typeof i !== "object" || i === null || Array.isArray(i)) return false;
     const r = i as Record<string, unknown>;

@@ -31,6 +31,7 @@ export const parseArgvSpec = arc.defineRegion<ParseArgv>({
     { args: [["extract", "src/a.ts"]], expected: { cmd: "extract", file: "src/a.ts" } },
     { args: [["extract", "src/a.ts", "--id", "a.g", "--function", "f"]], expected: { cmd: "extract", file: "src/a.ts", fn: "f", id: "a.g" } },
     { args: [["extract"]], expected: { cmd: "usage", reason: "missing-file" } },
+    { args: [["extract", "--id"]], expected: { cmd: "usage", reason: "missing-file" } },
     { args: [["extract", "src/a.ts", "--function"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["extract", "src/a.ts", "--bogus", "x"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["extract", "src/a.ts", "--function", "--id"]], expected: { cmd: "usage", reason: "bad-flag" } },

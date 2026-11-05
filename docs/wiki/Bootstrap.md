@@ -1,14 +1,14 @@
 # Bootstrap: OpenArc compiling OpenArc
 
-`selfhost/` is OpenArc's own compiler written as an OpenArc project. It has 21 function regions and 9 block regions, each with a typed spec and examples, and every body starts as a placeholder.
+`selfhost/` is OpenArc's own compiler written as an OpenArc project. It has 44 function regions and 9 block regions, each with a typed spec and examples, and every body starts as a placeholder.
 
 | Stage | What | Status |
 |---|---|---|
 | **0** | `stage0/`: every region hand-written, then built into the `open-arc` npm package | done: 43/43 regions (24 compiler, 19 palette) pass their examples |
-| **1** | stage 0 (installed as `openarc-stage0`) compiles the pristine `selfhost/` scaffold | **frozen** at 38 of 53 regions (see "Freeze, 2026-11-04") |
+| **1** | stage 0 (`stage0/`) compiles the pristine `selfhost/` scaffold | **frozen** at 38 of 53 regions (see "Freeze, 2026-11-04") |
 | **2** | the package built from stage 1 recompiles the scaffold with stage 1's cache: 0 model calls, byte-identical output | pending: after stage 1 completes |
 
-Stage 0 stays installed as the known-good compiler. A broken stage N never has to repair itself.
+Stage 0 stays the known-good compiler. A broken stage N never has to repair itself.
 
 ## First stage-1 run (2026-10-31)
 
@@ -108,4 +108,10 @@ The hints are derived from stage 0's hand-written bodies, so these three regions
 
 Still pending: `block.checkRestrictions`, `hash.normalizeOwnedText`, `markers.scanMarkers`, `txn.recover`, `p2p.decodeVarint`, `ui.loginPage` and the 9 `compile.run` blocks. They fail on invented APIs (`sf.getLeaves`, `BreakStatement.name`), wrong behaviour against the examples, or, for `ui.loginPage`, naming clashes with the structure components.
 
-To resume: use a stronger model. A full compile also re-queues `model.call`, `ownership.detect` and `watch.enqueue`, whose config still names an older default model, so give them a backend first.
+Verified means passing the examples, and generated bodies can still miss what the intent says when no example covers it. Known gaps in frozen bodies, left as generated because region bodies aren't hand-edited:
+
+- `model.parseOutput` accepts `{}` as `ok: true` with no body, accepts non-string `names` and extra keys in an import, and checks `imports` before unexpected properties.
+- `p2p.broadcast` throws a TypeError when `origin` or a delivery target isn't in `peers`, and a peer named `__proto__` doesn't get its own `delivered` key.
+- `p2p.onGossip` doesn't sort candidates before rotating, and a negative `fanout` still forwards.
+
+To resume: add these cases as examples to both spec copies, which re-queues the regions. Use a stronger model. A full compile also re-queues `model.call`, `ownership.detect` and `watch.enqueue`, whose config still names an older default model, so give them a backend first.

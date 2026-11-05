@@ -31,6 +31,7 @@ export const parseArgvSpec = arc.defineRegion<ParseArgv>({
     { args: [["extract", "src/a.ts"]], expected: { cmd: "extract", file: "src/a.ts" } },
     { args: [["extract", "src/a.ts", "--id", "a.g", "--function", "f"]], expected: { cmd: "extract", file: "src/a.ts", fn: "f", id: "a.g" } },
     { args: [["extract"]], expected: { cmd: "usage", reason: "missing-file" } },
+    { args: [["extract", "--id"]], expected: { cmd: "usage", reason: "missing-file" } },
     { args: [["extract", "src/a.ts", "--function"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["extract", "src/a.ts", "--bogus", "x"]], expected: { cmd: "usage", reason: "bad-flag" } },
     { args: [["extract", "src/a.ts", "--function", "--id"]], expected: { cmd: "usage", reason: "bad-flag" } },
@@ -69,7 +70,7 @@ export const parseArgv: ParseArgv = (argv) => {
     }
     case "extract": {
       const [file, ...flags] = rest;
-      if (!file) return { cmd: "usage", reason: "missing-file" };
+      if (!file || file.startsWith("--")) return { cmd: "usage", reason: "missing-file" };
       const out: Command = { cmd: "extract", file };
       for (let i = 0; i < flags.length; i += 2) {
         const v = flags[i + 1];
