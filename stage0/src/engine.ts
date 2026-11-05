@@ -884,18 +884,31 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
   const arcOnly = sf.statements.filter(ts.isImportDeclaration).every((d) => (d.moduleSpecifier as ts.StringLiteral).text === "open-arc");
   if (importLines.length && !(r.kind === "function" && arcOnly)) sections.push(["Imports already in the file", importLines.join("\n")]);
   let sameFileLines: string[] = [];
+  const nameOnly: string[] = [];
   if (r.kind === "function") {
     // Sibling regions by signature, pending or not, so a caller can be written against a callee that failed or isn't
     // compiled yet. The prompt shows the signature alone: a "pending" note plus the sibling's intent (0.10.0) cost 21% more
     // tokens on the evolution benchmark for the same correctness (bench/results/2026-11-02-evolve-multi-context). The
     // stable view (fingerprint) carries every sibling's intent, so an edited callee intent still re-queues its callers.
-    const own = moduleSignatures(sf, checker, { skip: new Set([s.symbol]) });
+    // compilation.context.relevance: at level 0, only the siblings the spec names keep their signature (and the types it
+    // pulls in); the rest are names, and a failed attempt expands to level 1, which shows them all. Fingerprint unaffected.
+    const skip = new Set([s.symbol]);
+    if (p.config.compilation.context.relevance && level === 0 && !opts.stable && !s.sketch) {
+      const named = new Set(`${s.intent} ${s.signature} ${cf?.declaration ?? ""} ${cf?.extraIntent ?? ""} ${(s.calls ?? []).join(" ")}`.match(/[\w$]+/g));
+      for (const l of moduleSignatures(sf, checker, { skip }).lines) {
+        const name = /^(?:const|function) ([\w$]+)/.exec(l)![1]!;
+        if (!named.has(name)) nameOnly.push(name);
+      }
+      for (const n of nameOnly) skip.add(n);
+    }
+    const own = moduleSignatures(sf, checker, { skip });
     const siblings = new Map(p.regions.filter((x) => x.file === r.file && x.kind === "function" && x.id !== r.id && !x.spec.codeFirst?.cls).map((x) => [x.spec.symbol, x]));
     sameFileLines = own.lines.map((l) => {
       const x = opts.stable ? siblings.get(/^(?:const|function) ([\w$]+)/.exec(l)?.[1] ?? "") : undefined;
       const intent = x?.spec.intent.replace(/\s+/g, " ").trim();
       return intent ? `${l} // intent: ${intent}` : l;
     });
+    if (nameOnly.length) sameFileLines.push(`// also in this file: ${nameOnly.join(", ")}`);
     typeRoots.push(...own.nodes);
   }
   if (level >= 1 || r.kind === "block") {

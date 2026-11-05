@@ -82,6 +82,21 @@
         "previousBody": true
       },
       "label": "previous body on spec change"
+    },
+    "Cx": {
+      "kind": "openarc",
+      "context": {
+        "expandOnFailure": true
+      },
+      "label": "control: expand context on failure"
+    },
+    "Cr": {
+      "kind": "openarc",
+      "context": {
+        "expandOnFailure": true,
+        "relevance": true
+      },
+      "label": "relevance-ranked context, expand on failure"
     }
   },
   "runs": [

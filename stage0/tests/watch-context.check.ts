@@ -78,3 +78,42 @@ const caller = async (text: string) => {
   assert.notEqual(edited.fingerprint, pending.fingerprint, "the callee's intent is part of the caller's fingerprint");
 }
 console.log("watch-context: .tsx queued, reused analyses see edits, pending siblings by signature ok");
+
+// ── 4. compilation.context.relevance: unnamed siblings are names at level 0, signatures at level 1, fingerprint unchanged
+{
+  const code = [
+    'import * as arc from "open-arc";',
+    "export interface Unrelated { deep: string }",
+    "type Used = (n: number) => number;",
+    "type Other = (u: Unrelated) => string;",
+    "type Main = (n: number) => number;",
+    'export const usedSpec = arc.defineRegion<Used>({ id: "r.used", intent: "double n" });',
+    'export const otherSpec = arc.defineRegion<Other>({ id: "r.other", intent: "show u" });',
+    'export const mainSpec = arc.defineRegion<Main>({ id: "r.main", intent: "call used, add one" });',
+    '// @openarc:begin r.used',
+    'export const used: Used = (n) => arc.todo("r.used");',
+    '// @openarc:end r.used',
+    '// @openarc:begin r.other',
+    'export const other: Other = (u) => arc.todo("r.other");',
+    '// @openarc:end r.other',
+    '// @openarc:begin r.main',
+    'export const main: Main = (n) => arc.todo("r.main");',
+    '// @openarc:end r.main',
+    "",
+  ].join("\n");
+  const fake = fakePorts({ files: { "src/r.ts": code } }).instance;
+  const p = await engine.parse(fake, req, []);
+  await engine.analyze(fake, req, p, [], { offline: true });
+  const r = p.regions.find((x) => x.id === "r.main")!;
+  const b = p.config.backends.local!;
+  const full = engine.buildContext(p, r, 0, b);
+  const stable = engine.buildContext(p, r, 0, b, { stable: true });
+  assert.ok(full.includes("const other: Other") && full.includes("interface Unrelated"), "off: every sibling and its types");
+  p.config.compilation.context.relevance = true;
+  const ranked = engine.buildContext(p, r, 0, b);
+  assert.ok(ranked.includes("const used: Used"), "a sibling the intent names keeps its signature");
+  assert.ok(!ranked.includes("const other: Other") && ranked.includes("// also in this file: other"), "an unnamed sibling is a name");
+  assert.ok(!ranked.includes("interface Unrelated"), "and its types stay out");
+  assert.ok(engine.buildContext(p, r, 1, b).includes("const other: Other"), "level 1 shows it again");
+  assert.equal(engine.buildContext(p, r, 0, b, { stable: true }), stable, "fingerprint input unchanged");
+}

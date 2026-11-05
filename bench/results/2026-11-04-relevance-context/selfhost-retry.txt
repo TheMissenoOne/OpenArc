@@ -1,0 +1,19 @@
+  compile.run.lock: ✓ tsc, static, examples:1/3 (2 inconclusive: sibling blocks pending), via:compile.run
+  lb.healthCheck: ✓ tsc, static, examples:6/6
+error   OARC-E082 block.checkRestrictions  repair attempts exhausted [OARC-E070 TS2551 line 84: Property 'isParameterDeclaration' does not exist on type 'typeof ts'. Did you mean 'isTypeParameterDeclaration'?
+error   OARC-E082 cli.parseArgv  repair attempts exhausted [OARC-E090 example "#17" failed: got {"cmd":"extract","file":"src/a.ts"}; expected {"cmd":"usage","reason":"bad-flag"}]
+warning OARC-W043 cli.parseArgv  region keeps a body that does not satisfy its current spec (its recompile failed; shown as stale)
+error   OARC-E082 txn.recover  repair attempts exhausted [OARC-E070 TS2304 line 114: Cannot find name 'dir'.
+error   OARC-E082 compile.run.recover  repair attempts exhausted [repeat: OARC-E070 TS2488 line 139: Type '() => ArrayIterator<[number, string]>' must have a '[Symbol.iterator]()' method that returns an iterator.
+error   OARC-E082 compile.run.plan  repair attempts exhausted [OARC-E070 TS2740 line 153: Type 'string[]' is missing the following properties from type 'Project': root, config, files, disk, and 8 more.
+error   OARC-E082 compile.run.generate  repair attempts exhausted [repeat: OARC-E070 TS2451 line 157: Cannot redeclare block-scoped variable 'candidate'.
+error   OARC-E082 hash.normalizeOwnedText  repair attempts exhausted [OARC-E070 TS2339 line 89: Property 'isJSDocComment' does not exist on type 'typeof ts'.
+error   OARC-E082 markers.scanMarkers  repair attempts exhausted [OARC-E070 TS2305 line 3: Module '"./ids.ts"' has no exported member 'buildRegionTree'.
+error   OARC-E082 markers.buildRegionTree  repair attempts exhausted [OARC-E070 TS2451 line 143: Cannot redeclare block-scoped variable 'roots'.
+error   OARC-E082 model.parseOutput  repair attempts exhausted [OARC-E090 example "#3" failed: got {"throws":"Unexpected token 'o', \"not json\" is not valid JSON"}; expected {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"invalid-json"}}]
+error   OARC-E082 p2p.decodeVarint  repair attempts exhausted [OARC-E070 TS2300 line 162: Duplicate identifier 'chunks'.
+error   OARC-E082 p2p.broadcast  repair attempts exhausted [OARC-E070 TS2322 line 436: Type 'string' is not assignable to type 'string[]'.
+error   OARC-E082 sandbox.buildArgv  repair attempts exhausted [OARC-E090 example "#1" failed: got ["bwrap","--unshare-all","--die-with-parent","--new-session","--ro-bind","/tmp/oa-stage","/work","--ro-bind","/usr","/usr","--symlink","usr/lib64","/lib64","--sy
+warning OARC-W043 sandbox.buildArgv  region keeps a body that does not satisfy its current spec (its recompile failed; shown as stale)
+stale: cli.parseArgv, sandbox.buildArgv keep a body that does not satisfy the current spec
+done: exit 1 · 43 model call(s) · 1033.3s
