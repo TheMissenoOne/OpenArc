@@ -95,8 +95,11 @@ The design keeps your subscription out of the loop:
 | Plain `claude -p`, haiku, in an empty folder | about 31,700 |
 | `claude-cli` backend | about 600 |
 | `codex-cli` backend, its default model | about 13,900 (25,600 before its instructions were replaced) |
+| `opencode-cli`'s setup, sent to a local model | about 130 |
 
-Codex's remaining overhead couldn't be removed with the flags tried. These figures are one request each, and a real region adds its prompt on top.
+Codex's remaining overhead couldn't be removed with the flags tried. These figures are one request each, and a real region adds its prompt on top: one small function through `claude-cli` took 1,132 input and 139 output tokens. The OpenCode figure comes from running its command by hand against a local model. Its hosted models weren't tested, because the key on the test machine had expired.
+
+**Don't switch `defaultBackend` to a hosted backend to fix one region.** The backend is part of every fingerprint, so every compiler-owned region on the default recompiles. Use `sync.escalate`, or `regions.<id>.backend` for that one region.
 
 ## Agents
 
@@ -127,7 +130,7 @@ This installs the skill and a hook that adds one status line at the start of a s
 
 ### OpenCode
 
-Copy `integrations/opencode/openarc.ts` to `.opencode/plugin/`, and `skill/openarc-sheet/` to `.opencode/skill/openarc-sheet/`. The plugin runs the watcher for the life of the session. Check it with `openarc backends test`.
+Copy `integrations/opencode/openarc.ts` to `.opencode/plugin/`, and `skill/openarc-sheet/` to `.opencode/skill/openarc-sheet/`. The plugin runs the watcher for the life of the session.
 
 All three share the `openarc-sheet` skill, which tells the agent to read the one-line status and single regions, never the whole file.
 

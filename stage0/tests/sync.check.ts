@@ -197,7 +197,8 @@ try {
   assert.strictEqual(read(SHEET), bad);
   write(SHEET, bad.replace("[2] => 4", "[2] -> 4"));
 
-  // usage is on record, by model
+  // usage is on record, by model, and the status counts this pass's own requests
+  assert.ok(s.localTokensToday > 0);
   assert.ok(read(".openarc/usage.jsonl").split("\n").filter(Boolean).every((l) => (JSON.parse(l) as { hosted: boolean }).hosted === false));
   console.log("sync.check ok");
 } finally {

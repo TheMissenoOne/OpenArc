@@ -380,7 +380,10 @@ async function syncCmd(root: string, ports: Ports, argv: string[]): Promise<numb
     if (busy) return void (dirty = true);
     busy = true;
     try {
-      show(await pass());
+      const s = await pass();
+      show(s);
+      // A backend that was down or still loading isn't the region's fault: try again without waiting for a save.
+      if (s.attention.some((x) => x.what.includes("OARC-E080") || x.what.includes("backend not ready"))) setTimeout(schedule, 30_000);
     } catch (e) {
       console.error(`[sync] ${(e as Error).message}`);
     }

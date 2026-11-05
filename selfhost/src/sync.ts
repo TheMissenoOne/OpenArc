@@ -423,6 +423,15 @@ export async function syncOnce(ctx: SyncCtx): Promise<SyncStatus> {
   const changed = new Map([...files].filter(([f, t]) => p.files.get(f) !== t));
   const manifestBefore = JSON.parse((await fs.read(MANIFEST)) ?? '{"schema":1,"regions":{}}') as engine.Manifest;
   await commitFiles(ctx, changed);
+  // The merge base moves with the commit: a pass killed during its long compile must not make the next one see a conflict.
+  if (changed.size) {
+    const q = await analyzed(ctx);
+    for (const id of specEdited.keys()) {
+      const r = q.regions.find((x) => x.id === id);
+      if (r && state.regions[id]) state.regions[id] = { ...state.regions[id]!, intent: intentOf(q, r), examples: examplesKey(r.spec.examples) };
+    }
+    await fs.write(STATE_FILE, JSON.stringify(state) + "\n");
+  }
   for (const n of adoptNow) {
     const [file, fn] = n.ref.split("#");
     const q = await engine.parse(ports, ctx.request(null, []), []);
@@ -599,8 +608,6 @@ export async function syncOnce(ctx: SyncCtx): Promise<SyncStatus> {
   // Saved while this pass ran: leave the person's text alone; their save starts the next pass, which merges against this state.
   if ((await fs.read(SHEET_FILE)) === sheetText && rendered !== sheetText) await fs.write(SHEET_FILE, rendered);
   await fs.write(STATE_FILE, JSON.stringify(next) + "\n");
-  status.hostedTokensToday = usage.hosted;
-  status.localTokensToday = usage.local;
   return finish(ctx, status);
 }
 
@@ -623,6 +630,9 @@ async function scanNotAdopted(ctx: SyncCtx, p: engine.Project, next: SyncState):
 const adoptable = (rel: string) => rel.startsWith("src/") && rel.endsWith(".ts") && !/\.(test|arc|d)\.ts$/.test(rel);
 
 async function finish(ctx: SyncCtx, status: SyncStatus): Promise<SyncStatus> {
+  const spent = await usageToday(ctx); // read last: this pass's own compile is part of today
+  status.hostedTokensToday = spent.hosted;
+  status.localTokensToday = spent.local;
   await ctx.ports.fs.write(STATUS_FILE, JSON.stringify(status, null, 2) + "\n");
   return status;
 }
