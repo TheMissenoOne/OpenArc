@@ -104,7 +104,7 @@ Alpha: the compiler's guarantees (write scope, sandbox, ownership) are tested on
 ## Roadmap
 
 - [#14](https://github.com/TheMissenoOne/OpenArc/issues/14) Self-hosting: finish stage 1 (the remaining regions and the `compile.run` blocks), then stage 2 (rebuild with 0 model calls, byte-identical)
-- [#15](https://github.com/TheMissenoOne/OpenArc/issues/15) Known limitations, including two from the benchmark: throw cases as `{ throws }` examples in the bench adapter, and the import form for declared packages nothing imports yet
+- [#15](https://github.com/TheMissenoOne/OpenArc/issues/15) Known limitations: container-tier links, W044's heuristic, and real-server checks for the OpenAI provider and `backends test`
 - [#10](https://github.com/TheMissenoOne/OpenArc/issues/10) Benchmark follow-ups: the 13 skipped class-based exercises (via code-first specs), verified exemplars, region memory, more benchmarks
 - [#13](https://github.com/TheMissenoOne/OpenArc/issues/13) Code-first specs: phases 1 and 2 are in 0.9.0; next are laws over every implementation of an interface, in-place sketches, and atomic-design TSX
 - [#50](https://github.com/TheMissenoOne/OpenArc/issues/50) Dependency evaluation: `deps suggest` is on main (5/9 on the deps bench, no wrong proposals)

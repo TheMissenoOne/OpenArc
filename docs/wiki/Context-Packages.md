@@ -32,7 +32,7 @@ Anything else is `OARC-E071`. `"default": "x"` asks for a default import (`impor
 
 ## Import forms
 
-"Allowed new imports" lists the spec's `deps`. For each package dep it adds the exact import line the project already uses, e.g. `import ts from "typescript";` (typescript needs a default import; `import * as ts` fails with TS2595). If the project never imports that package, only the specifier is shown.
+"Allowed new imports" lists the spec's `deps`. For each package dep it adds the exact import line the project already uses, e.g. `import ts from "typescript";` (typescript needs a default import; `import * as ts` fails with TS2595). If the project never imports that package, the line comes from its declarations: `import X from "p";` for `export = X`, otherwise its default export and up to 50 value exports (`import { compare, parse } from "semver"; // import only the names you call`). With no declarations to read, only the specifier is shown.
 
 ## Budgets
 

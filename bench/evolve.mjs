@@ -11,7 +11,7 @@ import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync } fr
 import { readFile, writeFile, rm, mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { parseArgs } from "node:util";
-import { EXERCISES, instructions, split, run, heldOut, runTests, prepareTestDir, proxyBase } from "./lib/common.mjs";
+import { EXERCISES, instructions, split, run, heldOut, runTests, prepareTestDir, proxyBase, exampleLine, exampleTest } from "./lib/common.mjs";
 import { specSource, configFor } from "./lib/adapter.mjs";
 import { chat, extractCode } from "./lib/baseline.mjs";
 
@@ -123,8 +123,7 @@ async function armA(dir) {
 }
 
 const SYSTEM = "You are an expert TypeScript programmer. Reply with the complete TypeScript file in a single ```ts code block and nothing else.";
-const show = (v) => JSON.stringify(v);
-const examplesOf = (ex) => splits[ex].examples[fnOf(ex)].map((e) => `- ${fnOf(ex)}(${e.args.map(show).join(", ")}) returns ${show(e.expected)}`).join("\n");
+const examplesOf = (ex) => splits[ex].examples[fnOf(ex)].map((e) => exampleLine(fnOf(ex), e)).join("\n");
 const sigOf = (ex) => { const e = EXERCISES.functions[ex]; const f = fnOf(ex); const [, p, r] = e.fns[f].match(/^\((.*)\) => (.*)$/); return `${e.types ? e.types + "\n\n" : ""}export function ${f}(${p}): ${r}`; };
 function changeText(st) {
   const parts = [];
@@ -135,7 +134,7 @@ function changeText(st) {
 const publicTests = (exs) => {
   const dec = `const d = (v: any): any => v === "$undefined" ? undefined : v === "$NaN" ? NaN : v === "$Infinity" ? Infinity : v === "$-Infinity" ? -Infinity : Array.isArray(v) ? v.map(d) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, d(x)])) : v;\n`;
   let s = `import { it, expect } from '@jest/globals'\nimport * as m from './toolkit.ts'\n${dec}`;
-  for (const ex of exs) for (const e of splits[ex].examples[fnOf(ex)]) s += `it(${show(`${fnOf(ex)}: ${e.name}`)}, () => { expect((m as any).${fnOf(ex)}(...d(${show(e.args)}))).toEqual(d(${show(e.expected)})) })\n`;
+  for (const ex of exs) for (const e of splits[ex].examples[fnOf(ex)]) s += exampleTest(fnOf(ex), e);
   return s;
 };
 

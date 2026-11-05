@@ -93,6 +93,15 @@ try {
       assert.deepStrictEqual(m.regions["demo.inc"].provenance.verifiedBy, ["tsc", "static", "examples:3/3"]);
       const g = await cli(dir, "graph");
       assert.match(g.out, /demo\.inc +F compiler/, g.out);
+      // check --oracle: the flags reach the run; a bad flag is refused before any work
+      mkdirSync(join(dir, "legacy"));
+      writeFileSync(join(dir, "legacy", "inc.js"), "export const inc = (n) => n + 1;\n");
+      const agreed = await cli(dir, "check", "demo.inc", "--oracle", "legacy/inc.js#inc", "--runs", "7", "--seed", "3");
+      assert.equal(agreed.code, 0, agreed.out);
+      assert.match(agreed.out, /7\/7 inputs agree \(seed 3\)/, agreed.out);
+      assert.match((await cli(dir, "check", "demo.inc", "--oracle", "legacy/inc.js#inc")).out, /inputs agree \(seed 1\)/);
+      for (const bad of [["--runs", "0"], ["--runs", "-1"], ["--runs", "1.5"], ["--runs", "x"], ["--runs"], ["--seed", "-1"], ["--seed", "4294967296"], ["--seed"], ["--other", "1"], ["7"]])
+        assert.equal((await cli(dir, "check", "demo.inc", "--oracle", "legacy/inc.js#inc", ...bad)).code, 2, bad.join(" "));
       console.log(`sandbox.check: ${iso} -> ${want}: doctor ok, compile ok (attempt 1 failed its examples in the sandbox)`);
     } finally {
       // Windows: the sandboxed node can hold a handle on the temp dir for seconds after it exits (EPERM even after

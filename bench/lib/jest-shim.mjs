@@ -29,11 +29,13 @@ function recordingMatchers(actual) {
     toEqual: (e) => set("expected", rec.encode(e)),
     toStrictEqual: (e) => set("expected", rec.encode(e)),
     toBe: (e) => set("expected", rec.encode(e)),
-    toThrow: () => {
+    toThrow: (want) => {
       if (typeof actual !== "function") return void (rec.unusable = true);
       const n = rec.calls.length;
       try { actual(); } catch {}
-      for (let i = n; i < rec.calls.length; i++) rec.calls[i].throws = true;
+      // a string or Error's message becomes the example's `throws` string; ponytail: a regex or class only says "throws"
+      const throws = (want instanceof Error ? want.message : typeof want === "string" ? want : "") || true;
+      for (let i = n; i < rec.calls.length; i++) rec.calls[i].throws = throws;
       if (rec.calls.length === n) rec.unusable = true;
     },
   };

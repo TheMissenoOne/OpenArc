@@ -2,13 +2,12 @@
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { RESAMPLE_TEMPERATURE } from "./adapter.mjs";
-import { EXERCISES, instructions, typedStub, heldOut, runTests, prepareTestDir, proxyBase } from "./common.mjs";
+import { instructions, typedStub, heldOut, runTests, prepareTestDir, proxyBase, exampleLine, exampleTest } from "./common.mjs";
 
 const SYSTEM = "You are an expert TypeScript programmer. Reply with the complete TypeScript file in a single ```ts code block and nothing else.";
-const show = (v) => JSON.stringify(v);
 
 export function baselinePrompt(dataset, ex, splitInfo) {
-  const ex_ = Object.entries(splitInfo.examples).flatMap(([f, es]) => es.map((e) => `- ${f}(${e.args.map(show).join(", ")}) returns ${show(e.expected)}`));
+  const ex_ = Object.entries(splitInfo.examples).flatMap(([f, es]) => es.map((e) => exampleLine(f, e)));
   return [
     `Exercise "${ex}". Instructions:\n\n${instructions(dataset, ex)}`,
     `Stub file \`${ex}.ts\`:\n\n\`\`\`ts\n${typedStub(ex)}\`\`\``,
@@ -24,11 +23,11 @@ export function extractCode(text) {
 }
 
 /** Public examples as a jest-style test file (same examples OpenArc verifies). */
-function publicTest(ex, splitInfo) {
+export function publicTest(ex, splitInfo) {
   const dec = `const d = (v: any): any => v === "$undefined" ? undefined : v === "$NaN" ? NaN : v === "$Infinity" ? Infinity : v === "$-Infinity" ? -Infinity : Array.isArray(v) ? v.map(d) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, d(x)])) : v;\n`;
   let s = `import { it, expect } from '@jest/globals'\nimport * as m from './${ex}.ts'\n${dec}`;
   for (const [f, es] of Object.entries(splitInfo.examples))
-    for (const e of es) s += `it(${show(`${f}: ${e.name}`)}, () => { expect((m as any).${f}(...d(${show(e.args)}))).toEqual(d(${show(e.expected)})) })\n`;
+    for (const e of es) s += exampleTest(f, e);
   return s;
 }
 

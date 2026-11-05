@@ -40,7 +40,7 @@ OpenArc (A/B/C) and the baseline (D) talk to the same server through the proxy w
 | `run.mjs` | orchestrator: memory gate, token proxy, RSS sampler, one task at a time, writes `tasks.jsonl` |
 | `lib/adapter.mjs` | exercise to OpenArc project (configs A/B/C), compile, held-out tests |
 | `lib/baseline.mjs` | config D: whole-file prompt to Ollama `/api/chat`, repair loop |
-| `lib/common.mjs` | split rule, typed stub, sandboxed test runs |
+| `lib/common.mjs` | split rule, public example text and test lines for the plain prompts, typed stub, sandboxed test runs |
 | `lib/jest-shim.mjs`, `lib/run-tests.mjs` | runs the Exercism jest tests without jest; also records calls to extract examples |
 | `exercises.json` | per-exercise signatures, and the skipped exercises with reasons |
 | `matrix.json` | configs, models, disabled slots for bigger models and an API backend, pilot list |
@@ -63,7 +63,9 @@ ts-bench runs the exercise's jest suite. We don't install jest: `lib/jest-shim.m
 
 ### Split rule (deterministic)
 
-The test file runs once against recorder stubs (`run-tests.mjs --record`): every call to an exercise export records its arguments, and `expect(call).toEqual(v)` records `v`. A test is **eligible** as an example for function `f` if it makes exactly one call, to `f`, with a value expectation (no `toThrow`, no `.not`, JSON-encodable arguments; `undefined` becomes the `"$undefined"` token). For each `f`, the **first `min(3, floor(eligible_f / 2))` eligible tests in file order are public**; every other test, including all throw tests, is **held out**. The halving keeps at least half of each function's tests hidden (diamond has 3 tests: 1 public). The split is cached in `<work>/splits/<exercise>.json` and recorded per task; held-out test names are in each task's failures. 12 exercises give 100 held-out tests.
+The test file runs once against recorder stubs (`run-tests.mjs --record`): every call to an exercise export records its arguments, `expect(call).toEqual(v)` records `v`, and `expect(() => call).toThrow(w)` records a throw: its message when `w` is a string or an `Error`, otherwise just that it throws. A test is **eligible** as an example for function `f` if it makes exactly one call, to `f`, with a value or a throw expectation (no `.not`, JSON-encodable arguments; `undefined` becomes the `"$undefined"` token). For each `f` and each of those two kinds, the **first `min(3, floor(eligible / 2))` eligible tests in file order are public**; every other test is **held out**. The halving keeps at least half of each kind hidden (diamond has 3 tests: 1 public; a function with a single throw test keeps it hidden). The split is cached in `<work>/splits/<exercise>.json`, recomputed when the rule changes, and recorded per task; held-out test names are in each task's failures. `node --no-warnings lib/split.check.mjs` checks the rule without a model or the dataset.
+
+Throw examples became public after the 2026-11-04 runs. The value examples are the same as before, but the throw tests that became public left the held-out set: on the dev set, 185 held-out tests became 173, with 12 new public throw examples (all-your-base 3, binary-search 2, phone-number 3, variable-length-quantity 1, wordy 3). Held-out counts in earlier results (12 exercises gave 100) are not comparable with later ones.
 
 The model never sees held-out tests, in either arm.
 
@@ -100,7 +102,7 @@ One task at a time. Before each model switch every loaded model is unloaded (`/a
 - **Repair context differs by design.** OpenArc builds a fresh prompt with the exact diagnostics (and raises temperature when the prompt would repeat). D keeps the conversation, so later attempts carry earlier replies. Both are the natural loop for each approach.
 - **Failed regions ship nothing.** A region OpenArc can't verify stays a throwing placeholder and scores 0 on held-out tests. D always ships its last attempt, even if public examples fail. So the tables also report **D gated**: D's pass@1 counted only when its public examples passed, the same rule OpenArc applies.
 - **OpenArc type-checks; D doesn't.** D's file runs with type stripping only, so type-wrong but behaviour-right code still passes for D.
-- **Throw behaviour is never an example.** OpenArc examples can't express "throws" (the spec has no `throws` form), so error cases (binary-search not found, wordy errors, VLQ incomplete) are held-out only, for both arms; both see the instructions that describe them.
+- **Throw examples are the same for both arms.** OpenArc gets `{ args, throws }` in the spec, D a line such as `find([1,3], 7) throws an error whose message contains "Value not in array"` and a `toThrow` check in its public test file. `toThrow(/regex/)` or `toThrow(SomeError)` becomes `throws: true` for both. OpenArc also runs a string `throws` as a substring match, as jest's `toThrow` does; a public `toThrow(new Error("x"))` is checked as a substring where the held-out run of that test would need the exact message.
 - **The signatures are hand-written** (see above), equally for both arms.
 - Equality: OpenArc checks examples with its own deep equality; D's public check uses jest's `toEqual` (which ignores `undefined` properties). Held-out tests use jest's `expect` for both.
 

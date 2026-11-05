@@ -14,7 +14,7 @@ import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync } fr
 import { readFile, writeFile, rm, mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { parseArgs } from "node:util";
-import { EXERCISES, instructions, split, run, heldOut, runTests, prepareTestDir } from "./lib/common.mjs";
+import { EXERCISES, instructions, split, run, heldOut, runTests, prepareTestDir, exampleLine, exampleTest } from "./lib/common.mjs";
 import { specSource, configFor, sketchFile } from "./lib/adapter.mjs";
 import { chat, extractCode } from "./lib/baseline.mjs";
 
@@ -141,8 +141,7 @@ async function armOpenArc(dir, cfg) {
 }
 
 const SYSTEM = "You are an expert TypeScript programmer. Reply with the complete TypeScript file in a single ```ts code block and nothing else.";
-const show = (v) => JSON.stringify(v);
-const examplesOf = (ex) => fnsOf(ex).flatMap((f) => splits[ex].examples[f].map((e) => `- ${f}(${e.args.map(show).join(", ")}) returns ${show(e.expected)}`)).join("\n");
+const examplesOf = (ex) => fnsOf(ex).flatMap((f) => splits[ex].examples[f].map((e) => exampleLine(f, e))).join("\n");
 const sigOf = (ex) => { const e = EXERCISES.functions[ex]; return `${e.types ? e.types + "\n\n" : ""}${fnsOf(ex).map((f) => { const [, p, r] = e.fns[f].match(/^\((.*)\) => (.*)$/); return `export function ${f}(${p}): ${r}`; }).join("\n")}`; };
 function changeText(st, f, layout, cfg = {}) {
   const parts = [];
@@ -155,7 +154,7 @@ const outline = (ex) => { const s = fnsOf(ex).filter((f) => existsSync(sketchFil
 const publicTests = (f, exs) => {
   const dec = `const d = (v: any): any => v === "$undefined" ? undefined : v === "$NaN" ? NaN : v === "$Infinity" ? Infinity : v === "$-Infinity" ? -Infinity : Array.isArray(v) ? v.map(d) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, d(x)])) : v;\n`;
   let s = `import { it, expect } from '@jest/globals'\nimport * as m from './${f}.ts'\n${dec}`;
-  for (const ex of exs) for (const fn of fnsOf(ex)) for (const e of splits[ex].examples[fn]) s += `it(${show(`${fn}: ${e.name}`)}, () => { expect((m as any).${fn}(...d(${show(e.args)}))).toEqual(d(${show(e.expected)})) })\n`;
+  for (const ex of exs) for (const fn of fnsOf(ex)) for (const e of splits[ex].examples[fn]) s += exampleTest(fn, e);
   return s;
 };
 
