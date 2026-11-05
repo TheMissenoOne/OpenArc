@@ -1,0 +1,27 @@
+body        built  gaps(of 7)  decoder-hang  control classes (real/falseAlarm inputs)
+local-s1    1/7    0           no            peerTable:1(0/424) 
+local-s2    3/7    1           no            peerTable:1(0/424) handshake:0(0/0) 
+local-s3    1/7    0           no            peerTable:1(0/34) 
+qwen35-s1   3/7    4           no            peerTable:0(0/0) 
+qwen35-s2   2/7    0           no            peerTable:1(0/34) handshake:5(9/39) 
+qwen35-s3   3/7    2           no            peerTable:1(0/34) handshake:0(0/0) 
+seed-s1     1/7    0           no            peerTable:0(0/0) 
+seed-s2     2/7    0           no            peerTable:1(0/34) 
+seed-s3     1/7    0           no            peerTable:1(0/34) 
+
+RULE union seed 1 (local-s1, qwen35-s1, seed-s1): 4 of 7: parseOutput no body; parseOutput check order; onGossip unsorted; onGossip negative fanout
+union all 9: 4 of 7: parseOutput no body; parseOutput check order; onGossip unsorted; onGossip negative fanout
+missed by all 9: parseOutput bad import items; broadcast unknown peer; broadcast __proto__ peer
+control classes: n=12 median 1 max 5 values 0,0,0,0,1,1,1,1,1,1,1,5
+built per region: model.parseOutput 2/9 · p2p.onGossip 2/9 · p2p.broadcast 0/9 · p2p.peerTable 9/9 · p2p.handshake 3/9 · p2p.encodeVarint 0/9 · p2p.decodeLengthPrefixed 1/9
+  parseOutput no body: qwen35-s1, qwen35-s3
+  parseOutput bad import items: none
+  parseOutput check order: qwen35-s1, qwen35-s3
+  broadcast unknown peer: none
+  broadcast __proto__ peer: none
+  onGossip unsorted: qwen35-s1
+  onGossip negative fanout: local-s2, qwen35-s1
+  model.parseOutput: 2 bodies, classes 3,3; real 230 falseAlarm 10
+  p2p.onGossip: 2 bodies, classes 1,2; real 259 falseAlarm 317
+  p2p.broadcast: 0 bodies, classes ; real 0 falseAlarm 0
+  p2p.decodeLengthPrefixed: 1 bodies, classes 2; real 19 falseAlarm 0
