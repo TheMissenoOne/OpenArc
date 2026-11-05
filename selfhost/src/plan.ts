@@ -71,16 +71,63 @@ export const selectTargetsSpec = arc.defineRegion<SelectTargets>({
 
 // @openarc:begin plan.selectTargets
 export const selectTargets: SelectTargets = (regions, requested) => {
-  const buildRegionMap = (regions: PlanInput[]): Map<string, PlanInput> => { const map = new Map(); for (const region of regions) { map.set(region.id, region); } return map; };
-  const getDescendants = (map: Map<string, PlanInput>, id: string): string[] => { const descendants: string[] = []; const stack = [id]; while (stack.length > 0) { const current = stack.pop()!; const region = map.get(current); if (region) { for (const [key, value] of map.entries()) { if (value.parent === current) { stack.push(key); descendants.push(key); } } } } return descendants; };
-  const map = buildRegionMap(regions);
-  const scopeIds = requested.length === 0 ? Array.from(map.keys()) : requested.concat(requested.flatMap(id => getDescendants(map, id)));
-  const scopeSet = new Set(scopeIds);
+  const buildDescendants = (regions: PlanInput[], id: string): string[] => {
+    const result: string[] = [];
+    const queue: string[] = [id];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const children = regions.filter(r => r.parent === current);
+      for (const child of children) {
+        result.push(child.id);
+        queue.push(child.id);
+      }
+    }
+    return result;
+  };
+  const allIds = new Set(regions.map(r => r.id));
+  const scope: string[] = [];
+  if (requested.length === 0) {
+      scope.push(...regions.map(r => r.id));
+    } else {
+      for (const req of requested) {
+        if (allIds.has(req)) {
+          scope.push(req, ...buildDescendants(regions, req));
+        }
+      }
+    }
+  const scopeSet = new Set(scope);
   const targets: string[] = [];
   const skipped: Diagnostic[] = [];
+  const byParent: Map<string | null, PlanInput[]> = new Map();
+  for (const r of regions) {
+      if (!byParent.has(r.parent)) byParent.set(r.parent, []);
+      byParent.get(r.parent)!.push(r);
+    }
   const visited = new Set<string>();
-  const postOrderTraversal = (id: string) => { if (visited.has(id)) return; visited.add(id); const region = map.get(id)!; for (const [key, value] of map.entries()) { if (value.parent === id) { postOrderTraversal(key); } } if (scopeSet.has(id)) { if (region.state === 'pending' || (region.state === 'compiler' && region.stale)) { targets.push(id); } else if (region.state === 'developer' && region.stale) { skipped.push({ code: 'OARC-W060', id }); } else if (region.state === 'conflicted') { skipped.push({ code: 'OARC-E061', id }); } } };
-  for (const id of scopeIds) { postOrderTraversal(id); }
+  const postOrder: string[] = [];
+  const traverse = (id: string) => {
+      if (visited.has(id)) return;
+      visited.add(id);
+      const children = byParent.get(id) || [];
+      for (const child of children) {
+        traverse(child.id);
+      }
+      postOrder.push(id);
+    };
+  for (const id of scope) {
+      traverse(id);
+    }
+  for (const id of postOrder) {
+      const region = regions.find(r => r.id === id);
+      if (!region) continue;
+      if (region.state === "conflicted") {
+        skipped.push({ code: "OARC-E061", id });
+      } else if (region.state === "developer" && region.stale) {
+        skipped.push({ code: "OARC-W060", id });
+      } else if ((region.state === "pending" || (region.state === "compiler" && region.stale)) && scopeSet.has(id)) {
+        targets.push(id);
+      }
+    }
   return { targets, skipped };
 };
 // @openarc:end plan.selectTargets

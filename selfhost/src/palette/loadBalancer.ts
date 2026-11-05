@@ -315,7 +315,45 @@ export const healthCheckSpec = arc.defineRegion<HealthCheck>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin lb.healthCheck
-export const healthCheck: HealthCheck = (states, probes, clock, policy) => arc.todo("lb.healthCheck");
+export const healthCheck: HealthCheck = (states, probes, clock, policy) => {
+  const map = new Map(probes.map(p => [p.id, p]));
+  return states.map(s => {
+    const probe = map.get(s.id);
+    if (!probe) return s;
+    const now = clock.now();
+    const newSuccesses = probe.ok ? s.successes + 1 : 0;
+    const newFailures = probe.ok ? 0 : s.failures + 1;
+    let newHealthy = s.healthy;
+    let newDownSince = s.downSince;
+
+    if (!s.healthy) {
+      if (newFailures >= policy.unhealthyAfter) {
+        newHealthy = false;
+        newDownSince = now;
+      } else if (newSuccesses >= policy.healthyAfter) {
+        if (s.downSince === null) {
+          newDownSince = now;
+        } else if (now - s.downSince >= policy.minDownMs) {
+          newHealthy = true;
+          newDownSince = null;
+        }
+      }
+    } else {
+      if (newFailures >= policy.unhealthyAfter) {
+        newHealthy = false;
+        newDownSince = now;
+      }
+    }
+
+    return {
+      ...s,
+      healthy: newHealthy,
+      failures: newFailures,
+      successes: newSuccesses,
+      downSince: newDownSince
+    };
+  });
+};
 // @openarc:end lb.healthCheck
 
 // ── lb.failover ───────────────────────────────────────────────── try backends in order until one answers

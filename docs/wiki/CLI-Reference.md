@@ -16,7 +16,7 @@
 | `openarc graph` | region tree: kind, state (`stale` for a compiler region whose spec changed since its body was verified), number of examples (and of tests, for a code-first region), file |
 | `openarc inspect <id>` | spec, state (`stale` as in `graph`, with `ownership` alongside), `tokens` (`{prompt, completion}` the model used to produce the current body, failed attempts included; `null` when the backend reports none or the body isn't generated), manifest entry and provenance (model, output format, context level, attempts, sampling, tokens, checks) |
 | `openarc check <id> --oracle <module>#<export> [--runs <n>] [--seed <n>]` | differential test: run the compiled region and a reference implementation on its examples' arguments plus seeded variations (60 inputs and seed 1 by default), in the sandbox, and list every disagreement; exit 1 if any. See "Thin examples" in [[Writing Specs]] |
-| `openarc check <ids...> --mutants [--operators trivial,boundary,comparison,constant,logical]` | mutation score: run deterministic one-change variants of each region's body through tsc and its sandbox examples/tests, and list the ones no check catches. No model; exit 0 (a report), 2 on a bad flag. See [Mutants](#mutants) |
+| `openarc check <ids...> --mutants [--operators trivial,boundary,comparison,constant,logical,guard,swap]` | mutation score: run deterministic one-change variants of each region's body through tsc and its sandbox examples/tests, and list the ones no check catches. No model; exit 0 (a report), 2 on a bad flag. See [Mutants](#mutants) |
 | `openarc doctor` | report Node, the platform, the tools found and the selected sandbox tier, then run one example in that sandbox which also tries a file write, a child process and a network request; each must be refused. No model. Exit 1 if the tier is unavailable or anything gets through (except the network on Node < 25 in the `node` tier, which is reported) |
 | `openarc lint [--strict \| --profile recommended\|strict] [--fail-on-warnings] [--format text\|json] [ids or files…]` | check the specs against the lint rules below. Offline and deterministic: it parses and analyses the project like `graph` (no model call, no sandbox run, no network). Exit 1 if any finding is at `error` (or any at all with `--fail-on-warnings` or `lint.failOnWarnings`), 2 on a bad flag or an unknown id/file. Configure it in the `lint` block of [[Configuration]]. See [Lint rules](#lint-rules) |
 | `openarc freeze <id>` | make a region developer-owned |
@@ -64,16 +64,16 @@ export const parseSpec = arc.defineRegion<Parse>({ id: "csv.parse", intent: "…
 
 `openarc check <ids...> --mutants` asks whether a region's examples and tests can tell its body apart from plausible wrong ones. Only implemented function regions (compiler- or developer-owned) whose examples/tests already pass are analysed; any other prints `mutants <id>: skipped (<reason>)`.
 
-Each mutant is one change to the body, at most 40 per region, always in the same order: trivial bodies first (return the zero value of the return type, `""`, `0`, `false`, `[]`, `{}`, `null` or `undefined`; return the first argument when its type fits; throw), then in source order `boundary` (`>=`/`>`, `<=`/`<`), `comparison` (`===`/`!==`, `==`/`!=`, `<`/`>=`, `>`/`<=`), `constant` (a number `+1` and `-1`) and `logical` (`&&`/`||`, a dropped `!`). `--operators boundary,constant` picks kinds. A mutant that doesn't type-check is `invalid` and not scored; the others run through the same sandbox and limits as compile.
+Each mutant is one change to the body, at most 40 per region, always in the same order: trivial bodies first (return the zero value of the return type, `""`, `0`, `false`, `[]`, `{}`, `null` or `undefined`; return the first argument when its type fits; throw), then in source order `boundary` (`>=`/`>`, `<=`/`<`), `comparison` (`===`/`!==`, `==`/`!=`, `<`/`>=`, `>`/`<=`), `constant` (a number `+1` and `-1`), `logical` (`&&`/`||`, a dropped `!`), `guard` (a dropped `if` without `else` that returns or throws) and `swap` (two adjacent same-typed call arguments exchanged). `--operators boundary,constant` picks kinds. A mutant that doesn't type-check is `invalid` and not scored; the others run through the same sandbox and limits as compile. A survivor is then compared with the original on the `check --oracle` inputs: no difference makes it `equivalent` (likely equivalent), which is listed but not scored. Score = killed / (killed + survived).
 
 ```
-mutants m.weak: killed 5/8 (63%), survived 3, invalid 0, timeout 0
-survived m.weak line 6: n >= 0 -> n > 0
-survived m.weak line 6: n >= 0 -> n >= 1
-survived m.weak line 6: n >= 0 -> n >= -1
+mutants m.weak: killed 3/6 (50%), survived 3, equivalent 0, invalid 0, timeout 0
+survived m.weak line 7: n >= 0 -> n > 0; try: args [0] (original true, mutant false)
+survived m.weak line 7: n >= 0 -> n >= 1; try: args [0] (original true, mutant false)
+survived m.weak line 7: n >= 0 -> n >= -1; try: args [-1] (original false, mutant true)
 ```
 
-Here no example sits at `0`, so `{ args: [0], expected: true }` would kill all three. A trivial-body survivor ends in `(the examples pass for a vacuous body)`. A survivor means the checks can't tell that variant apart, not that the body is wrong (an equivalent mutant can survive any spec). No model call, nothing written outside the sandbox stage; exit 0.
+Each survivor names an input where it differs from the original: here `{ args: [0], expected: true }` and `{ args: [-1], expected: false }` would kill all three. An equivalent mutant prints no example: `equivalent m.pick line 14: Math.max(a, b) -> Math.max(b, a)`. With no such input to try (no example has only plain values to vary), `try:` lists the edge values to add, like OARC-W044, or the line to reach. A trivial-body survivor also says `(the examples pass for a vacuous body)`. A survivor means the checks can't tell that variant apart, not that the body is wrong. `equivalent` means no generated input told them apart, not a proof: read those lines. There is no `unreachable` class: the harness records hits per region, not per line, so a mutant the checks never reach is `equivalent` or `survived` by the same rule. No model call, nothing written outside the sandbox stage; exit 0.
 
 ## Dependency suggestions
 
