@@ -263,4 +263,10 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
   const r = spawnSync(process.execPath, ["--no-warnings", "tools/run-examples.ts", "no-such-prefix"], { cwd: root, encoding: "utf8" });
   assert.deepStrictEqual([r.status, r.stdout.trim(), r.stderr], [0, "0 ok, 0 pending, 0 failing", ""]);
 }
+// model.parseOutput: imports null is not an absent imports
+{
+  const { parseOutput } = await import("../src/model.ts");
+  assert.deepEqual(parseOutput('{"body":"x","imports":null}'), { ok: false, diagnostic: { code: "OARC-E081", detail: "bad-imports" } });
+  assert.deepEqual(parseOutput('{"body":"x"}'), { ok: true, body: "x", imports: [] });
+}
 console.log("eval-fixes: context/scope, retry variation, attempts dump, stale/W043, W044, oracle check, Date.parse, scaffold, run-examples ok");

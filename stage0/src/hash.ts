@@ -43,6 +43,8 @@ export const normalizeOwnedTextSpec = arc.defineRegion<NormalizeOwnedText>({
     "2. Parse with ts.createSourceFile(setParentNodes=true). Walk node.getChildren() depth-first, skipping JSDoc nodes;",
     "for every leaf, emit its leading comment ranges, then its getText() if non-empty, then its trailing comment ranges (every comment once, trimmed; same-line trailing comments count).",
     "3. Join with single spaces. Never use the raw scanner: it does not rescan templates or regexes, so whitespace inside them would be lost.",
+    "There is no ts.isJSDocComment: skip a node when n.kind >= ts.SyntaxKind.FirstJSDocNode && n.kind <= ts.SyntaxKind.LastJSDocNode. Comments: ts.getLeadingCommentRanges(text, n.pos) and ts.getTrailingCommentRanges(text, n.end), de-duplicated by range.pos in a Set, text.slice(r.pos, r.end).trim().",
+    "A node with getChildren(sf) non-empty is not a leaf: recurse. Pass sf to getChildren and getText.",
   ],
   deps: ["typescript"],
   examples: [

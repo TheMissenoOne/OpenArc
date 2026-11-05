@@ -689,6 +689,8 @@ const sigNodes = (f: ts.SignatureDeclarationBase): ts.Node[] => [...(f.typeParam
 
 /** Value signatures of a local module (helpers a region may call), skipping specs. Other modules: exported values only.
  *  The region's own file (`sameFile`): every top-level value, minus `skip` (the region itself and pending regions). */
+/** The name in a moduleSignatures line, non-ASCII identifiers included. */
+const SIBLING_NAME = /^(?:const|function) ([^\s(:<]+)/;
 function moduleSignatures(sf: ts.SourceFile, checker: ts.TypeChecker, sameFile?: { skip: Set<string> }): { lines: string[]; nodes: ts.Node[] } {
   const lines: string[] = [];
   const nodes: ts.Node[] = [];
@@ -920,9 +922,9 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
     // pulls in); the rest are names, and a failed attempt expands to level 1, which shows them all. Fingerprint unaffected.
     const skip = new Set([s.symbol]);
     if (p.config.compilation.context.relevance && level === 0 && !opts.stable && !s.sketch) {
-      const named = new Set(`${s.intent} ${s.signature} ${cf?.declaration ?? ""} ${cf?.extraIntent ?? ""} ${(s.calls ?? []).join(" ")}`.match(/[\w$]+/g));
+      const named = new Set(`${s.intent} ${s.signature} ${cf?.declaration ?? ""} ${cf?.extraIntent ?? ""} ${(s.calls ?? []).join(" ")}`.match(/[\p{ID_Continue}$]+/gu));
       for (const l of moduleSignatures(sf, checker, { skip }).lines) {
-        const name = /^(?:const|function) ([\w$]+)/.exec(l)![1]!;
+        const name = SIBLING_NAME.exec(l)![1]!;
         if (!named.has(name)) nameOnly.push(name);
       }
       for (const n of nameOnly) skip.add(n);
@@ -930,7 +932,7 @@ function contextSections(p: Project, r: RegionInfo, level: ContextLevel, backend
     const own = moduleSignatures(sf, checker, { skip });
     const siblings = new Map(p.regions.filter((x) => x.file === r.file && x.kind === "function" && x.id !== r.id && !x.spec.codeFirst?.cls).map((x) => [x.spec.symbol, x]));
     sameFileLines = own.lines.map((l) => {
-      const x = opts.stable ? siblings.get(/^(?:const|function) ([\w$]+)/.exec(l)?.[1] ?? "") : undefined;
+      const x = opts.stable ? siblings.get(SIBLING_NAME.exec(l)?.[1] ?? "") : undefined;
       const intent = x?.spec.intent.replace(/\s+/g, " ").trim();
       return intent ? `${l} // intent: ${intent}` : l;
     });

@@ -10,8 +10,12 @@
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
-    "openarc-stage0": "file:../stage0/build/open-arc-0.6.3.tgz",
-    "typescript": "5.9"
+    "typescript": "5.9",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "jsdom": "^26.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "dependencies": {
     "open-arc": "file:./core"

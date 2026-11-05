@@ -12,8 +12,10 @@ export const checkRestrictionsSpec = arc.defineRegion<CheckRestrictions>({
     "return | yield | await (only when !enclosingIsAsync) | label | break/continue whose target loop or switch is outside body,",
     "this | arguments | super | new.target;",
     "and binding:<name> for each top-level declaration of body whose name is in usedAfter.",
-    "Non-arrow functions, methods and classes are opaque: nothing inside them is reported.",
+    "Non-arrow functions, methods, accessors and classes are opaque: nothing inside them is reported.",
     "ARROW functions are transparent for this/arguments/super/new.target, because arrows capture them lexically.",
+    "Method: ts.createSourceFile('b.ts', body, ts.ScriptTarget.Latest, true), then recurse with node.forEachChild, carrying loop depth, switch depth and whether you are inside an arrow.",
+    "Guards that exist: ts.isReturnStatement, isYieldExpression, isAwaitExpression, isLabeledStatement, isBreakStatement, isContinueStatement, isIterationStatement(n, false), isSwitchStatement, isFunctionDeclaration, isFunctionExpression, isMethodDeclaration, isGetAccessor, isSetAccessor, isClassLike, isArrowFunction, isMetaProperty, isVariableStatement. this and super: n.kind === ts.SyntaxKind.ThisKeyword or SuperKeyword. arguments: ts.isIdentifier(n) && n.text === 'arguments', unless it is the property name of a property access (ts.isPropertyAccessExpression(n.parent) && n.parent.name === n). Nothing else from ts is needed.",
   ],
   deps: ["typescript"],
   examples: [
@@ -34,6 +36,7 @@ export const checkRestrictionsSpec = arc.defineRegion<CheckRestrictions>({
     },
     { name: "continue: labeled, or outside any loop", args: ["while (a) { continue outer; }\ncontinue;", false, []], expected: [{ code: "OARC-E035", detail: "continue" }, { code: "OARC-E035", detail: "continue" }] },
     { name: "arguments object (not a property named arguments)", args: ["x = arguments.length;", false, []], expected: [{ code: "OARC-E035", detail: "arguments" }] },
+    { name: "a property named arguments", args: ["x = obj.arguments;", false, []], expected: [] },
     { name: "new.target", args: ["if (!new.target) throw e;", false, []], expected: [{ code: "OARC-E035", detail: "new.target" }] },
   ],
 });

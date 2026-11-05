@@ -1,14 +1,14 @@
 # Bootstrap: OpenArc compiling OpenArc
 
-`selfhost/` is OpenArc's own compiler written as an OpenArc project. It has 21 function regions and 9 block regions, each with a typed spec and examples, and every body starts as a placeholder.
+`selfhost/` is OpenArc's own compiler written as an OpenArc project. It has 44 function regions and 9 block regions, each with a typed spec and examples, and every body starts as a placeholder.
 
 | Stage | What | Status |
 |---|---|---|
 | **0** | `stage0/`: every region hand-written, then built into the `open-arc` npm package | done: 43/43 regions (24 compiler, 19 palette) pass their examples |
-| **1** | stage 0 (installed as `openarc-stage0`) compiles the pristine `selfhost/` scaffold | in progress: 8/29 regions verified after the correction below (first run 14/29, second run claimed 16/29) |
+| **1** | stage 0 (`stage0/`) compiles the pristine `selfhost/` scaffold | **frozen** at 38 of 53 regions (see "Freeze, 2026-11-04") |
 | **2** | the package built from stage 1 recompiles the scaffold with stage 1's cache: 0 model calls, byte-identical output | pending: after stage 1 completes |
 
-Stage 0 stays installed as the known-good compiler. A broken stage N never has to repair itself.
+Stage 0 stays the known-good compiler. A broken stage N never has to repair itself.
 
 ## First stage-1 run (2026-10-31)
 
@@ -91,3 +91,27 @@ Nothing incorrect was committed by the transaction: failed regions stayed `pendi
 The second run's "16/29" overstated it. `compile.run.parse` was committed with wrong code: it built a journal and called `commit()` during parsing. The cause was an OpenArc bug: with `--keep-going`, when a sibling block failed (`compile.run.recover`), the joint check for `compile.run` was skipped, but the other generated blocks were committed anyway. A block's only behavioural test is its function's examples, so none of the 8 committed `compile.run` blocks had really been verified.
 
 All `compile.run` blocks are back to pending, which leaves **8/29 verified regions** (all function regions with their own examples). The engine is being fixed: blocks are held back until their whole function passes its examples (`OARC-W042`). The 8 function regions are unaffected.
+
+## Freeze, 2026-11-04
+
+Stage 1 is frozen: 37 regions compiler-owned (`cli.parseArgv` and `sandbox.buildArgv` are stale), 1 developer-owned, 15 pending. Stage 2 waits on stage 1.
+
+What was tried on the regions that remained:
+
+| Try | Model calls | Newly verified |
+|---|---|---|
+| Qwen2.5-Coder-14B IQ3_M | 41 | `hash.canonicalJson` |
+| Qwen3.5-9B Q5 with relevance-ranked context | 43 | `lb.healthCheck` |
+| The same, with stronger specs (method hints, real TypeScript APIs) | 38 | `markers.buildRegionTree`, `model.parseOutput`, `p2p.broadcast` |
+
+The hints are derived from stage 0's hand-written bodies, so these three regions show what a precise spec can do rather than independent problem solving.
+
+Still pending: `block.checkRestrictions`, `hash.normalizeOwnedText`, `markers.scanMarkers`, `txn.recover`, `p2p.decodeVarint`, `ui.loginPage` and the 9 `compile.run` blocks. They fail on invented APIs (`sf.getLeaves`, `BreakStatement.name`), wrong behaviour against the examples, or, for `ui.loginPage`, naming clashes with the structure components.
+
+Verified means passing the examples, and generated bodies can still miss what the intent says when no example covers it. Known gaps in frozen bodies, left as generated because region bodies aren't hand-edited:
+
+- `model.parseOutput` accepts `{}` as `ok: true` with no body, accepts non-string `names` and extra keys in an import, and checks `imports` before unexpected properties.
+- `p2p.broadcast` throws a TypeError when `origin` or a delivery target isn't in `peers`, and a peer named `__proto__` doesn't get its own `delivered` key.
+- `p2p.onGossip` doesn't sort candidates before rotating, and a negative `fanout` still forwards.
+
+To resume: add these cases as examples to both spec copies, which re-queues the regions. Use a stronger model. A full compile also re-queues `model.call`, `ownership.detect` and `watch.enqueue`, whose config still names an older default model, so give them a backend first.

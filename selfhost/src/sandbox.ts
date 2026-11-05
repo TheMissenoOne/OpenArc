@@ -14,6 +14,7 @@ export const buildArgvSpec = arc.defineRegion<BuildArgv>({
     "node --permission blocks fs-write, child processes and workers; prlimit caps CPU and address space; --max-old-space-size caps the heap.",
     "Bind nodePrefix read-only because nodeBin is often outside /usr (asdf, nvm, volta).",
     "Bind each of cfg.extraReadPaths read-only at its own path, in order, after --dev /dev (so --tmpfs /tmp can't hide one under /tmp), and let node read each one (--allow-fs-read after /work).",
+    "Copy the expected array of the first example literally in that order, replacing only its values with cfg fields; don't add, sort or move any element. nodePrefix's --ro-bind comes right after /usr's, before the --symlink entries.",
   ],
   examples: [
     {

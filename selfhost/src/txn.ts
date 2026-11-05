@@ -82,6 +82,7 @@ export const recoverSpec = arc.defineRegion<Recover>({
     "For every directory under .openarc/txn (sorted) that has journal.json: for each entry, if backup exists write it over target;",
     "else if backup + '.absent' exists remove target (it was a new file); else leave target untouched (entry never started).",
     "Then remove the txn directory. Return the recovered txids.",
+    "Method: for (const txid of await fs.list('.openarc/txn')) { const dir = `.openarc/txn/${txid}`; read `${dir}/journal.json` with fs.read; if null, continue; JSON.parse it as Journal. } For each entry, read e.backup: non-null -> fs.write(e.target, backup); else if fs.read(`${e.backup}.absent`) is non-null -> fs.remove(e.target). Then fs.remove(dir) and collect txid.",
   ],
   examples: [
     { name: "nothing to recover", args: [{ $fake: "fs.memory", init: { files: { "src/a.ts": "x" } } }], expected: [], fakesAfter: { "fs.memory": { files: { "src/a.ts": "x" } } } },
