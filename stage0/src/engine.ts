@@ -800,16 +800,42 @@ export function normalizeImports(p: Pick<Project, "root">, imports: ImportDecl[]
 }
 
 export function exportEqualsImport(p: Pick<Project, "root">, spec: string): string | null {
-  const dts = ts.resolveModuleName(spec, `${p.root}/index.ts`, compilerOptions(p.root), ts.sys).resolvedModule?.resolvedFileName;
-  if (!dts?.endsWith(".d.ts") && !dts?.endsWith(".d.mts") && !dts?.endsWith(".d.cts")) return null;
+  const dts = declarationFile(p, spec);
+  if (!dts) return null;
   const name = /^\s*export\s*=\s*([A-Za-z_$][\w$]*)\s*;/m.exec(ts.sys.readFile(dts) ?? "")?.[1];
   return name ? `import ${name} from "${spec}";` : null;
+}
+
+function declarationFile(p: Pick<Project, "root">, spec: string): string | null {
+  const dts = ts.resolveModuleName(spec, `${p.root}/index.ts`, compilerOptions(p.root), ts.sys).resolvedModule?.resolvedFileName;
+  return dts && /\.d\.[mc]?ts$/.test(dts) ? dts : null;
+}
+
+/** No file imports `spec` and it has no `export =`: the form its declarations allow, default and value names, which a
+ *  model otherwise guesses (bench/deps: semver-compare and csv-parse failed on it).
+ *  ponytail: at most 50 names, in declaration order, so a huge package (lodash) may hide the one a body needs. */
+export function exportsImport(p: Pick<Project, "root">, spec: string): string | null {
+  const dts = declarationFile(p, spec);
+  if (!dts) return null;
+  const prog = ts.createProgram([dts], { ...compilerOptions(p.root), noLib: true, types: [] });
+  const checker = prog.getTypeChecker();
+  const sf = prog.getSourceFile(dts);
+  const mod = sf && checker.getSymbolAtLocation(sf);
+  if (!mod) return null;
+  const isValue = (s: ts.Symbol) => ((s.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(s) : s).flags & ts.SymbolFlags.Value) !== 0;
+  const values = checker.getExportsOfModule(mod).filter(isValue).map((s) => s.name);
+  const names = values.filter((n) => n !== "default");
+  const head = values.includes("default") ? [(spec.split("/").pop() ?? spec).replace(/\W+(\w?)/g, (_, c: string) => c.toUpperCase())] : [];
+  if (names.length) head.push(`{ ${names.slice(0, 50).join(", ")} }`);
+  if (!head.length) return null;
+  const more = names.length > 50 ? `; ${names.length - 50} more not listed` : "";
+  return `import ${head.join(", ")} from "${spec}";${names.length ? ` // import only the names you call${more}` : ""}`;
 }
 
 /** "Allowed new imports": the deps, then the exact import form for each package dep (e.g. typescript needs a default import, TS2595). */
 function allowedImports(p: Project, deps: string[]): string {
   const pkgs = deps.filter((d) => !d.startsWith("."));
-  const forms = pkgs.map((d) => canonicalImport(p, d) ?? exportEqualsImport(p, d) ?? d);
+  const forms = pkgs.map((d) => canonicalImport(p, d) ?? exportEqualsImport(p, d) ?? exportsImport(p, d) ?? d);
   // a package dep no file imports yet was declared for this body (e.g. by `deps suggest`): say to use it, or the model
   // re-implements it with the standard library (bench/deps, issue #50)
   const fresh = pkgs.filter((d) => !canonicalImport(p, d));
@@ -2717,11 +2743,14 @@ function prng(seed: number): () => number {
 const variable = (v: Json): boolean =>
   v !== null && (typeof v !== "object" || (Array.isArray(v) ? v.every(variable) : !("$fake" in v) && Object.values(v).every(variable)));
 
-/** The examples' argument lists (those with only supported values) followed by seeded variations, deduplicated, at most `count`.
- *  ponytail: shape-preserving mutation, no type-directed generation. A top-level array arg changes length only when the
- *  examples show different lengths there (so tuples like [x, y] stay tuples); strings are sometimes swapped for another
- *  example's string at the same position (enum-like values), otherwise edited. */
-export function oracleInputs(examples: Json[], count = 60, seed = 1): Json[][] {
+/** The examples' argument lists (those with only supported values), each array or string parameter once empty, then
+ *  seeded variations, deduplicated, at most `count`. About a third of the variations also change the length of top-level
+ *  array and string args, except parameters in `tuples` (indexes: [x, y] stays a pair); other variations keep shapes, and
+ *  an array changes length only when the examples show different lengths there. Strings are sometimes swapped for another
+ *  example's string at the same position (enum-like values), otherwise edited.
+ *  ponytail: no type-directed generation, so nested arrays and object fields keep their lengths (a matrix stays regular,
+ *  points stay points); a union-of-literals string still gets invalid values. */
+export function oracleInputs(examples: Json[], count = 60, seed = 1, tuples: number[] = []): Json[][] {
   const rand = prng(seed);
   const pick = <T>(xs: T[]): T => xs[Math.floor(rand() * xs.length)]!;
   const bases = examples.map((e) => (e as { args?: Json[] }).args ?? []).filter((a) => Array.isArray(a) && a.every(variable));
@@ -2752,6 +2781,13 @@ export function oracleInputs(examples: Json[], count = 60, seed = 1): Json[][] {
     if (v === null) return v;
     return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, rand() < 0.5 ? mutate(x, [], false) : x]));
   };
+  const sizable = (v: Json, k: number) => !tuples.includes(k) && (Array.isArray(v) || (typeof v === "string" && !v.startsWith("$")));
+  const newLength = (n: number) => pick([0, 1, n - 1, n + 1, 2 * n + 1]);
+  const resized = (v: Json): Json => {
+    if (typeof v === "string") return "".padEnd(newLength(v.length), v || "a");
+    const xs = v as Json[];
+    return xs.length ? Array.from({ length: newLength(xs.length) }, (_, i) => (rand() < 0.5 ? mutate(xs[i % xs.length]!, [], false) : xs[i % xs.length]!)) : xs;
+  };
   const seen = new Set<string>();
   const out: Json[][] = [];
   const add = (a: Json[]) => {
@@ -2759,9 +2795,18 @@ export function oracleInputs(examples: Json[], count = 60, seed = 1): Json[][] {
     if (!seen.has(key) && out.length < count) seen.add(key), out.push(a);
   };
   bases.forEach(add);
+  const emptied = new Set<number>(); // not left to the draw: one input per parameter
+  for (const base of bases) {
+    base.forEach((v, k) => {
+      if (emptied.has(k) || !sizable(v, k)) return;
+      emptied.add(k);
+      add(base.map((x, j) => (j === k ? (typeof v === "string" ? "" : []) : x)));
+    });
+  }
   for (let i = 0; out.length < count && i < count * 20; i++) {
     const base = bases[i % bases.length]!;
-    add(base.map((v, k) => (rand() < 0.6 ? mutate(v, strings(k), lengths(k).size > 1) : v)));
+    const resize = rand() < 1 / 3;
+    add(base.map((v, k) => (rand() >= 0.6 ? v : resize && sizable(v, k) ? resized(v) : mutate(v, strings(k), lengths(k).size > 1))));
   }
   return out;
 }
@@ -2774,6 +2819,13 @@ export interface OracleReport {
 }
 
 /** Run region `id` and `<module>#<export>` on the same inputs in the sandbox. `p` must be analyzed (offline is enough). */
+/** Indexes of the region's tuple parameters: oracleInputs keeps their length. */
+function tupleParams(p: Project, r: RegionInfo): number[] {
+  const checker = p.program?.getTypeChecker();
+  const params = r.spec.typeNode && checker?.getTypeFromTypeNode(r.spec.typeNode).getCallSignatures()[0]?.parameters;
+  return (params ?? []).flatMap((s, i) => (checker!.isTupleType(checker!.getTypeOfSymbolAtLocation(s, r.spec.typeNode!)) ? [i] : []));
+}
+
 export async function oracleCheck(ports: Ports, req: CompileRequest, p: Project, id: string, oracle: string, opts: { count?: number; seed?: number } = {}): Promise<OracleReport> {
   const fail = (error: string): OracleReport => ({ inputs: 0, agreed: 0, disagreements: [], error });
   const r = p.regions.find((x) => x.id === id);
@@ -2785,7 +2837,7 @@ export async function oracleCheck(ports: Ports, req: CompileRequest, p: Project,
   if (module.startsWith("/") || module.startsWith("..")) return fail(`the oracle module must be inside the project (the sandbox only sees the project): ${m[1]}`);
   const text = await ports.fs.read(module);
   if (text === null) return fail(`cannot read ${module}`);
-  const inputs = oracleInputs(r.spec.examples, opts.count ?? 60, opts.seed ?? 1);
+  const inputs = oracleInputs(r.spec.examples, opts.count ?? 60, opts.seed ?? 1, tupleParams(p, r));
   if (!inputs.length) return fail("no example has only number/string/boolean/array/object arguments to vary");
   const overlay = new Map(p.files).set(module, text);
   try {
@@ -2909,7 +2961,7 @@ export async function mutantCheck(ports: Ports, req: CompileRequest, p: Project,
   const base = p.files.get(r.file)!;
   // the original runs from a twin next to the file, so its imports resolve. Not for a UI region (the harness ignores the
   // oracle) or a spec in another file (the twin would not hold the symbol).
-  const inputs = r.spec.ui || r.spec.file !== r.file ? [] : oracleInputs(r.spec.examples);
+  const inputs = r.spec.ui || r.spec.file !== r.file ? [] : oracleInputs(r.spec.examples, 60, 1, tupleParams(p, r));
   const twin = posix.join(posix.dirname(r.file), `__openarc_original_${posix.basename(r.file)}`);
   const run = async (text: string): Promise<string> => {
     const overlay = new Map(p.files).set(r.file, text);

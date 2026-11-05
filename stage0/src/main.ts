@@ -292,7 +292,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc freeze|release <id> | resolve <id> --keep|--regen|--unlink
        openarc extract <file> [--function <name>] [--id <id>] [--style code|region]
        openarc migrate <id>
-       openarc check <id> --oracle <module>#<export> | check <ids...> --mutants [--operators trivial,boundary,comparison,constant,logical,guard,swap]
+       openarc check <id> --oracle <module>#<export> [--runs <n>] [--seed <n>] | check <ids...> --mutants [--operators trivial,boundary,comparison,constant,logical,guard,swap]
        openarc doctor
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
        ${LINT_USAGE}`;
@@ -338,25 +338,38 @@ function initConfig(args: string[]): OpenArcConfig | string {
   return o["--backend"] ? presetConfig(o["--backend"], o["--model"], o["--base-url"]) : "init --model/--base-url need --backend <preset>";
 }
 
-/** `openarc check <id> --oracle <module>#<export>`: differential test against a reference implementation (engine.oracleCheck). */
+/** `--runs <n> --seed <n>`: a positive integer, and an integer the 32-bit PRNG tells apart. null: a bad flag. */
+function oracleFlags(args: string[]): { count?: number; seed?: number } | null {
+  const o: { count?: number; seed?: number } = {};
+  for (let i = 0; i < args.length; i += 2) {
+    const n = /^\d+$/.test(args[i + 1] ?? "") ? Number(args[i + 1]) : NaN;
+    if (args[i] === "--runs" && n >= 1 && Number.isSafeInteger(n)) o.count = n;
+    else if (args[i] === "--seed" && n <= 0xffffffff) o.seed = n;
+    else return null;
+  }
+  return o;
+}
+
+/** `openarc check <id> --oracle <module>#<export> [--runs <n>] [--seed <n>]`: differential test against a reference implementation (engine.oracleCheck). */
 async function check(root: string, ports: Ports, args: string[]): Promise<number> {
   if (args.includes("--mutants")) return mutantsCmd(root, ports, args);
-  const [id, flag, oracle] = args;
-  if (!id || flag !== "--oracle" || !oracle || args.length !== 3) {
+  const [id, flag, oracle, ...rest] = args;
+  const opts = oracleFlags(rest);
+  if (!id || flag !== "--oracle" || !oracle || !opts) {
     console.error(`openarc: bad-flag\n\n${USAGE}`);
     return 2;
   }
   const diagnostics: Diagnostic[] = [];
   const project = await analyzeOffline(ports, root, diagnostics);
   if (!isolationNotice(project.config)) return 1;
-  const res = await engine.oracleCheck(ports, request(root, project, [id]), project, id, oracle);
+  const res = await engine.oracleCheck(ports, request(root, project, [id]), project, id, oracle, opts);
   if (res.error && !res.inputs) {
     console.error(`check ${id}: ${res.error}`);
     return 1;
   }
   for (const d of res.disagreements.slice(0, 20)) console.log(`  ${engine.showDisagreement(d)}`);
   if (res.disagreements.length > 20) console.log(`  … ${res.disagreements.length - 20} more`);
-  console.log(`check ${id} against ${oracle}: ${res.agreed}/${res.inputs} inputs agree (seed 1)${res.error ? `; ${res.error}` : ""}`);
+  console.log(`check ${id} against ${oracle}: ${res.agreed}/${res.inputs} inputs agree (seed ${opts.seed ?? 1})${res.error ? `; ${res.error}` : ""}`);
   return res.disagreements.length || res.error ? 1 : 0;
 }
 

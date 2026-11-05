@@ -72,15 +72,59 @@ export function instructions(dataset, ex, { cap = true } = {}) {
   return cap && s.length > 2500 ? s.slice(0, 2500) + " [...]" : s; // ponytail: hard cap; food-chain (2525 chars) hits it, losing only its trailing link
 }
 
+export const SPLIT_RULE = `per function and per kind (value, throw), first min(${PUBLIC_PER_FN}, floor(eligible/2)) eligible tests public (file order), rest held out`;
+
 /**
- * Deterministic split. Tests in file order. A test is eligible for function f if it makes exactly one call, to f,
- * with a value expectation (no throw, no `.not`, JSON-encodable). For each f, the first
- * min(PUBLIC_PER_FN, floor(eligible_f / 2)) eligible tests are public examples, so at least half stay hidden.
- * Every other test is held out. Result is cached in <work>/splits/<ex>.json.
+ * Deterministic split. Tests in file order. A test is eligible for function f if it makes exactly one call, to f, with
+ * a value or a throw expectation (no `.not`, JSON-encodable). For each f and each of those two kinds, the first
+ * min(PUBLIC_PER_FN, floor(eligible / 2)) eligible tests are public examples, so at least half of each kind stay hidden.
+ * Every other test is held out.
  */
+export function splitTests(ex, fns, lines) {
+  const pub = Object.fromEntries(fns.map((f) => [f, []]));
+  const kindOf = (t) => {
+    const c = t.calls[0];
+    if (t.unusable || t.calls.length !== 1 || c.args === undefined) return null;
+    return c.throws ? "throws" : "expected" in c ? "expected" : null;
+  };
+  const eligible = (f, kind) => lines.filter((t) => kindOf(t) === kind && t.calls[0].fn === f).length;
+  const cap = (f, kind) => Math.min(PUBLIC_PER_FN, Math.floor(eligible(f, kind) / 2));
+  const tests = lines.map((t) => {
+    const kind = kindOf(t);
+    let isPublic = false;
+    if (kind && pub[t.calls[0].fn].filter((e) => kind in e).length < cap(t.calls[0].fn, kind)) {
+      const c = t.calls[0];
+      pub[c.fn].push({ name: t.name, args: c.args, [kind]: c[kind] });
+      isPublic = true;
+    }
+    return { name: t.name, public: isPublic, eligible: !!kind };
+  });
+  return { exercise: ex, rule: SPLIT_RULE, examples: pub, tests, heldOut: tests.filter((t) => !t.public).map((t) => t.name) };
+}
+
+/** One public example, as the plain-prompt arms see it. */
+export const exampleLine = (f, e) => {
+  const call = `${f}(${e.args.map((v) => JSON.stringify(v)).join(", ")})`;
+  if (e.throws === undefined) return `- ${call} returns ${JSON.stringify(e.expected)}`;
+  return `- ${call} throws${e.throws === true ? "" : ` an error whose message contains ${JSON.stringify(e.throws)}`}`;
+};
+
+/** One public example as a jest test, for a file with `m` (the module) and `d` (decodes the value tokens) in scope. */
+export const exampleTest = (f, e) => {
+  const call = `(m as any).${f}(...d(${JSON.stringify(e.args)}))`;
+  const check = e.throws === undefined
+    ? `expect(${call}).toEqual(d(${JSON.stringify(e.expected)}))`
+    : `expect(() => ${call}).toThrow(${e.throws === true ? "" : JSON.stringify(e.throws)})`;
+  return `it(${JSON.stringify(`${f}: ${e.name}`)}, () => { ${check} })\n`;
+};
+
+/** The split of one exercise (splitTests on a recording of its test file), cached in <work>/splits/<ex>.json while the rule is the same. */
 export async function split(dataset, ex, work) {
   const cache = join(work, "splits", `${ex}.json`);
-  if (existsSync(cache)) return JSON.parse(await readFile(cache, "utf8"));
+  if (existsSync(cache)) {
+    const cached = JSON.parse(await readFile(cache, "utf8"));
+    if (cached.rule === SPLIT_RULE) return cached;
+  }
   const fns = Object.keys(EXERCISES.functions[ex].fns);
   const dir = join(work, "record", ex);
   await mkdir(dir, { recursive: true });
@@ -88,20 +132,7 @@ export async function split(dataset, ex, work) {
   await copyFile(join(exDir(dataset, ex), `${ex}.test.ts`), join(dir, `${ex}.test.ts`));
   await writeFile(join(dir, `${ex}.ts`), fns.map((f) => `export const ${f} = (...a: unknown[]) => (globalThis as any).__rec(${JSON.stringify(f)}, a);\n`).join(""));
   const { lines } = await runTests(join(dir, `${ex}.test.ts`), { record: true });
-  const pub = Object.fromEntries(fns.map((f) => [f, []]));
-  const isEligible = (t) => !t.unusable && t.calls.length === 1 && "expected" in t.calls[0] && !t.calls[0].throws && t.calls[0].args !== undefined;
-  const cap = Object.fromEntries(fns.map((f) => [f, Math.min(PUBLIC_PER_FN, Math.floor(lines.filter((t) => isEligible(t) && t.calls[0].fn === f).length / 2))]));
-  const tests = lines.map((t) => {
-    const c = t.calls[0];
-    const eligible = isEligible(t);
-    let isPublic = false;
-    if (eligible && pub[c.fn].length < cap[c.fn]) {
-      pub[c.fn].push({ name: t.name, args: c.args, expected: c.expected });
-      isPublic = true;
-    }
-    return { name: t.name, public: isPublic, eligible };
-  });
-  const res = { exercise: ex, rule: `per function, first min(${PUBLIC_PER_FN}, floor(eligible/2)) eligible tests public (file order), rest held out`, examples: pub, tests, heldOut: tests.filter((t) => !t.public).map((t) => t.name) };
+  const res = splitTests(ex, fns, lines);
   await mkdir(dirname(cache), { recursive: true });
   await writeFile(cache, JSON.stringify(res, null, 2));
   return res;
