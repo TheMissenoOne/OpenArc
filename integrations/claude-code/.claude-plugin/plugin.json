@@ -1,0 +1,6 @@
+{
+  "name": "openarc",
+  "version": "0.1.0",
+  "description": "Edit openarc.spec.md instead of chatting: specs and code stay in sync locally, and a pane shows the compiler at work.",
+  "types": "./types/index.d.ts"
+}

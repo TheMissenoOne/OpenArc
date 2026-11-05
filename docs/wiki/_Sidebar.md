@@ -11,6 +11,7 @@
 - [[Fakes]]
 - [[Adopting Existing Code]]
 - [[Watch Mode]]
+- [[Agent Sync]]
 - [[CLI Reference]]
 - [[Bootstrap]]
 - [[Design Log]]

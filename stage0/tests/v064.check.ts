@@ -117,7 +117,7 @@ for (const calls of ['"engine.parse"', '["engine.parse", 1]', "null"]) {
   assert.deepStrictEqual(one({ provider: "ollama", model: "m", maxContextTokens: 1 }), { provider: "ollama", preset: "ollama", model: "m", maxContextTokens: 1 });
   const n = one({ provider: "openrouter", model: "m", maxContextTokens: 1 });
   assert.deepStrictEqual(applyPreset(n), n, "normalising twice changes nothing");
-  assert.match(cfg({ provider: "gemini", model: "m", maxContextTokens: 1 }).error!, /unknown provider "gemini" \(one of ollama, openai, anthropic, openrouter, local\)/);
+  assert.match(cfg({ provider: "gemini", model: "m", maxContextTokens: 1 }).error!, /unknown provider "gemini" \(one of ollama, openai, anthropic, openrouter, local, claude-cli, codex-cli, opencode-cli\)/);
 }
 // ── 6b. the normalised endpoint is in the fingerprint
 {

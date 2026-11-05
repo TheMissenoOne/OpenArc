@@ -64,6 +64,7 @@ npx openarc compile          # or keep it running: npx openarc watch
 | Concepts | One contract with laws, many variants that must pass them | [Writing Specs](docs/wiki/Writing-Specs.md#concepts-one-contract-many-variants) |
 | TSX UI specs | A component's rough structure in TSX, checked in a real DOM inside the sandbox | [Writing Specs](docs/wiki/Writing-Specs.md#ui-specs-tsx-structure) |
 | **Your own palette** | Concepts with laws, sketches, code-first classes: reusable building blocks you write, in your project or your own package | [Your own palette](docs/wiki/Palette.md) |
+| Spec sheet | Edit `openarc.spec.md` and the code follows, and the other way round. `openarc adopt` starts from a repo with no specs. Works in Claude Code, Codex and OpenCode without spending agent turns on saves | [Agent Sync](https://github.com/TheMissenoOne/OpenArc/wiki/Agent-Sync) |
 | Watch mode | `openarc watch` recompiles regions as you save, one at a time | [Watch Mode](docs/wiki/Watch-Mode.md) |
 | `extract` | Adopt functions you already have as regions (bodies kept); code-first by default, `--style region` for specs | [Adopting Existing Code](docs/wiki/Adopting-Existing-Code.md) |
 | `migrate` | Turn one `defineRegion` region into code-first form, keeping its id, ownership and provenance | [Code First](docs/wiki/Code-First.md#migrating-a-defineregion-region) |

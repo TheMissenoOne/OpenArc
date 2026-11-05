@@ -160,12 +160,14 @@ export interface HttpPort {
   get(url: string): Promise<string>;
 }
 export interface ProcPort {
-  run(argv: string[], timeoutMs: number): Promise<{ code: number | null; stdout: string; timedOut: boolean }>;
+  run(argv: string[], timeoutMs: number, opts?: { stdin?: string; cwd?: string }): Promise<{ code: number | null; stdout: string; timedOut: boolean }>;
 }
 export interface Ports {
   fs: FsPort;
   http: HttpPort;
   proc: ProcPort;
+  /** Every completed model request, whatever the provider: main.ts appends it to .openarc/usage.jsonl. */
+  usage?: (u: { model: string; provider: string; hosted: boolean; prompt: number; completion: number }) => void;
   now(): string;
   newTxId(): string;
   log(line: string): void;

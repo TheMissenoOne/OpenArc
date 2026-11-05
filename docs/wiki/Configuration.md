@@ -36,6 +36,10 @@ The project chooses its agents, the same way `package.json` chooses dependencies
 
 **API keys never go in the config file.** `apiKeyEnv` is the *name* of an environment variable; OpenArc reads the key from it at call time. A literal `"apiKey"` field is rejected (`OARC-E051`). An unset variable fails the call with `OARC-E080` and detail `missing-key:<ENV_NAME>`; the key itself is never printed, logged, or put in a diagnostic.
 
+### Agent CLIs and `sync`
+
+`claude-cli`, `codex-cli` and `opencode-cli` send requests through that CLI, on its subscription, with a fixed command line and an empty working directory. `model` is passed to the CLI; leave it empty for the CLI's default. The `sync` block is optional: `escalate` names a backend to offer when a region fails, `maxHostedTokensPerDay` stops hosted compiles at a limit, and `suggestAtLines` (default 8) sets how big a hand edit must be to ask for a new intent. See [[Agent Sync]].
+
 ## Connecting providers
 
 The quickest way is `init` with a preset, then a one-request check:

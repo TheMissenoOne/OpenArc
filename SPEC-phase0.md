@@ -958,6 +958,19 @@ Exit 0 for a report (with or without a proposal), 1 for an unknown region or a r
 
 ---
 
+## 17. Spec sheet (`openarc adopt`, `openarc sync`)
+
+`openarc.spec.md` is a generated view of the function regions' intent and examples. It is not a spec layer: every applied edit is written to the JSDoc, `arc.configure` or `defineRegion` that holds it, and every rule of §3.8, §6 and §8 applies to the result. `src/*.arc.ts` holds `arc.configure` statements the sheet wrote; nothing imports it.
+
+Normative:
+
+1. The merge is three-way against `.openarc/sheet-state.json`. A spec changed on both sides keeps the code's version and is reported. An unreadable sheet is reported, and neither applied nor overwritten. A sheet saved during a pass is not overwritten.
+2. A sheet edit to a developer region regenerates it only if a check exists (an example or an `arc.test`) and the current body can't satisfy the new spec: when only examples changed and the body passes them, or when `Hold` is set, or when a suggestion was ticked, the manifest records the new spec hash and no model is called. Regeneration backs up the body, and a failed one leaves it in place (OARC-W043).
+3. Examples recorded by adoption are observed, not inferred: the body runs twice in the sandbox, and a throw or an unrepeatable result is dropped.
+4. A hand edit re-runs the region's examples; a changed result is a suggestion and is never applied unticked.
+5. A second pass with nothing new makes no writes and no model calls.
+6. A `cli` backend runs a fixed argv per CLI (§13) with no shell, no tools and an empty working directory. The configuration can't choose the command.
+
 ## Appendix A — v0 acceptance walk-through against this spec
 
 | Step | Covered by |

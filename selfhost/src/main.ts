@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // `openarc` CLI entry point. Hand-written: the real ports plus command dispatch.
 import { appendFile, mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { cpSync, existsSync, lstatSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, lstatSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
@@ -21,6 +21,8 @@ import { clearStaleLock, releaseOwnLock } from "./lock.ts";
 import { createWatcher, regionKey, type RegionKey } from "./watcher.ts";
 import { watchDirs } from "./dirwatch.ts";
 import { migrate } from "./migrate.ts";
+import { adopt, brief, syncOnce, type SyncCtx, type SyncStatus } from "./sync.ts";
+import { SHEET_FILE } from "./sheet.ts";
 import { LINT_USAGE, lintCommand } from "./lint.ts";
 import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools, type TierChoice } from "./isolation.ts";
 
@@ -169,12 +171,16 @@ export function realPorts(root: string): Ports {
       },
     },
     proc: {
-      run(argv, timeoutMs) {
+      run(argv, timeoutMs, opts) {
         return new Promise((done) => {
-          const child = spawn(argv[0]!, argv.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
+          const child = spawn(argv[0]!, argv.slice(1), { stdio: [opts?.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"], ...(opts?.cwd ? { cwd: opts.cwd } : {}) });
+          if (opts?.stdin !== undefined) {
+            child.stdin!.on("error", () => {}); // a CLI that exits early: its code says so
+            child.stdin!.end(opts.stdin);
+          }
           let stdout = "", stderr = "", timedOut = false;
-          child.stdout.on("data", (b) => (stdout += b));
-          child.stderr.on("data", (b) => (stderr += b));
+          child.stdout!.on("data", (b) => (stdout += b));
+          child.stderr!.on("data", (b) => (stderr += b));
           const t = setTimeout(() => {
             timedOut = true;
             child.kill("SIGKILL");
@@ -294,8 +300,112 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc migrate <id>
        openarc check <id> --oracle <module>#<export> [--runs <n>] [--seed <n>] | check <ids...> --mutants [--operators trivial,boundary,comparison,constant,logical,guard,swap]
        openarc doctor
+       openarc adopt [--brief] [--json] [--no-model] | sync [--watch] [--brief] [--json] [--no-model]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
        ${LINT_USAGE}`;
+
+/** What git doesn't need from .openarc/: adds the lines that are missing. True when it wrote. */
+async function ensureIgnored(ports: Ports): Promise<boolean> {
+  const ignore = ["lock", "sandbox/", "txn/", "watch-history.jsonl", "attempts/", "traces.jsonl", "sheet-state.json", "sync-status.json", "sync-watch.pid", "usage.jsonl"];
+  const had = await ports.fs.read(".openarc/.gitignore");
+  const missing = ignore.filter((l) => !(had ?? "").split("\n").includes(l));
+  if (!missing.length) return false;
+  await ports.fs.write(".openarc/.gitignore", (had ?? "") + (had && !had.endsWith("\n") ? "\n" : "") + missing.join("\n") + "\n");
+  return true;
+}
+
+/** `openarc adopt` and `openarc sync [--watch] [--brief] [--json] [--no-model]` (src/sync.ts). */
+async function syncCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
+  const [cmd, ...flags] = argv;
+  const known = new Set(["--watch", "--brief", "--json", "--no-model"]);
+  if (flags.some((f) => !known.has(f)) || (cmd === "adopt" && flags.includes("--watch"))) {
+    console.error(`openarc: bad-flag\n\n${USAGE}`);
+    return 2;
+  }
+  if ((await ports.fs.read("openarc.config.json")) === null) {
+    await ports.fs.write("openarc.config.json", JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n");
+    console.log("created openarc.config.json");
+  }
+  await ensureIgnored(ports);
+  clearStaleLock(root, (l) => console.error(l));
+  ports.usage = (u) => appendFileSync(`${root}/.openarc/usage.jsonl`, JSON.stringify({ at: ports.now(), ...u }) + "\n");
+  const ctx: SyncCtx = { ports, root, request: (p, ids) => request(root, p, ids), run, noModel: flags.includes("--no-model"), log: (l) => console.log(l) };
+  const show = (s: SyncStatus) => {
+    if (flags.includes("--json")) return console.log(JSON.stringify(s));
+    console.log(brief(s));
+    if (!flags.includes("--brief")) for (const a of s.attention) console.log(`  ${a.id}: ${a.what}`);
+  };
+  /** The lock covers this pass's own writes; compile takes it itself, so it is held only around a pass with no compile running. */
+  const pass = async () => {
+    for (const txid of await recover(ports.fs)) console.error(fmt({ code: "OARC-W094", detail: txid }));
+    return syncOnce(ctx);
+  };
+  if (cmd === "adopt") {
+    const r = await adopt(ctx);
+    if (r.extracted.length) console.log(`adopted ${r.extracted.length} functions, bodies unchanged, developer-owned`);
+    for (const x of r.refused) console.log(`  not adopted ${x.name}: ${x.reason}`);
+    console.log(`spec sheet: ${SHEET_FILE}`);
+    show(r.status);
+    return r.status.error ? 1 : 0;
+  }
+  if (!flags.includes("--watch")) {
+    const s = await pass();
+    show(s);
+    return s.error ? 1 : 0;
+  }
+  // One watcher per project, however many agent sessions ask for it: its status is .openarc/sync-status.json.
+  const pidFile = ".openarc/sync-watch.pid";
+  const other = Number(await ports.fs.read(pidFile));
+  if (other && other !== process.pid) {
+    try {
+      process.kill(other, 0);
+      console.log(`[sync] already watching (pid ${other})`);
+      const seen = await ports.fs.read(".openarc/sync-status.json");
+      if (seen && flags.includes("--json")) console.log(JSON.stringify(JSON.parse(seen)));
+      return 0;
+    } catch {
+      // that process is gone: this one takes over
+    }
+  }
+  await ports.fs.write(pidFile, String(process.pid));
+  // Started by an agent session: when that session dies, so does the watcher, whatever signal it did or didn't get.
+  const parent = process.ppid;
+  setInterval(() => {
+    if (process.ppid !== parent) process.exit(0);
+  }, 5000).unref();
+  // One worker, like openarc watch: changes during a pass only mark it dirty. A pass that wrote triggers one more, which
+  // finds nothing and writes nothing, so the loop stops by itself.
+  let busy = false, dirty = false, timer: ReturnType<typeof setTimeout> | null = null;
+  const tick = async () => {
+    if (busy) return void (dirty = true);
+    busy = true;
+    try {
+      const s = await pass();
+      show(s);
+      // A backend that was down or still loading isn't the region's fault: try again without waiting for a save.
+      if (s.attention.some((x) => x.what.includes("OARC-E080") || x.what.includes("backend not ready"))) setTimeout(schedule, 30_000);
+    } catch (e) {
+      console.error(`[sync] ${(e as Error).message}`);
+    }
+    busy = false;
+    dirs.rewatch();
+    if (dirty) (dirty = false), schedule();
+  };
+  const schedule = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => void tick(), 500);
+  };
+  const dirs = watchDirs(root, ["src"], (rel) => {
+    if (rel.endsWith(".ts")) schedule();
+  });
+  watch(root, (_e, name) => {
+    if (name === SHEET_FILE || name === "openarc.config.json") schedule();
+  });
+  console.log(`[sync] watching ${SHEET_FILE} and src/ (Ctrl+C to stop)`);
+  schedule();
+  await new Promise(() => {});
+  return 0;
+}
 
 /** `openarc backends [test [name]]`: list the configured backends, or send one tiny request through one of them. */
 async function backends(ports: Ports, args: string[]): Promise<number> {
@@ -540,6 +650,7 @@ async function main(argv: string[]): Promise<number> {
   if (argv[0] === "doctor") return doctor(root, ports);
   if (argv[0] === "deps") return depsCmd(root, ports, argv.slice(1));
   if (argv[0] === "migrate") return migrateCmd(root, ports, argv.slice(1));
+  if (argv[0] === "adopt" || argv[0] === "sync") return syncCmd(root, ports, argv);
   if (argv[0] === "lint") { // spec rules, offline: no model, no sandbox (src/lint.ts)
     const args = argv.slice(1).map((a, i, all) => (/[/\\]|\.tsx?$/.test(a) && all[i - 1] !== "--profile" && all[i - 1] !== "--format" ? relative(root, resolve(process.cwd(), a)).split(sep).join("/") : a));
     return lintCommand(ports, request(root, null, []), args, { out: (l) => console.log(l), err: (l) => console.error(l), message: (c) => MESSAGES[c] ?? "" });
@@ -592,13 +703,7 @@ async function main(argv: string[]): Promise<number> {
       await put(manifestPath, '{\n  "schema": 1,\n  "regions": {}\n}\n');
       await put(".openarc/harness.mjs", HARNESS_ENTRY);
       if (example && (await ports.fs.list("src")).length === 0) for (const [rel, text] of Object.entries(STARTER)) await put(rel, text); // code-first starter
-      const ignore = ["lock", "sandbox/", "txn/", "watch-history.jsonl", "attempts/", "traces.jsonl"];
-      const had = await ports.fs.read(".openarc/.gitignore");
-      const missing = ignore.filter((l) => !(had ?? "").split("\n").includes(l));
-      if (missing.length) {
-        await ports.fs.write(".openarc/.gitignore", (had ?? "") + (had && !had.endsWith("\n") ? "\n" : "") + missing.join("\n") + "\n");
-        wrote.push(".openarc/.gitignore");
-      }
+      if (await ensureIgnored(ports)) wrote.push(".openarc/.gitignore");
       console.log(wrote.length ? `created: ${wrote.join(", ")}` : "already initialised");
       // `npm init -y` writes "type": "commonjs" now; tsc then fails with TS1295. The user's file: say so, don't edit it.
       const pkg = await ports.fs.read("package.json");
