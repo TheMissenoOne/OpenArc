@@ -21,20 +21,17 @@ export const canonicalJsonSpec = arc.defineRegion<CanonicalJson>({
 
 // @openarc:begin hash.canonicalJson
 export const canonicalJson: CanonicalJson = (value) => {
-  return JSON.stringify(value, (key, value) => {
-    if (typeof value === 'object' && value !== null) {
+  if (typeof value === 'object' && value !== null) {
       if (Array.isArray(value)) {
-        return value;
+        return `[${value.map(canonicalJson).join(',')}]`;
+      } else {
+        const sortedKeys = Object.keys(value).sort();
+        const keyValuePairs = sortedKeys.map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`);
+        return `{${keyValuePairs.join(',')}}`;
       }
-      const sortedKeys = Object.keys(value).sort();
-      const result: { [k: string]: any } = {};
-      for (const k of sortedKeys) {
-        result[k] = value[k];
-      }
-      return result;
+    } else {
+      return JSON.stringify(value);
     }
-    return value;
-  });
 };
 // @openarc:end hash.canonicalJson
 

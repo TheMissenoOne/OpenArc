@@ -200,7 +200,24 @@ export const apiKeySpec = arc.defineRegion<Strategy<ApiKeyCred>>({
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin auth.apiKey
-export const apiKey: Strategy<ApiKeyCred> = (cred, ports) => arc.todo("auth.apiKey");
+export const apiKey: Strategy<ApiKeyCred> = async (cred, ports) => {
+  const result = splitToken(cred.apiKey);
+  if (result === null) {
+    return ports.hasher.equal(cred.apiKey, ports.hasher.dummyHash) ? { ok: false, reason: 'invalid' } : { ok: false, reason: 'invalid' };
+  }
+  const [keyId, secret] = result;
+  const record = await ports.users.findApiKey(keyId);
+  if (record === null || record.revoked) {
+    return ports.hasher.equal(secret, ports.hasher.dummyHash) ? { ok: false, reason: 'invalid' } : { ok: false, reason: 'invalid' };
+  }
+  const computedHash = await ports.hasher.hash(secret, record.secretHash);
+  const match = ports.hasher.equal(computedHash, record.secretHash);
+  if (!match) {
+    await ports.users.recordFailure(record.userId);
+    return { ok: false, reason: 'invalid' };
+  }
+  return { ok: true, userId: record.userId };
+};
 // @openarc:end auth.apiKey
 
 // ── auth.magicLink ────────────────────────────────────────────── variant, written as a sketch
