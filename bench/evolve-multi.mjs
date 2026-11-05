@@ -9,18 +9,20 @@
 // `correct` (every function so far passes all its held-out tests). The headline metric is cumulative tokens and time
 // per correct project state.
 // node evolve-multi.mjs --dataset <ts-bench> --work <dir> --oa <open-arc-x.y.z.tgz> --matrix matrix-evolve-multi.json --out <dir> --seed n
+// --pack <n>: instead of the scenario above, every exercise of BENCH_EXERCISES dealt by seed into files of n functions, 5 files per step;
+//             with --rounds, one function added to every file per step instead (single-region prompts, no batches)
 import { createServer } from "node:http";
 import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { readFile, writeFile, rm, mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { parseArgs } from "node:util";
-import { EXERCISES, instructions, split, run, heldOut, runTests, prepareTestDir, exampleLine, exampleTest } from "./lib/common.mjs";
+import { EXERCISES, packSteps, instructions, split, run, heldOut, runTests, prepareTestDir, exampleLine, exampleTest } from "./lib/common.mjs";
 import { specSource, configFor, sketchFile } from "./lib/adapter.mjs";
 import { chat, extractCode } from "./lib/baseline.mjs";
 
 const { values: a } = parseArgs({ options: {
   dataset: { type: "string" }, work: { type: "string" }, oa: { type: "string" }, matrix: { type: "string" }, out: { type: "string" },
-  seed: { type: "string", default: "1" }, port: { type: "string", default: "18442" }, configs: { type: "string" },
+  seed: { type: "string", default: "1" }, port: { type: "string", default: "18442" }, configs: { type: "string" }, pack: { type: "string" }, rounds: { type: "boolean" },
 } });
 const matrix = JSON.parse(readFileSync(a.matrix, "utf8"));
 const backend = matrix.backend, model = matrix.runs[0].model, seed = +a.seed, port = +a.port;
@@ -65,7 +67,7 @@ const HAND = `// hand-written: fill ring by ring
     for (let r = last - 1; r > ring && last > ring; r--) m[r]![ring] = n++;
   }
   return m;`;
-const STEPS = [
+const STEPS = a.pack ? packSteps(Object.fromEntries(Object.entries(EXERCISES.functions).map(([ex, e]) => [ex, Object.keys(e.fns)])), +a.pack, 5, seed, a.rounds) : [
   { name: "create text.ts and arrays.ts", add: { text: ["acronym", "diamond"], arrays: ["flatten-array", "binary-search"] } },
   { name: "add codec.ts", add: { codec: ["variable-length-quantity"] } },
   { name: "add transpose to arrays.ts", add: { arrays: ["transpose"] } },

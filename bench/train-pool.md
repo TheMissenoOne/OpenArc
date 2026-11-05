@@ -2,6 +2,8 @@
 
 **These tasks are for training only.** They exist to collect verified compile traces from a teacher model for fine-tuning a small model. The bench `dev` split, the `test` split and evolve-multi (`exercises.json`, `matrix-evolve-multi.json`) are **never** trained on, and nothing from this pool goes into a benchmark table.
 
+`--holdout` writes the complement instead: the tasks decontamination drops, which no fine-tune has seen. Those can evaluate (see `evolve-multi.mjs --pack`). Give it its own `--out`, since the script clears `repos`, `splits` and `record` there.
+
 ## Source
 
 [MultiPL-E](https://huggingface.co/datasets/nuprl/MultiPL-E) (MIT), configs `humaneval-ts` (HumanEval) and `mbpp-ts` (MBPP), split `test`, at dataset revision `28441b6024e71d4a1c1c0f6bf171c935cd5a43f2` (main, last modified 2025-07-15). `fetch-multipl-e.sh` downloads both parquet files at that revision and converts them to JSONL (pyarrow through `uv`, into uv's cache, not a repo dependency). The data stays outside this repo.

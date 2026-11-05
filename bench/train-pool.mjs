@@ -2,12 +2,13 @@
 // MultiPL-E (HumanEval + MBPP, TypeScript) -> a TRAINING task pool in ts-bench's layout, so run.mjs compiles it
 // unchanged (dataset adapter, not a second harness). Training only: see train-pool.md.
 // node train-pool.mjs --src <fetch-multipl-e.sh dir> --out <pool dir>
+// --holdout writes the tasks the decontamination drops instead: never trained on, so they can evaluate (train-pool.md)
 // then: BENCH_EXERCISES=<pool>/exercises.json node run.mjs --dataset <pool> --matrix matrix-train.json ...
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 
-const { values: a } = parseArgs({ options: { src: { type: "string" }, out: { type: "string" } } });
+const { values: a } = parseArgs({ options: { src: { type: "string" }, out: { type: "string" }, holdout: { type: "boolean" } } });
 if (!a.src || !a.out) throw new Error("usage: node train-pool.mjs --src <multipl-e dir> --out <pool dir>");
 
 // Decontamination: drop anything whose name or intent touches a bench exercise (exercises.json functions, sets and
@@ -57,7 +58,8 @@ for (const file of ["humaneval-ts", "mbpp-ts"]) {
       .replace(/tsthon/gi, "TypeScript").trim(); // ponytail: MultiPL-E's blind "py" -> "ts" rename
     if (!intent) { skipped[ex] = "no doc comment"; continue; }
     const hit = DECON.find(([re]) => re.test(`${rest.replace(/_/g, " ")}\n${intent}`.toLowerCase()));
-    if (hit) { decontaminated[ex] = `matches /${hit[0].source}/ (${hit[1]})`; continue; }
+    if (hit && !a.holdout) { decontaminated[ex] = `matches /${hit[0].source}/ (${hit[1]})`; continue; }
+    if (!hit && a.holdout) continue;
     if (ret === "any") { skipped[ex] = "return type is `any`: no contract, and OpenArc rejects the spec (TS2322 on the expectation)"; continue; }
     const asserts = [...p.tests.matchAll(/^\s*assert\.deepEqual\((candidate\(.*\)),\s*(.*)\);\s*$/gm)];
     if (asserts.length !== p.tests.split("\n").filter((l) => /assert/.test(l) && !/require\('node:assert'\)/.test(l)).length) { skipped[ex] = "an assert is not a one-line `assert.deepEqual(candidate(...), v)`"; continue; }
@@ -72,7 +74,7 @@ for (const file of ["humaneval-ts", "mbpp-ts"]) {
   }
 }
 const revision = readFileSync(join(a.src, "REVISION"), "utf8").trim();
-const write = () => writeFileSync(join(a.out, "exercises.json"), JSON.stringify({ _note: `TRAINING ONLY. MultiPL-E (nuprl/MultiPL-E @ ${revision}) humaneval-ts + mbpp-ts, converted by bench/train-pool.mjs; see bench/train-pool.md`, revision, functions, sets: {}, skipped, decontaminated }, null, 2));
+const write = () => writeFileSync(join(a.out, "exercises.json"), JSON.stringify({ _note: `${a.holdout ? "HOLDOUT, never trained on" : "TRAINING ONLY"}. MultiPL-E (nuprl/MultiPL-E @ ${revision}) humaneval-ts + mbpp-ts, converted by bench/train-pool.mjs; see bench/train-pool.md`, revision, functions, sets: {}, skipped, decontaminated }, null, 2));
 write();
 
 // Record every converted task once (sandboxed, as run.mjs would) and skip those without a usable public example.
