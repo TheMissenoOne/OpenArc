@@ -164,7 +164,7 @@ try {
   const trim = await check("m.trim", ["trivial"]);
   assert.deepEqual(engine.mutantLines(trim), [
     "mutants m.trim: killed 1/3 (33%), survived 2, equivalent 0, invalid 0, timeout 0",
-    'survived m.trim line 22: body -> return ""; (the examples pass for a vacuous body); try: args ["0"] (original "0", mutant "")',
+    'survived m.trim line 22: body -> return ""; (the examples pass for a vacuous body); try: args ["a"] (original "a", mutant "")',
     'survived m.trim line 22: body -> return s; (the examples pass for a vacuous body); try: args [" "] (original "", mutant " ")',
   ]);
 
