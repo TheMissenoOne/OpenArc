@@ -292,7 +292,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc freeze|release <id> | resolve <id> --keep|--regen|--unlink
        openarc extract <file> [--function <name>] [--id <id>] [--style code|region]
        openarc migrate <id>
-       openarc check <id> --oracle <module>#<export> | check <ids...> --mutants [--operators trivial,boundary,comparison,constant,logical]
+       openarc check <id> --oracle <module>#<export> | check <ids...> --mutants [--operators trivial,boundary,comparison,constant,logical,guard,swap]
        openarc doctor
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
        ${LINT_USAGE}`;
