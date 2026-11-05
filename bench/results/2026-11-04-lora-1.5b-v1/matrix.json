@@ -1,0 +1,52 @@
+{
+  "_doc": "#63 eval: Qwen2.5-Coder 1.5B Q4_K_M untuned vs LoRA v1 (262 verified teacher traces), dev split, arms A and D, same tarball and seeds.",
+  "backend": {
+    "provider": "openai",
+    "baseUrl": "http://127.0.0.1:8080/v1",
+    "maxContextTokens": 8192,
+    "outputReserveTokens": 4096,
+    "openarc": {
+      "outputFormat": "json"
+    },
+    "info": {
+      "label": "eval",
+      "engine": "llama.cpp llama-server (Vulkan)",
+      "version": "version: 0.8.0-dev (build 1, commit f3586e6)",
+      "quant": "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf (tuned: --lora lora-1.5b-v1.gguf)",
+      "kvCacheType": "f16",
+      "ctx": 8192,
+      "flags": "-c 8192 -fa on -np 1 --cache-ram 0 --fit on --jinja --no-webui --port 8080"
+    }
+  },
+  "memory": {
+    "minStartGb": 3,
+    "abortGb": 1.5
+  },
+  "configs": {
+    "A": {
+      "kind": "openarc",
+      "level": 0,
+      "label": "OpenArc L0, repair"
+    },
+    "D": {
+      "kind": "baseline",
+      "label": "Baseline control (whole file, repair)"
+    }
+  },
+  "runs": [
+    {
+      "model": "qwen2.5-coder-1.5b",
+      "configs": [
+        "A",
+        "D"
+      ]
+    },
+    {
+      "model": "qwen2.5-coder-1.5b-lora-v1",
+      "configs": [
+        "A",
+        "D"
+      ]
+    }
+  ]
+}
