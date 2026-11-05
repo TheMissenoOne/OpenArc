@@ -2,6 +2,9 @@
 // outputFormat is "code" (src/output-format.ts; no schema is sent then) (spec §13).
 // Hand-written. The ollama path goes through the model.buildRequest and model.call regions (dogfooding).
 // Hosted APIs use plain fetch through HttpPort; no SDK dependencies.
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Json } from "open-arc";
 import type { HttpPort, Ports } from "./types.ts";
 import type { BackendConfig } from "./config.ts";
@@ -13,7 +16,7 @@ export const ANTHROPIC_VERSION = "2026-10-21";
 
 /** Base URL of a backend, without a trailing slash. */
 export const baseUrlOf = (b: BackendConfig): string =>
-  b.provider === "ollama" ? hostOf(b) : (b.baseUrl ?? (b.provider === "anthropic" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1")).replace(/\/$/, "");
+  b.provider === "cli" ? `cli:${b.cli}` : b.provider === "ollama" ? hostOf(b) : (b.baseUrl ?? (b.provider === "anthropic" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1")).replace(/\/$/, "");
 
 /** Throws Error("missing-key:<ENV>") when the named env var is unset. The key itself never appears in a message. */
 function apiKey(b: BackendConfig, env: Record<string, string | undefined>): string | null {
@@ -99,13 +102,18 @@ export const looping = (t: string): boolean => t.length >= 1200 && t.slice(0, -3
 
 /** One request; on a connection error, wait `retryDelayMs` and retry ONCE (Ollama restarts after an OOM kill). */
 async function withReconnect(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined>, retryDelayMs: number): Promise<Reply> {
+  const once = async () => {
+    const r = await completeOnce(ports, b, system, user, env);
+    if (r.tokens) ports.usage?.({ model: b.model, provider: b.provider, hosted: b.provider === "cli" || !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/.test(baseUrlOf(b)), ...r.tokens });
+    return r;
+  };
   try {
-    return await completeOnce(ports, b, system, user, env);
+    return await once();
   } catch (e) {
     if (!isConnectionError(e)) throw e;
     ports.log(`  backend ${b.provider} ${baseUrlOf(b)}: connection failed, retrying once in ${retryDelayMs / 1000}s`);
     await new Promise((r) => setTimeout(r, retryDelayMs));
-    return completeOnce(ports, b, system, user, env);
+    return once();
   }
 }
 
@@ -121,7 +129,56 @@ export const servedOther = (b: BackendConfig, served: string): boolean =>
 /** Ollama's OpenAI-compatible /v1 (explicit `ollamaCompat`, else a baseUrl on port 11434 ending in /v1). */
 export const isOllamaCompat = (b: BackendConfig): boolean => b.ollamaCompat ?? /:11434\/v1$/.test(baseUrlOf(b));
 
+/** One request through an agent CLI, on that CLI's subscription. Fixed argv, no shell, no tools, an empty working
+ *  directory: the CLI can't read the project and loads no project instructions, so a request costs its prompt and little
+ *  else. The system prompt replaces the agent's own where the CLI allows it: `files` are written to that directory. */
+export function cliRequest(b: BackendConfig, system: string, user: string, dir = "."): { argv: string[]; stdin: string; files: Record<string, string> } {
+  if (b.cli === "claude") {
+    return { argv: ["claude", "-p", ...(b.model ? ["--model", b.model] : []), "--tools", "", "--setting-sources", "", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--output-format", "json", "--system-prompt", system], stdin: user, files: {} };
+  }
+  if (b.cli === "codex") {
+    const off = ["features.skill_search=false", "features.plugins=false", "features.hooks=false", "features.apps=false", "features.shell_tool=false", "include_apply_patch_tool=false", "project_doc_max_bytes=0", 'web_search="disabled"', `model_instructions_file="${dir}/instructions.md"`];
+    return { argv: ["codex", "exec", ...(b.model ? ["-m", b.model] : []), "--ephemeral", "--skip-git-repo-check", "--ignore-rules", "--ignore-user-config", "--sandbox", "read-only", "--json", ...off.flatMap((c) => ["-c", c]), "-"], stdin: user, files: { "instructions.md": system } };
+  }
+  const agent = { $schema: "https://opencode.ai/config.json", agent: { openarc: { mode: "primary", prompt: system, tools: { "*": false } } } };
+  return { argv: ["opencode", "run", ...(b.model ? ["-m", b.model] : []), "--pure", "--agent", "openarc", "--format", "json"], stdin: user, files: { "opencode.json": JSON.stringify(agent) } };
+}
+export function cliReply(b: BackendConfig, out: string): Reply {
+  const lines = out.split("\n").filter((l) => l.startsWith("{")).map((l) => { try { return JSON.parse(l) as Record<string, any>; } catch { return {}; } });
+  if (b.cli === "claude") {
+    const r = JSON.parse(out) as { result?: string; is_error?: boolean; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } };
+    if (r.is_error || typeof r.result !== "string") throw new Error(`claude: ${String(r.result ?? "no result").slice(0, 200)}`);
+    const u = r.usage ?? {};
+    return { text: r.result, truncated: false, tokens: tokensOf((u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0), u.output_tokens) };
+  }
+  if (b.cli === "codex") {
+    const text = lines.filter((l) => l.type === "item.completed" && l.item?.type === "agent_message").map((l) => l.item.text as string).at(-1);
+    if (text === undefined) throw new Error("codex: no agent message");
+    const u = lines.findLast((l) => l.type === "turn.completed")?.usage ?? {};
+    return { text, truncated: false, tokens: tokensOf(u.input_tokens, u.output_tokens) };
+  }
+  const failed = lines.find((l) => l.type === "error");
+  if (failed) throw new Error(`opencode: ${String(failed.error?.data?.message ?? "error").slice(0, 200)}`);
+  const text = lines.filter((l) => l.type === "text").map((l) => l.part?.text as string).join("");
+  if (!text) throw new Error("opencode: no text");
+  const t = lines.findLast((l) => l.part?.tokens)?.part?.tokens ?? {};
+  return { text, truncated: false, tokens: tokensOf(t.input, t.output) };
+}
+
 async function completeOnce(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined>): Promise<Reply> {
+  if (b.provider === "cli") {
+    const cwd = await mkdtemp(join(tmpdir(), "openarc-cli-"));
+    try {
+      const { argv, stdin, files } = cliRequest(b, system, user, cwd);
+      for (const [name, text] of Object.entries(files)) await writeFile(join(cwd, name), text);
+      const r = await ports.proc.run(argv, 600_000, { stdin, cwd });
+      if (r.timedOut) throw new Error(`${b.cli}: timed out`);
+      if (r.code !== 0) throw new Error(`${b.cli}: exit ${r.code}: ${r.stdout.slice(-300)}`);
+      return cliReply(b, r.stdout);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }
   const seed = b.seed ?? 1;
   const temperature = b.temperature ?? 0;
   const maxTokens = b.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE;
@@ -208,6 +265,14 @@ export async function testBackend(ports: Ports, b: BackendConfig, env: Record<st
   const t0 = Date.now();
   const done = (ok: boolean, detail: string) => ({ ok, ms: Date.now() - t0, detail });
   if (b.apiKeyEnv && !env[b.apiKeyEnv]) return done(false, `missing key: env ${b.apiKeyEnv} is not set`);
+  if (b.provider === "cli") {
+    try {
+      const r = await completeOnce(ports, b, "Reply with the single word ok.", "ok?", env);
+      return done(true, `replied ${JSON.stringify(r.text.slice(0, 20))}${r.tokens ? ` · ${r.tokens.prompt}+${r.tokens.completion} tokens` : ""}`);
+    } catch (e) {
+      return done(false, (e as Error).message);
+    }
+  }
   if (b.provider === "ollama") {
     let tags: { models?: { name: string }[] };
     try {

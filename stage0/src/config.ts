@@ -11,13 +11,15 @@ export type ContextLevel = 0 | 1 | 2;
 
 /** "ollama": local /api/chat. "openai": any OpenAI-compatible Chat Completions endpoint (OpenAI, OpenRouter, Groq,
  *  LM Studio, vLLM, llama.cpp server). "anthropic": the Claude Messages API. */
-export type Provider = "ollama" | "openai" | "anthropic";
+export type Provider = "ollama" | "openai" | "anthropic" | "cli";
+/** Agent CLIs a `cli` backend may run: their subscription, a fixed argv in backends.ts. Never a command from the config file. */
+export type AgentCli = "claude" | "codex" | "opencode";
 /** What a config file may write as `provider`: a Provider, or a preset that parseConfig normalises to one.
  *  "openrouter": openai at https://openrouter.ai/api/v1, key env OPENROUTER_API_KEY, header X-Title: OpenArc, json_object.
  *  "local": an OpenAI-compatible server on your machine (llama.cpp llama-server, LM Studio, vLLM, Ollama /v1): baseUrl
  *  required, no key, ollamaCompat when the URL has :11434. Explicit fields always win over a preset's defaults. */
-export type Preset = Provider | "openrouter" | "local";
-export const PRESETS: readonly Preset[] = ["ollama", "openai", "anthropic", "openrouter", "local"];
+export type Preset = Exclude<Provider, "cli"> | "openrouter" | "local" | "claude-cli" | "codex-cli" | "opencode-cli";
+export const PRESETS: readonly Preset[] = ["ollama", "openai", "anthropic", "openrouter", "local", "claude-cli", "codex-cli", "opencode-cli"];
 
 export interface BackendConfig {
   provider: Provider;
@@ -41,6 +43,7 @@ export interface BackendConfig {
    *  `{body, imports}` one (sketch regions reply `{fills, imports}`). `strict` is for OpenAI json_schema. */
   outputSchema?: { loose: Json; strict: Json };
   outputFormat?: OutputFormat; // default "json"; a region's own outputFormat wins (src/output-format.ts)
+  cli?: AgentCli; // provider "cli", set by parseConfig from the preset
 }
 
 /** How the model returns a body. "json": {"body", "imports"} under a JSON schema (Ollama format, OpenAI response_format,
@@ -51,6 +54,7 @@ const OUTPUT_FORMATS: readonly OutputFormat[] = ["json", "code"];
 export const DEFAULT_OUTPUT_RESERVE = 3072;
 
 export interface OpenArcConfig {
+  sync?: SyncConfig;
   version: 1;
   backends: Record<string, BackendConfig>;
   compilation: {
@@ -83,6 +87,12 @@ export interface OpenArcConfig {
   lint?: LintConfig;
 }
 
+/** `openarc sync`. Nothing here is needed: the defaults spend no hosted tokens unless the default backend is hosted. */
+export interface SyncConfig {
+  escalate?: string; // a backend offered, as a tickable suggestion, when a region fails on its own backend
+  maxHostedTokensPerDay?: number; // past this, regions on a hosted or agent-CLI backend wait
+  suggestAtLines?: number; // a hand edit changing this many lines (default 8) asks for an intent suggestion
+}
 export type LintSeverity = "off" | "warn" | "error";
 export type LintProfile = "recommended" | "strict";
 export interface LintRules { [rule: string]: LintSeverity }
@@ -165,6 +175,7 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
   if (!names.length) return { config: DEFAULT_CONFIG, error: "openarc.config.json: no backends" };
   for (const ref of [c.compilation?.defaultBackend, c.compilation?.fallbackBackend, ...Object.values(c.regions ?? {}).map((r) => r.backend)])
     if (ref !== undefined && !names.includes(ref)) return { config: DEFAULT_CONFIG, error: `openarc.config.json: unknown backend "${ref}"` };
+  if (c.sync?.escalate !== undefined && !names.includes(c.sync.escalate)) return { config: DEFAULT_CONFIG, error: `openarc.config.json: unknown backend "${c.sync.escalate}"` };
   const iso = c.sandbox?.isolation;
   if (iso !== undefined && !ISOLATIONS.includes(iso))
     return { config: DEFAULT_CONFIG, error: `openarc.config.json: sandbox.isolation must be one of ${ISOLATIONS.join(", ")}${(iso as string) === "none" ? ' (no sandbox at all is spelled "unsafe-none")' : ""}` };
@@ -174,7 +185,7 @@ export function parseConfig(text: string | null): { config: OpenArcConfig; error
     const bad = (why: string) => ({ config: DEFAULT_CONFIG, error: `openarc.config.json: backend "${name}": ${why}` });
     if (typeof b !== "object" || b === null) return bad("must be an object");
     if ("apiKey" in b) return bad(`literal "apiKey" is not allowed; put the key in an env var and name it in "apiKeyEnv"`);
-    if (!PRESETS.includes(b.provider)) return bad(`unknown provider "${b.provider}" (one of ${PRESETS.join(", ")})`);
+    if (!PRESETS.includes(b.provider as Preset)) return bad(`unknown provider "${b.provider}" (one of ${PRESETS.join(", ")})`);
     if ((b.provider as Preset) === "local" && typeof b.baseUrl !== "string") return bad(`"baseUrl" is required for provider "local" (e.g. http://127.0.0.1:8080/v1)`);
     if (b.structuredOutput !== undefined && !["json_schema", "json_object"].includes(b.structuredOutput)) return bad(`"structuredOutput" must be json_schema or json_object`);
     if (b.ollamaCompat !== undefined && typeof b.ollamaCompat !== "boolean") return bad(`"ollamaCompat" must be true or false`);
@@ -209,6 +220,10 @@ export const hostOf = (b: BackendConfig) => (b.host ?? "http://127.0.0.1:11434")
  *  then every explicit field. */
 export function applyPreset(b: BackendConfig): BackendConfig {
   const preset = (b.preset ?? b.provider) as Preset;
+  if (preset === "claude-cli" || preset === "codex-cli" || preset === "opencode-cli") {
+    const { provider: _p, ...set } = b;
+    return { outputFormat: "code", ...set, provider: "cli", cli: preset.slice(0, -4) as AgentCli, preset } as BackendConfig;
+  }
   const set = Object.fromEntries(Object.entries(b).filter(([, v]) => v !== undefined)) as Partial<BackendConfig>;
   switch (preset) {
     case "openrouter":
