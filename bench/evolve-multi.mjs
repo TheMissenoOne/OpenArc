@@ -136,6 +136,8 @@ async function armOpenArc(dir, cfg) {
     const tc = Date.now();
     const comp = await run([bin, "compile", "--keep-going"], { cwd: dir, timeoutMs: 45 * 60_000 });
     const compileMs = Date.now() - tc;
+    // a project-wide spec error or a dead backend must not score as "the model failed": new functions always need a call
+    if (st.add && !meter.calls) throw new Error(`step "${st.name}" added functions but made no model call: ${(comp.stdout + comp.stderr).slice(-600)}`);
     const grid = existsSync(path("grid")) ? await readFile(path("grid"), "utf8") : "";
     steps.push({ step: st.name, wallMs: Date.now() - t0, compileMs, ...meter, scaffoldExit: sc.code, compileExit: comp.code, compileTail: (comp.stdout + comp.stderr).slice(-1500), hand: handApplied ? handPresent(grid) : undefined, heldOut: await score(dir, layout, path) });
   }
@@ -212,6 +214,7 @@ for (const c of configs) {
     if (i) s.regressions = Object.keys(steps[i - 1].heldOut ?? {}).filter((ex) => steps[i - 1].heldOut[ex].allPass && !s.heldOut[ex]?.allPass);
   });
   appendFileSync(jsonl, JSON.stringify({ config: c, seed, model, oa: basename(a.oa), wallMs: Date.now() - t0, steps }) + "\n");
+  if (steps.some((s) => s.error)) process.exitCode = 5; // the queue must not mark this arm done
   for (const s of steps) note(`s${seed} ${c} ${s.step ?? "ERROR " + s.error?.split("\n")[0]}: calls ${s.calls} tokens ${s.prompt}+${s.eval} ${((s.wallMs ?? 0) / 1000).toFixed(1)}s ${s.correct ? "CORRECT" : "held-out " + Object.entries(s.heldOut ?? {}).filter(([, h]) => !h.allPass).map(([ex, h]) => `${ex} ${h.passed}/${h.total}`).join(", ")}${s.hand !== undefined ? ` hand-edit ${s.hand ? "kept" : "LOST"}` : ""}${s.regressions?.length ? ` REGRESSED ${s.regressions.join(",")}` : ""}`);
 }
-process.exit(0);
+process.exit();

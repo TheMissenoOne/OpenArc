@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { BENCH, EXERCISES, instructions, heldOut, run, proxyBase, exDir } from "./common.mjs";
 
-const camel = (s) => s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+const camel = (s) => s.replace(/-([a-z0-9])/g, (_, c) => c.toUpperCase()); // digits too: "-2" is not legal in a region id
 
 // Comments of the original Exercism stub file (line and block comments), for the A-same-info arm.
 export const stubComments = (dataset, ex) =>

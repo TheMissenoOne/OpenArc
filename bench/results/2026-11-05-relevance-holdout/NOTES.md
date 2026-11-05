@@ -17,3 +17,14 @@ Follow-up to `../2026-11-04-relevance-context/`, whose nine functions couldn't s
 
 ## What this can't show
 These tasks are unrelated to each other, so no spec names a sibling. It tests the trimming half of the feature (siblings removed from the prompt), not the half that keeps named siblings.
+
+## First run: invalid, discarded
+The first full run hit a harness bug. `camel()` left the `-2` of `mbpp167-next-power-of-2` and `mbpp388-highest-power-of-2` in the region id. OpenArc rejects that with E010 for the whole project, so as soon as either task entered a project, every later compile made no model calls and all remaining functions scored as failures, in both arms. Two seeds made no calls at all, and final pass rates were around 16%.
+
+Its numbers, for the record only: rounds +0.1 points [-0.6, 0.8], burst -1.4 points [-2.8, -0.2], over mostly uncompiled functions. Raw data is kept outside the repo in `runs/relevance-holdout-invalid-E010`.
+
+**Changes before the rerun:** `camel()` handles digits, and a step that adds functions with no model call now aborts the arm instead of scoring it. A stub-model preflight of the 190 tasks reached every region with no load errors. The decision rule above is unchanged.
+
+**Seen before the rerun:** I'd read the invalid numbers before restarting, so this run isn't blind to them. The rule was committed earlier and nothing about it changes.
+
+**Retries:** in `--rounds`, a region that failed is attempted again when a later round adds a sibling, because that changes its fingerprint. Both arms get this, so it adds calls but not bias.
