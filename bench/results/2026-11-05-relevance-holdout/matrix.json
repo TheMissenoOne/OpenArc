@@ -1,0 +1,116 @@
+{
+  "_doc": "Multi-file evolution benchmark (evolve-multi.mjs): 4 files over 9 steps; OpenArc A and its strategy variants vs plain prompt per file. Server: llama-server.service on :8080.",
+  "backend": {
+    "provider": "openai",
+    "baseUrl": "http://127.0.0.1:8080/v1",
+    "maxContextTokens": 8192,
+    "outputReserveTokens": 4096,
+    "openarc": {
+      "outputFormat": "json"
+    },
+    "info": {
+      "label": "qwen3.5-9b",
+      "engine": "llama.cpp llama-server (Vulkan)"
+    }
+  },
+  "memory": {
+    "minStartGb": 6,
+    "abortGb": 1.5
+  },
+  "configs": {
+    "A": {
+      "kind": "openarc",
+      "label": "OpenArc"
+    },
+    "R": {
+      "kind": "openarc",
+      "strategy": {
+        "repair": "routed"
+      },
+      "label": "routed repair hints"
+    },
+    "P1": {
+      "kind": "openarc",
+      "strategy": {
+        "plan": "after-failure"
+      },
+      "label": "plan after a failure"
+    },
+    "P": {
+      "kind": "openarc",
+      "strategy": {
+        "plan": "always"
+      },
+      "label": "plan every attempt"
+    },
+    "D": {
+      "kind": "baseline",
+      "label": "plain prompt per file"
+    },
+    "S": {
+      "kind": "openarc",
+      "sketch": true,
+      "label": "OpenArc with sketches"
+    },
+    "DS": {
+      "kind": "baseline",
+      "sketch": true,
+      "label": "plain prompt with the sketch as an outline"
+    },
+    "Ci": {
+      "kind": "openarc",
+      "context": {
+        "pendingSiblings": "intent"
+      },
+      "label": "pending siblings: intent, no note"
+    },
+    "Cs": {
+      "kind": "openarc",
+      "context": {
+        "pendingSiblings": "signature"
+      },
+      "label": "pending siblings: signature only (pre-#32)"
+    },
+    "Cp": {
+      "kind": "openarc",
+      "context": {
+        "previousBody": true
+      },
+      "label": "previous body on spec change"
+    },
+    "Cx": {
+      "kind": "openarc",
+      "context": {
+        "expandOnFailure": true
+      },
+      "label": "control: expand context on failure"
+    },
+    "Cr": {
+      "kind": "openarc",
+      "context": {
+        "expandOnFailure": true,
+        "relevance": true
+      },
+      "label": "relevance-ranked context, expand on failure"
+    }
+  },
+  "runs": [
+    {
+      "model": "qwen3.5-9b",
+      "configs": [
+        "Cx",
+        "Cr"
+      ]
+    }
+  ],
+  "exercises": [
+    "acronym",
+    "binary-search",
+    "flatten-array",
+    "food-chain",
+    "relative-distance",
+    "spiral-matrix",
+    "transpose",
+    "wordy"
+  ]
+}

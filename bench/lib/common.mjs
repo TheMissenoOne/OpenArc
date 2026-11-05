@@ -167,3 +167,22 @@ export async function heldOut(dataset, ex, dir, solutionSrc, splitInfo, links = 
     timedOut: r.timedOut || undefined,
   };
 }
+
+/** Deterministic layout for evolve-multi --pack: shuffle by seed, deal into files of `size` functions with no function name twice in a file (both would export it).
+ *  rounds: step k adds each file's k-th function, so every prompt is one region with a growing list of siblings. Otherwise `perStep` whole files per step, which compile in batches. */
+export function packSteps(fnNames, size, perStep, seed, rounds = false) {
+  const ids = Object.keys(fnNames).sort();
+  let x = seed >>> 0;
+  const rnd = () => (x = (x + 0x6d2b79f5) >>> 0, Math.imul(x ^ (x >>> 15), 1 | x) >>> 0) / 2 ** 32; // ponytail: a small PRNG, only has to be reproducible
+  for (let i = ids.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [ids[i], ids[j]] = [ids[j], ids[i]]; }
+  const files = [];
+  for (const id of ids) {
+    let f = files.find((g) => g.length < size && !g.some((o) => fnNames[o].some((n) => fnNames[id].includes(n))));
+    if (!f) files.push(f = []);
+    f.push(id);
+  }
+  const steps = [];
+  if (rounds) files.forEach((exs, i) => exs.forEach((ex, k) => { (steps[k] ??= { name: `round ${k + 1}`, add: {} }).add[`pack${i}`] = [ex]; }));
+  else files.forEach((exs, i) => { const k = Math.floor(i / perStep); (steps[k] ??= { name: `pack step ${k + 1}`, add: {} }).add[`pack${i}`] = exs; });
+  return steps;
+}

@@ -9,18 +9,20 @@
 // `correct` (every function so far passes all its held-out tests). The headline metric is cumulative tokens and time
 // per correct project state.
 // node evolve-multi.mjs --dataset <ts-bench> --work <dir> --oa <open-arc-x.y.z.tgz> --matrix matrix-evolve-multi.json --out <dir> --seed n
+// --pack <n>: instead of the scenario above, every exercise of BENCH_EXERCISES dealt by seed into files of n functions, 5 files per step;
+//             with --rounds, one function added to every file per step instead (single-region prompts, no batches)
 import { createServer } from "node:http";
 import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { readFile, writeFile, rm, mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { parseArgs } from "node:util";
-import { EXERCISES, instructions, split, run, heldOut, runTests, prepareTestDir, exampleLine, exampleTest } from "./lib/common.mjs";
+import { EXERCISES, packSteps, instructions, split, run, heldOut, runTests, prepareTestDir, exampleLine, exampleTest } from "./lib/common.mjs";
 import { specSource, configFor, sketchFile } from "./lib/adapter.mjs";
 import { chat, extractCode } from "./lib/baseline.mjs";
 
 const { values: a } = parseArgs({ options: {
   dataset: { type: "string" }, work: { type: "string" }, oa: { type: "string" }, matrix: { type: "string" }, out: { type: "string" },
-  seed: { type: "string", default: "1" }, port: { type: "string", default: "18442" }, configs: { type: "string" },
+  seed: { type: "string", default: "1" }, port: { type: "string", default: "18442" }, configs: { type: "string" }, pack: { type: "string" }, rounds: { type: "boolean" },
 } });
 const matrix = JSON.parse(readFileSync(a.matrix, "utf8"));
 const backend = matrix.backend, model = matrix.runs[0].model, seed = +a.seed, port = +a.port;
@@ -65,7 +67,7 @@ const HAND = `// hand-written: fill ring by ring
     for (let r = last - 1; r > ring && last > ring; r--) m[r]![ring] = n++;
   }
   return m;`;
-const STEPS = [
+const STEPS = a.pack ? packSteps(Object.fromEntries(Object.entries(EXERCISES.functions).map(([ex, e]) => [ex, Object.keys(e.fns)])), +a.pack, 5, seed, a.rounds) : [
   { name: "create text.ts and arrays.ts", add: { text: ["acronym", "diamond"], arrays: ["flatten-array", "binary-search"] } },
   { name: "add codec.ts", add: { codec: ["variable-length-quantity"] } },
   { name: "add transpose to arrays.ts", add: { arrays: ["transpose"] } },
@@ -134,6 +136,8 @@ async function armOpenArc(dir, cfg) {
     const tc = Date.now();
     const comp = await run([bin, "compile", "--keep-going"], { cwd: dir, timeoutMs: 45 * 60_000 });
     const compileMs = Date.now() - tc;
+    // a project-wide spec error or a dead backend must not score as "the model failed": new functions always need a call
+    if (st.add && !meter.calls) throw new Error(`step "${st.name}" added functions but made no model call: ${(comp.stdout + comp.stderr).slice(-600)}`);
     const grid = existsSync(path("grid")) ? await readFile(path("grid"), "utf8") : "";
     steps.push({ step: st.name, wallMs: Date.now() - t0, compileMs, ...meter, scaffoldExit: sc.code, compileExit: comp.code, compileTail: (comp.stdout + comp.stderr).slice(-1500), hand: handApplied ? handPresent(grid) : undefined, heldOut: await score(dir, layout, path) });
   }
@@ -210,6 +214,7 @@ for (const c of configs) {
     if (i) s.regressions = Object.keys(steps[i - 1].heldOut ?? {}).filter((ex) => steps[i - 1].heldOut[ex].allPass && !s.heldOut[ex]?.allPass);
   });
   appendFileSync(jsonl, JSON.stringify({ config: c, seed, model, oa: basename(a.oa), wallMs: Date.now() - t0, steps }) + "\n");
+  if (steps.some((s) => s.error)) process.exitCode = 5; // the queue must not mark this arm done
   for (const s of steps) note(`s${seed} ${c} ${s.step ?? "ERROR " + s.error?.split("\n")[0]}: calls ${s.calls} tokens ${s.prompt}+${s.eval} ${((s.wallMs ?? 0) / 1000).toFixed(1)}s ${s.correct ? "CORRECT" : "held-out " + Object.entries(s.heldOut ?? {}).filter(([, h]) => !h.allPass).map(([ex, h]) => `${ex} ${h.passed}/${h.total}`).join(", ")}${s.hand !== undefined ? ` hand-edit ${s.hand ? "kept" : "LOST"}` : ""}${s.regressions?.length ? ` REGRESSED ${s.regressions.join(",")}` : ""}`);
 }
-process.exit(0);
+process.exit();

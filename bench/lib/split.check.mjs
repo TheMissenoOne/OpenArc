@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { exampleLine, exampleTest, exDir, prepareTestDir, runTests, splitTests } from "./common.mjs";
+import { exampleLine, exampleTest, exDir, packSteps, prepareTestDir, runTests, splitTests } from "./common.mjs";
 import { specSource } from "./adapter.mjs";
 import { baselinePrompt, publicTest } from "./baseline.mjs";
 import { expect } from "./jest-shim.mjs";
@@ -73,5 +73,18 @@ try {
   assert.deepEqual(await outcome('export const find = (a: number[], v: number) => { const i = a.indexOf(v); if (i < 0) throw new Error("nope"); return i; };'), [true, false, true], "the wrong message");
 } finally {
   rmSync(dir, { recursive: true, force: true });
+}
+// evolve-multi --pack: reproducible, every exercise once, full files first, no function name twice in a file
+{
+  const names = Object.fromEntries(Array.from({ length: 23 }, (_, i) => [`t${i}`, [i % 7 ? `f${i}` : "same"]]));
+  const steps = packSteps(names, 4, 2, 1), files = steps.flatMap((st) => Object.values(st.add));
+  assert.deepEqual(steps, packSteps(names, 4, 2, 1));
+  assert.notDeepEqual(steps, packSteps(names, 4, 2, 2));
+  assert.deepEqual(files.flat().sort(), Object.keys(names).sort());
+  assert.ok(files.every((f) => f.length <= 4 && new Set(f.flatMap((x) => names[x])).size === f.length));
+  assert.ok(steps.every((st) => Object.keys(st.add).length <= 2));
+  const rounds = packSteps(names, 4, 2, 1, true), inFile = {};
+  for (const st of rounds) for (const [f, exs] of Object.entries(st.add)) { assert.equal(exs.length, 1); (inFile[f] ??= []).push(...exs); }
+  assert.deepEqual(Object.values(inFile), files, "rounds deal the same files, one function a step");
 }
 console.log("split.check: ok");
