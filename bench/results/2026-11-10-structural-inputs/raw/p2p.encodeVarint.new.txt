@@ -1,0 +1,1 @@
+check p2p.encodeVarint against oracle-ref/p2p.ts#encodeVarint: 109/109 inputs agree (seed 1)

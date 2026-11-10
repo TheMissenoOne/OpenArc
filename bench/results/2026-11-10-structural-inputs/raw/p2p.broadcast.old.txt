@@ -1,0 +1,1 @@
+check p2p.broadcast: no example has only number/string/boolean/array/object arguments to vary

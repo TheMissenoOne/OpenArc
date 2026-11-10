@@ -1,0 +1,19 @@
+  #14 args ["{}"]: got {"ok":true,"body":undefined,"imports":[]}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #16 args ["{\"imports\":[{\"from\":\"./a.ts\",\"names\":[\"f\"]}]}"]: got {"ok":true,"body":undefined,"imports":[{"from":"./a.ts","names":["f"]}]}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #17 args ["{\"extra\":true}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"unexpected-property:extra"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #18 args ["{\"imports\":[{\"from\":\"a\"}]}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"bad-imports"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #19 args ["{\"imports\":[null]}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"bad-imports"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #97 args ["{\"body\":\"x\",\"imports\":[null],\"extra\":1}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"bad-imports"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"unexpected-property:extra"}}
+  #108 args ["{\"BODY\":\"X\",\"IMPORTS\":[{\"FROM\":\"A\"}]}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"unexpected-property:BODY"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #120 args ["{\"boy\":1}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"unexpected-property:boy"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #131 args ["{\"boédy\":1}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"unexpected-property:boédy"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #136 args ["{\"BODY\":\"X\",\"IMPORTS\":[{\"FROM\":\"./A.TS\",\"NAMES\":[\"F\"]}]}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"unexpected-property:BODY"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #142 args ["{\"boedy\":\"return 1;\"}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"unexpected-property:boedy"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #145 args ["{\"BODY\":\"RETURN 1;\"}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"unexpected-property:BODY"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #149 args ["{\"ody\":\"x\",\"extra\":true}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"unexpected-property:ody"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #156 args ["{\"Zbody\":1}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"unexpected-property:Zbody"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #170 args ["{\"BODY\":1}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"unexpected-property:BODY"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #177 args ["{\"bsody\":\"x\",\"imports\":[{\"from\":\"a\"}]}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"bad-imports"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #179 args ["{\"bdy\":\"x\",\"imports\":[{\"from\":\"a\"}]}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"bad-imports"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+  #185 args ["{\"bod[y\":\"x\",\"imports\":[{\"from\":\"./a.ts\",\"names\":[\"f\"]}]}"]: got {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"unexpected-property:bod[y"}}; oracle {"ok":false,"diagnostic":{"code":"OARC-E081","detail":"body-not-string"}}
+check model.parseOutput against oracle-ref/model.ts#parseOutput: 182/200 inputs agree (seed 1)

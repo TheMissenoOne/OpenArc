@@ -1,0 +1,11 @@
+  #11 args [["a"],{"type":"conneced","peer":""},8]: got ["a"]; oracle ["","a"]
+  #14 args [["bb"],{"type":"CONNECTED","peer":"aa"},9]: got ["bb"]; oracle ["aa","bb"]
+  #27 args [["A"],{"type":"connectedconnected","peer":"a"},8]: got ["A"]; oracle ["A","a"]
+  #29 args [["b"],{"type":"dconnected","peer":"a"},7]: got ["b"]; oracle ["a","b"]
+  #39 args [[],{"type":"CONNECTED","peer":"a"},8]: got []; oracle ["a"]
+  #41 args [["a"],{"type":"CONNECTED","peer":"aa"},7]: got ["a"]; oracle ["a","aa"]
+  #43 args [["b"],{"type":"","peer":"A"},8]: got ["b"]; oracle ["A","b"]
+  #50 args [["b"],{"type":"","peer":""},8]: got ["b"]; oracle ["","b"]
+  #53 args [["b"],{"type":"conected","peer":"c"},8]: got ["b"]; oracle ["b","c"]
+  #57 args [[],{"type":"disconnecteddisconnected","peer":""},8]: got []; oracle [""]
+check p2p.peerTable against oracle-ref/p2p.ts#peerTable: 50/60 inputs agree (seed 1)

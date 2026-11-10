@@ -1,0 +1,2 @@
+  #77 args [{"phase":"ready","version":null,"error":null},{"type":"reject","reason":"busy"},[1]]: got {"state":{"phase":"failed","version":null,"error":"busy"},"send":[]}; oracle {"state":{"phase":"ready","version":null,"error":null},"send":[]}
+check p2p.handshake against oracle-ref/p2p.ts#handshake: 199/200 inputs agree (seed 1)
