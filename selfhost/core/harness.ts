@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createContext, Script } from "node:vm";
 import { OpenArcTodoError, type FakeFactory, type FakeInstance, type FakeRef, type Json, type RegionSpec, type AnyFn, type UiNode } from "./index.ts";
 
 export interface Outcome {
@@ -85,6 +86,24 @@ export const action = (init: Json | undefined): FakeInstance<(...a: unknown[]) =
   return { instance: async (...a) => (calls.push(a), structuredClone(returns[calls.length - 1])), snapshot: () => ({ calls: toJson(calls) }) };
 };
 
+/** Per-call limit on the synchronous part of one example or oracle input: a body that loops forever fails that example,
+ *  named, and the rest still run (else the sandbox's CPU limit kills the whole run with no input named). */
+export const CALL_MS = 5000;
+const callScript = new Script("f(...a)"), callContext = createContext({});
+// ponytail: only the synchronous part; a body that hangs across awaits still ends at the sandbox's CPU limit, unnamed
+export function timedCall(fn: AnyFn, args: unknown[], ms = CALL_MS): unknown {
+  Object.assign(callContext, { f: fn, a: args });
+  try {
+    return callScript.runInContext(callContext, { timeout: ms });
+  } catch (e) {
+    // the timeout error comes from the vm's realm (not instanceof Error), so match its code
+    if ((e as { code?: unknown } | null)?.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") throw new Error(`timed out after ${ms} ms (does it loop forever?)`);
+    throw e;
+  } finally {
+    Object.assign(callContext, { f: undefined, a: undefined });
+  }
+}
+
 // join, not `${root}/${rel}`: the root is an OS path (C:\… on Windows), and pathToFileURL handles the drive letter
 const importFile = (root: string, rel: string) => import(pathToFileURL(join(root, rel)).href);
 
@@ -136,7 +155,7 @@ export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyF
         let message: string | null = null;
         let actual: unknown;
         try {
-          actual = await attribution.run(scope, () => fn(...args));
+          actual = await attribution.run(scope, () => timedCall(fn, args));
         } catch (e) {
           if (e instanceof OpenArcTodoError) throw e;
           message = e instanceof Error ? e.message : String(e);
@@ -150,7 +169,7 @@ export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyF
           continue;
         }
       } else {
-        const actual = await attribution.run(scope, () => fn(...args));
+        const actual = await attribution.run(scope, () => timedCall(fn, args));
         if ("expected" in ex && !valuesEqual(actual, decodeTokens(ex.expected), eq)) {
           out.push(withHits({ name, ok: false, actual: toJson(actual) }));
           continue;
@@ -193,7 +212,7 @@ export interface HarnessPlanEntry {
 
 const settle = async (fn: AnyFn, args: unknown[]): Promise<{ value?: unknown; throws?: string }> => {
   try {
-    return { value: await fn(...structuredClone(args)) };
+    return { value: await timedCall(fn, structuredClone(args)) };
   } catch (e) {
     return { throws: e instanceof Error ? e.message : String(e) };
   }
