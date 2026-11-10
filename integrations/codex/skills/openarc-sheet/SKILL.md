@@ -8,8 +8,9 @@ description: Use in a repo with openarc.spec.md or openarc.config.json, when ask
 The person edits `openarc.spec.md`. `openarc sync --watch` carries edits between that file and the TypeScript, and compiles regions on local or configured backends. Saves cost no agent turn, so stay out of that loop.
 
 Keep token use low:
-- Start from `npx openarc sync --brief --no-model` (or `openarc` when installed globally), one line. Don't read `openarc.spec.md` whole.
-- For one region, run `npx openarc inspect <id>` and read only that region's part of the sheet (`grep -n -A25 "^## <id>" openarc.spec.md`).
+- Run OpenArc as `node_modules/.bin/openarc` (from `npm i -D open-arc`), or `openarc` when installed globally. Never `npx openarc`: no npm package has that name, so npx would look it up and could install someone else's.
+- Start from `node_modules/.bin/openarc sync --brief --no-model`, one line. Don't read `openarc.spec.md` whole.
+- For one region, run `node_modules/.bin/openarc inspect <id>` and read only that region's part of the sheet (`grep -n -A25 "^## <id>" openarc.spec.md`).
 - Don't generate bodies yourself while a backend can: edit the spec, then sync. Write a body by hand only when asked, or after a region has failed on its backends.
 
 Rules:

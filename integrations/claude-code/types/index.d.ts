@@ -16,6 +16,7 @@ declare module 'claude-code' {
     openarc: {
       status: Shaped<SyncStatus | null>
       log: Shaped<string[]>
+      seen: Shaped<string>
     }
   }
 }

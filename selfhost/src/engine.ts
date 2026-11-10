@@ -2861,7 +2861,10 @@ export async function observe(ports: Ports, req: CompileRequest, p: Project, id:
     const res = await runSandbox(ports, req, p, id, overlay, { module, export: "reference", inputs });
     if (res.error) return { error: res.error };
     if (!res.complete) return { error: "harness output incomplete" };
-    return res.failed.map((f) => { const a = f.actual as { args: Json[]; got: Json }; return { args: a.args, got: a.got }; });
+    // A result equal to the sentinel passes, so the harness leaves it out of `failed`: one entry per input, by its #n name,
+    // keeps results aligned with the inputs their callers index them by.
+    const failed = new Map(res.failed.map((f) => [f.name, f.actual as { args: Json[]; got: Json }]));
+    return inputs.map((args, i) => { const a = failed.get(`#${i + 1}`); return a ? { args: a.args, got: a.got } : { args, got: "__openarc_observe__" }; });
   } finally {
     if (p.sandboxDir) await ports.fs.remove(p.sandboxDir);
     delete p.sandboxDir;

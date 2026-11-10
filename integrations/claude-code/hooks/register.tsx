@@ -11,6 +11,7 @@ const LOCAL_BIN = 'node_modules/.bin/openarc'
 const LOG_LINES = 200
 const status = atom({ plugin: 'openarc', key: 'status' } as const, null as SyncStatus | null, { shape: 'status-1' })
 const log = atom({ plugin: 'openarc', key: 'log' } as const, [] as string[], { shape: 'log-1' })
+const seen = atom({ plugin: 'openarc', key: 'seen' } as const, '' as string, { shape: 'seen-1' }) // the status file's last text
 
 const exists = async ($: any, path: string) => {
   try {
@@ -32,30 +33,66 @@ const line = (s: SyncStatus | null) =>
         .filter(Boolean)
         .join(' · ')
 
-/** Run openarc, sending status lines to the pane's state and everything else to its log. */
-async function pump($: any, args: string[]) {
+const show = async ($: any, s: SyncStatus) => {
+  await update($, status, () => s)
+  $.ui.status(line(s))
+}
+
+/** Run openarc, sending status lines to the pane's state and everything else to its log; resolves its exit code. */
+async function pump($: any, args: string[]): Promise<number> {
   const bin = (await exists($, LOCAL_BIN)) ? LOCAL_BIN : 'openarc'
   try {
-    await stream($, [bin, ...args])
+    return await stream($, [bin, ...args])
   } catch {
     await update($, log, list => [...list, 'openarc is not installed here: run npm i -D open-arc'])
+    return 127
   }
 }
-async function stream($: any, argv: string[]) {
-  for await (const { text } of $.process.spawn({ argv })) {
-    for (const l of String(text).split('\n').filter(Boolean)) {
-      if (l.startsWith('{')) {
-        try {
-          const s = JSON.parse(l) as SyncStatus
-          await update($, status, () => s)
-          $.ui.status(line(s))
-          continue
-        } catch {
-          // not a status line: it goes to the log like any other
-        }
+async function stream($: any, argv: string[]): Promise<number> {
+  const take = async (l: string) => {
+    if (!l) return
+    if (l.startsWith('{')) {
+      try {
+        return void (await show($, JSON.parse(l) as SyncStatus))
+      } catch {
+        // not a status line: it goes to the log like any other
       }
-      await update($, log, list => [...list, l].slice(-LOG_LINES))
     }
+    await update($, log, list => [...list, l].slice(-LOG_LINES))
+  }
+  // Text arrives as it was written, not by lines: keep the unfinished tail until its newline comes.
+  let rest = ''
+  const it = $.process.spawn({ argv })[Symbol.asyncIterator]()
+  for (;;) {
+    const r = await it.next()
+    if (r.done) {
+      await take(rest)
+      return r.value?.code ?? 1
+    }
+    const parts = (rest + String(r.value.text ?? '')).split('\n')
+    rest = parts.pop()!
+    for (const l of parts) await take(l)
+  }
+}
+
+/** Another session's watcher may own this project: its status file is the shared truth, read every few seconds. */
+const STATUS_FILE = '.openarc/sync-status.json'
+const POLL_MS = 3000
+let polling = false
+const poll = ($: any) => {
+  if (polling) return
+  polling = true
+  $.clock.every(POLL_MS, () => refresh($))
+}
+async function refresh($: any) {
+  try {
+    const text = await $.fs.read(STATUS_FILE)
+    if (text !== (await read($, seen))) {
+      await update($, seen, () => text)
+      await show($, JSON.parse(text) as SyncStatus)
+    }
+  } catch {
+    // no sync yet, or a write in progress: the next tick reads it
   }
 }
 
@@ -66,12 +103,8 @@ export const register: Register = on => {
     await $.command.register({ name: 'openarc-adopt', description: 'Generate specs for this repo, then keep them in sync' })
     await $.command.register({ name: 'openarc-fix', description: 'Draft a prompt with only what OpenArc could not settle' })
     if (await exists($, 'openarc.config.json')) {
-      try {
-        const last = JSON.parse(await $.fs.read('.openarc/sync-status.json')) as SyncStatus
-        await update($, status, () => last) // the last sync's status, until this session's first pass reports
-      } catch {
-        // no sync yet
-      }
+      await refresh($) // the last sync's status, until a pass reports
+      poll($)
       void $.ui.open({ id: PANE, title: 'OpenArc' })
       void pump($, ['sync', '--watch', '--json'])
     }
@@ -86,7 +119,9 @@ export const register: Register = on => {
   on('command.run', { command: 'openarc-adopt' }, async $ => {
     await $.ui.open({ id: PANE, title: 'OpenArc' })
     void (async () => {
-      await pump($, ['adopt', '--json'])
+      const code = await pump($, ['adopt', '--json'])
+      if (code !== 0) return void (await update($, log, list => [...list, `adopt failed (exit ${code}): see above; the watcher was not started`]))
+      poll($)
       await pump($, ['sync', '--watch', '--json'])
     })()
     return { text: 'Adopting: bodies stay as they are. Edit openarc.spec.md when it appears.' }

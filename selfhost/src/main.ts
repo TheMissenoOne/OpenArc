@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // `openarc` CLI entry point. Hand-written: the real ports plus command dispatch.
 import { appendFile, mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { appendFileSync, cpSync, existsSync, lstatSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, cpSync, existsSync, lstatSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
@@ -20,6 +20,7 @@ import { PHRASE_SYSTEM, parsePhrase, phrasePrompt, reportLines, suggest, type Re
 import { clearStaleLock, releaseOwnLock } from "./lock.ts";
 import { createWatcher, regionKey, type RegionKey } from "./watcher.ts";
 import { watchDirs } from "./dirwatch.ts";
+import { testFile } from "./tests-plan.ts";
 import { migrate } from "./migrate.ts";
 import { adopt, brief, syncOnce, type SyncCtx, type SyncStatus } from "./sync.ts";
 import { SHEET_FILE } from "./sheet.ts";
@@ -328,7 +329,6 @@ async function syncCmd(root: string, ports: Ports, argv: string[]): Promise<numb
   }
   await ensureIgnored(ports);
   clearStaleLock(root, (l) => console.error(l));
-  ports.usage = (u) => appendFileSync(`${root}/.openarc/usage.jsonl`, JSON.stringify({ at: ports.now(), ...u }) + "\n");
   const ctx: SyncCtx = { ports, root, request: (p, ids) => request(root, p, ids), run, noModel: flags.includes("--no-model"), log: (l) => console.log(l) };
   const show = (s: SyncStatus) => {
     if (flags.includes("--json")) return console.log(JSON.stringify(s));
@@ -395,13 +395,14 @@ async function syncCmd(root: string, ports: Ports, argv: string[]): Promise<numb
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => void tick(), 500);
   };
-  const dirs = watchDirs(root, ["src"], (rel) => {
-    if (rel.endsWith(".ts")) schedule();
+  // tests/ too: a code-first test is part of its regions' context, as in openarc watch.
+  const dirs = watchDirs(root, ["src", "tests"], (rel) => {
+    if (testFile(rel)) schedule();
   });
   watch(root, (_e, name) => {
     if (name === SHEET_FILE || name === "openarc.config.json") schedule();
   });
-  console.log(`[sync] watching ${SHEET_FILE} and src/ (Ctrl+C to stop)`);
+  console.log(`[sync] watching ${SHEET_FILE}, src/ and tests/ (Ctrl+C to stop)`);
   schedule();
   await new Promise(() => {});
   return 0;
@@ -642,6 +643,11 @@ async function depsCmd(root: string, ports: Ports, args: string[]): Promise<numb
 async function main(argv: string[]): Promise<number> {
   const root = findRoot(process.cwd());
   const ports = realPorts(root);
+  // Every command's requests are counted, not just sync's: sync's hosted budget reads this file, and compile spends too.
+  ports.usage = (u) => {
+    mkdirSync(`${root}/.openarc`, { recursive: true });
+    appendFileSync(`${root}/.openarc/usage.jsonl`, JSON.stringify({ at: ports.now(), ...u }) + "\n");
+  };
   // ponytail: `check` is parsed here, not in the cli.parseArgv region, so the self-hosted tree keeps its generated body.
   // Move it into cli.parseArgv's spec at the next self-compile.
   if (argv[0] === "check") return check(root, ports, argv.slice(1));

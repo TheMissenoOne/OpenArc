@@ -23,7 +23,7 @@ Specs come from the code, and a model is the last resort:
 | Intent, when there's no JSDoc | The default backend, once per body | one request |
 | Inputs, when the types can't produce them | The same request | none extra |
 
-Examples go in `src/x.arc.ts` as `arc.configure` statements. Nothing imports that file, so your program gains no runtime dependency on OpenArc. With `--no-model`, nothing calls a model. These examples record what the code does today, so a bug gets recorded as expected behaviour. Read them.
+Examples go in `src/x.arc.ts` as `arc.configure` statements, which import the function by name or as the module's default, so a function that isn't exported gets no examples until it is. Nothing imports that file, so your program gains no runtime dependency on OpenArc. With `--no-model`, nothing calls a model. These examples record what the code does today, so a bug gets recorded as expected behaviour. Read them.
 
 ## The file
 
@@ -42,7 +42,7 @@ Lower-case words joined by dashes.
 | You do | What happens |
 |---|---|
 | Edit an intent or an example | It's written to the JSDoc, `arc.configure` or `defineRegion`, under the usual rules |
-| Add `**Hold**` under a region | Spec edits still reach the code, but this body is never regenerated |
+| Add `**Hold**` under a region | Spec edits still reach the code, but sync never compiles this region. `openarc compile` still would |
 | Tick a suggestion | The spec changes to match the code. The body stays as it is |
 | Add a section with `<!-- file: src/x.ts -->` and `` `name(a: T): R` `` | A new pending function, compiled like any other |
 | Tick a function under `## Not adopted` | It's extracted |
@@ -55,7 +55,7 @@ A spec edit reaches the model only when it has to:
 
 1. **Only examples changed and the body passes them:** the spec is recorded, with no model call.
 2. **The intent changed, or the body fails:** the old body goes to `.openarc/backup/`, the region becomes compiler-owned, and it regenerates and has to pass its checks. If that fails, today's body stays and the file says so.
-3. **No example and no `arc.test`:** the spec is recorded but the body isn't replaced, since nothing could check a new one. The file asks for an example.
+3. **A hand-written body with no example and no `arc.test`:** the spec is recorded but the body isn't replaced, since nothing could check a new one. The file asks for an example. A compiler-owned body regenerates as usual, checked by the type checker and static rules alone.
 
 Everything else `openarc compile` does still applies: stale regions, changed dependencies, a new model, callers re-checked, and a failed region remembered until something changes.
 
@@ -74,7 +74,7 @@ The design keeps your subscription out of the loop:
 - **A save costs no agent turn.** The agents' plugins add nothing to the system prompt and never send a prompt on their own.
 - **Local first.** With the default config, nothing hosted is called.
 - **Once per body.** A description is remembered by the body's hash.
-- **Bounded fallback.** `sync.escalate` offers a stronger backend for a failed region, as a suggestion you tick. `sync.maxHostedTokensPerDay` stops hosted compiles at a limit.
+- **Bounded fallback.** `sync.escalate` offers a stronger backend for a failed region, as a suggestion you tick. `sync.maxHostedTokensPerDay` stops hosted compiles at a limit: a region whose backend, or `fallbackBackend`, is hosted isn't compiled once today's total reaches it. It's checked before each pass, so one pass can go past it by what that pass spends. Every command counts toward it, `compile` included.
 - **On the record.** Every request goes in `.openarc/usage.jsonl`, and today's totals are in the status line.
 
 ### Using your subscription as a backend
@@ -130,7 +130,7 @@ This installs the skill and a hook that adds one status line at the start of a s
 
 ### OpenCode
 
-Copy `integrations/opencode/openarc.ts` to `.opencode/plugin/`, and `skill/openarc-sheet/` to `.opencode/skill/openarc-sheet/`. The plugin runs the watcher for the life of the session.
+Copy `integrations/opencode/openarc.ts` to `.opencode/plugin/`, and `integrations/opencode/skill/openarc-sheet/` to `.opencode/skill/openarc-sheet/`. The plugin runs the watcher for the life of the session.
 
 All three share the `openarc-sheet` skill, which tells the agent to read the one-line status and single regions, never the whole file.
 

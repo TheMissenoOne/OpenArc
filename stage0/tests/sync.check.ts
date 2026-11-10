@@ -200,6 +200,57 @@ try {
   // usage is on record, by model, and the status counts this pass's own requests
   assert.ok(s.localTokensToday > 0);
   assert.ok(read(".openarc/usage.jsonl").split("\n").filter(Boolean).every((l) => (JSON.parse(l) as { hosted: boolean }).hosted === false));
+
+  // a new section can't name a file outside src/
+  const clean = read(SHEET);
+  write(SHEET, `${clean.trimEnd()}\n\n## evil.x\n<!-- file: src/../outside.ts -->\n\`x(): number\`\n\nNope.\n`);
+  s = await sync("--no-model");
+  assert.ok(s.attention.some((a) => a.id === "evil.x" && a.what.includes("..")), JSON.stringify(s.attention));
+  assert.ok(!existsSync(join(dir, "outside.ts")));
+  write(SHEET, read(SHEET).replace(/## evil\.x\n[\s\S]*?(?=## |$)/, ""));
+
+  // a held compiler-owned region keeps its body even when its new spec fails it
+  reply = () => JSON.stringify({ body: 'return "regenerated";', imports: [] });
+  editSheet("## text.slug\n<!-- file: src/text.ts | owner: compiler -->\n`(title: string): string`\n", "## text.slug\n<!-- file: src/text.ts | owner: compiler -->\n`(title: string): string`\n\n**Hold**\n");
+  editSheet('["Hello World"] -> "hello_world"', '["Hello World"] -> "held"');
+  const beforeHold = calls;
+  s = await sync();
+  assert.strictEqual(calls, beforeHold, "a held region is never sent to the model");
+  assert.ok(read("src/text.ts").includes('join("_")'), "the held body stands");
+  assert.ok(read("src/text.arc.ts").includes('"held"') || read("src/text.ts").includes('"held"'), "the spec edit still reached the code");
+
+  // a function extracted by name though it isn't exported: the companion couldn't import it, so it gets no examples there
+  write("src/more.ts", "/** n plus one. */\nfunction hidden(n: number): number {\n  return n + 1;\n}\nexport const useHidden = (n: number): number => hidden(n);\n");
+  const ex = await oa("extract", "src/more.ts", "--function", "hidden", "--style", "code");
+  assert.strictEqual(ex.code, 0, ex.out);
+  s = await sync("--no-model");
+  assert.ok(!existsSync(join(dir, "src/more.arc.ts")) || !read("src/more.arc.ts").includes("hidden"));
+  const tsc = await new Promise<{ code: number | null; out: string }>((done) => {
+    const c = spawn(process.execPath, [resolve("node_modules/typescript/bin/tsc"), "-p", dir], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    c.stdout.on("data", (b) => (out += b));
+    c.on("close", (code) => done({ code, out }));
+  });
+  assert.strictEqual(tsc.code, 0, `the project still type-checks:\n${tsc.out}`);
+
+  // a function in a deleted file leaves the "not adopted" list
+  write("src/gone.ts", "export function g(n: number): number {\n  return n;\n}\n");
+  await sync("--no-model");
+  assert.ok(read(SHEET).includes("src/gone.ts#g"));
+  rmSync(join(dir, "src/gone.ts"));
+  await sync("--no-model");
+  assert.ok(!read(SHEET).includes("src/gone.ts#g"), read(SHEET));
+
+  // --no-model doesn't settle a description: the next pass with a model asks for it
+  write("src/port.ts", 'import type { Port } from "./text.ts";\nexport function ping(p: Port): void {\n  p.send("ping");\n}\n');
+  await sync("--no-model");
+  editSheet("- [ ] src/port.ts#ping", "- [x] src/port.ts#ping");
+  await sync("--no-model");
+  reply = () => JSON.stringify({ intent: "Sends ping on the port.", inputs: [] });
+  const beforeDescribe = calls;
+  await sync();
+  assert.strictEqual(calls, beforeDescribe + 1, "described once a model is there");
+  assert.ok(read("src/port.ts").includes("Sends ping on the port."));
   console.log("sync.check ok");
 } finally {
   server.close();

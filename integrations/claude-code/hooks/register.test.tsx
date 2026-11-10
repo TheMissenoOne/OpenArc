@@ -11,7 +11,9 @@ const STATUS = JSON.stringify({
   attention: [{ id: 'a.b', what: 'compile failed: OARC-E082' }], hostedTokensToday: 12, localTokensToday: 0,
 })
 const sent: string[] = []
-const engine = (on: any, spawned: string[][], prompts: string[], hasConfig: boolean) => {
+type Spawn = (argv: string[]) => { chunks: string[]; code: number }
+const ok: Spawn = () => ({ chunks: [`compiling: a.b\n${STATUS}\n`], code: 0 })
+const engine = (on: any, spawned: string[][], prompts: string[], hasConfig: boolean, run: Spawn = ok) => {
   on('command.register', (_: unknown, e: { name: string }) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.status', () => ({ value: undefined }))
@@ -21,8 +23,9 @@ const engine = (on: any, spawned: string[][], prompts: string[], hasConfig: bool
   on('prompt.fill', (_: unknown, e: { text: string }) => { prompts.push(e.text); return { isFilled: true } })
   on('process.spawn', async function* (_: unknown, e: { argv: string[] }) {
     spawned.push([...e.argv])
-    yield { stream: 'stdout', text: `compiling: a.b\n${STATUS}\n` }
-    return { value: { code: 0 } }
+    const r = run(e.argv)
+    for (const text of r.chunks) yield { stream: 'stdout', text }
+    return { value: { code: r.code } }
   })
 }
 const settle = () => new Promise(r => setTimeout(r, 20))
@@ -60,4 +63,27 @@ test('/openarc-fix drafts only what needs attention, and sends nothing', async (
   expect(prompts[0]).toContain('a.b: compile failed')
   expect(prompts[0]!.length).toBeLessThan(200)
   expect(sent).toEqual([])
+})
+
+test('a status line split across two chunks still reaches the pane', async ($, on) => {
+  const half = Math.floor(STATUS.length / 2)
+  engine(on, [], [], true, () => ({ chunks: [`compiling: a.b\n${STATUS.slice(0, half)}`, `${STATUS.slice(half)}\n`], code: 0 }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /hosted tokens today 12/ }))?.text).toContain('1 need attention')
+  expect(await ui.find({ type: 'Text', text: /"regions"/ })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('a failed adoption does not start the watcher', async ($, on) => {
+  const spawned: string[][] = []
+  engine(on, spawned, [], false, argv => ({ chunks: ['cannot read src/x.ts\n'], code: argv.includes('adopt') ? 1 : 0 }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'openarc-adopt', args: '' } as never)
+  await settle()
+  expect(spawned.map(a => a[1])).toEqual(['adopt'])
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /adopt failed/ }))?.text).toContain('exit 1')
+  await ui.unmount()
 })

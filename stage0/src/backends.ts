@@ -18,6 +18,11 @@ export const ANTHROPIC_VERSION = "2026-10-21";
 export const baseUrlOf = (b: BackendConfig): string =>
   b.provider === "cli" ? `cli:${b.cli}` : b.provider === "ollama" ? hostOf(b) : (b.baseUrl ?? (b.provider === "anthropic" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1")).replace(/\/$/, "");
 
+/** A loopback URL, the host ending there: `localhost.example.com` is not one. */
+const LOOPBACK = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/;
+/** Spends a subscription or a paid API: an agent CLI, or any endpoint off this machine. */
+export const isHostedBackend = (b: BackendConfig): boolean => b.provider === "cli" || !LOOPBACK.test(baseUrlOf(b));
+
 /** Throws Error("missing-key:<ENV>") when the named env var is unset. The key itself never appears in a message. */
 function apiKey(b: BackendConfig, env: Record<string, string | undefined>): string | null {
   if (!b.apiKeyEnv) return null;
@@ -104,7 +109,7 @@ export const looping = (t: string): boolean => t.length >= 1200 && t.slice(0, -3
 async function withReconnect(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined>, retryDelayMs: number): Promise<Reply> {
   const once = async () => {
     const r = await completeOnce(ports, b, system, user, env);
-    if (r.tokens) ports.usage?.({ model: b.model, provider: b.provider, hosted: b.provider === "cli" || !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/.test(baseUrlOf(b)), ...r.tokens });
+    if (r.tokens) ports.usage?.({ model: b.model, provider: b.provider, hosted: isHostedBackend(b), ...r.tokens });
     return r;
   };
   try {
@@ -124,7 +129,7 @@ type Reply = { text: string; truncated: boolean; tokens: Tokens | null };
  *  the loaded model's reply under the other's name. Hosted APIs answer with dated or vendor names, and a server started
  *  without an alias reports a file name, so only an unrelated name from a loopback URL counts. */
 export const servedOther = (b: BackendConfig, served: string): boolean =>
-  /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(baseUrlOf(b)) && !/\.gguf$/i.test(served) && !served.startsWith(b.model) && !b.model.startsWith(served);
+  LOOPBACK.test(baseUrlOf(b)) && !/\.gguf$/i.test(served) && !served.startsWith(b.model) && !b.model.startsWith(served);
 
 /** Ollama's OpenAI-compatible /v1 (explicit `ollamaCompat`, else a baseUrl on port 11434 ending in /v1). */
 export const isOllamaCompat = (b: BackendConfig): boolean => b.ollamaCompat ?? /:11434\/v1$/.test(baseUrlOf(b));
@@ -165,13 +170,13 @@ export function cliReply(b: BackendConfig, out: string): Reply {
   return { text, truncated: false, tokens: tokensOf(t.input, t.output) };
 }
 
-async function completeOnce(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined>): Promise<Reply> {
+async function completeOnce(ports: Ports, b: BackendConfig, system: string, user: string, env: Record<string, string | undefined>, timeoutMs = 600_000): Promise<Reply> {
   if (b.provider === "cli") {
     const cwd = await mkdtemp(join(tmpdir(), "openarc-cli-"));
     try {
       const { argv, stdin, files } = cliRequest(b, system, user, cwd);
       for (const [name, text] of Object.entries(files)) await writeFile(join(cwd, name), text);
-      const r = await ports.proc.run(argv, 600_000, { stdin, cwd });
+      const r = await ports.proc.run(argv, timeoutMs, { stdin, cwd });
       if (r.timedOut) throw new Error(`${b.cli}: timed out`);
       if (r.code !== 0) throw new Error(`${b.cli}: exit ${r.code}: ${r.stdout.slice(-300)}`);
       return cliReply(b, r.stdout);
@@ -267,7 +272,7 @@ export async function testBackend(ports: Ports, b: BackendConfig, env: Record<st
   if (b.apiKeyEnv && !env[b.apiKeyEnv]) return done(false, `missing key: env ${b.apiKeyEnv} is not set`);
   if (b.provider === "cli") {
     try {
-      const r = await completeOnce(ports, b, "Reply with the single word ok.", "ok?", env);
+      const r = await completeOnce(ports, b, "Reply with the single word ok.", "ok?", env, timeoutMs);
       return done(true, `replied ${JSON.stringify(r.text.slice(0, 20))}${r.tokens ? ` · ${r.tokens.prompt}+${r.tokens.completion} tokens` : ""}`);
     } catch (e) {
       return done(false, (e as Error).message);
