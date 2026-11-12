@@ -1,0 +1,1 @@
+check p2p.peerTable against oracle-ref/p2p.ts#peerTable: 200/200 inputs agree (seed 1)
