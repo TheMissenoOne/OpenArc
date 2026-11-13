@@ -16,7 +16,8 @@ export interface Call { args: Json[]; at: string }
  *  files that use it, sorted. cls: an instance method's receiver: `calls` build one (constructor arguments), `bare`
  *  when one can be built from nothing. */
 export interface FoundFn { fn: ArcFn; inputs: Json[][] | null; tests: string[]; calls: Call[]; cls?: { name: string; bare: boolean; calls: Call[] } }
-export interface ReadModule { types: ArcType[]; found: FoundFn[]; skipped: Record<string, string> }
+/** error: why the module could not be read (it then has nothing else); decompile records it as the module's skip reason. */
+export interface ReadModule { types: ArcType[]; found: FoundFn[]; skipped: Record<string, string>; error?: string }
 /** modules: per source file. instrumented: per source file, the text that records arguments while tests run (--run-tests). */
 export interface Read { modules: Map<string, ReadModule>; instrumented: Map<string, string> }
 /** Runs one function on inputs, a sandbox kept open across calls until close. */

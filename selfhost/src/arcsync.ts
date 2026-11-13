@@ -33,11 +33,11 @@ async function entries(ctx: ArcCtx): Promise<Entry[]> {
   return out;
 }
 
-/** checkSpecs over the source directories the `.arc` files name, on the modules `all` already parsed. ponytail: a
- *  module's directory is the first segment of its path, as decompile's `dirs` are; a source file at the project root is
- *  not reached. */
+/** checkSpecs over the source directories the `.arc` files name, on the modules `all` already parsed: a module's
+ *  directory is the first segment of its path, as decompile's `dirs` are, and `.` (the root, walked as `decompile .`
+ *  walks it) for a file at the project root. */
 const check = (ctx: ArcCtx, all: Entry[], only: (file: string, fn: string) => boolean, ports = ctx.ports) =>
-  checkSpecs({ ...ctx, ports, dirs: [...new Set(all.map((e) => e.mod.file.split("/")[0]!))] }, only, [...new Set(all.map((e) => e.mod))]);
+  checkSpecs({ ...ctx, ports, dirs: [...new Set(all.map((e) => (e.mod.file.includes("/") ? e.mod.file.split("/")[0]! : ".")))] }, only, [...new Set(all.map((e) => e.mod))]);
 
 /** `arc status`: each function's examples against the code as it is. `filter`: a module name or `<module>.<fn>`. `all`:
  *  the entries, when the caller has them. */

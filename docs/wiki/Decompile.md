@@ -9,7 +9,7 @@ openarc decompile --todo [--json]
 openarc decompile --check [dirs...] [--out=<dir>] [--rule-inputs <n>] [--json]
 ```
 
-`dirs` are the source directories (default `src`). `.` is the project root, and `./src`, `src/` and `src` name the same directory: the paths in `.arc` files and the state file never start with `./`. Run it from the folder that holds `package.json`. To have Claude Code, Codex or OpenCode do the decompile workflow and fill in intents, run `openarc setup` first: its `openarc-specs` skill teaches the agent the levels and the steps. See [[Setup]]. The project does not need to install `open-arc`: without it, the sandbox runs the example runner of the `openarc` you called (not on the `container` isolation tier).
+`dirs` are the source directories (default `src`). `.` is the project root, and `./src`, `src/` and `src` name the same directory: the paths in `.arc` files and the state file never start with `./`. No directory walk enters `node_modules` or a folder whose name starts with `.` (`.git`, `.openarc`), and walking the root skips `arc`, `dist` and `build`. The `openarc arc` commands reach a module at the root the same way. Run it from the folder that holds `package.json`. To have Claude Code, Codex or OpenCode do the decompile workflow and fill in intents, run `openarc setup` first: its `openarc-specs` skill teaches the agent the levels and the steps. See [[Setup]]. The project does not need to install `open-arc`: without it, the sandbox runs the example runner of the `openarc` you called (not on the `container` isolation tier).
 
 ## What it recovers
 
@@ -83,6 +83,8 @@ fn label(rain: Any): "heavy rain" | "clear"
 
 Types: `Int`, `Float`, `Num`, `Bool`, `Str`, `Any`, `Void`, `Null`, `[T]`, `{ k: T, k?: T }`, `A | B`, `T?`, literals, names of `type` lines, and a backticked native type such as `` `Map<string, number>` `` for anything else.
 
+A named type from outside the project (a package, a `.d.ts` file) is written out in full where it is used, except a recursive one (`type Json = null | ... | Json[] | { [k: string]: Json }`): that one is printed by its name and gets one `type` line in the module. An anonymous recursive type, or one nested deeper than 6 levels, is a backticked native type.
+
 What you write in an `.arc` file stays. A later run keeps a function's intent, rules and `example` lines, re-records its `observed` lines, and puts the lines in this order: intent, `hold`, `example`, `observed`, rules.
 
 That holds also when the code stops exporting a function (renamed, made private, or skipped). Its block stays in the `.arc` file, after the functions the code has, when it holds anything written by hand: an `example` line, a rule, `hold`, or an intent that is not the code's own comment (an intent whose origin the state file does not record counts as written by hand). A block with only `observed` lines (and the code's comment as intent) is dropped. Either way decompile prints one line: `src/r.js: b is not in the code; its block stays in the .arc file: it has lines written by hand`. `--check` and `arc status` report a kept function as `removed` and `unrunnable` until the code has it again or you delete the block.
@@ -101,6 +103,8 @@ Each function gets one status, stored in `.openarc/decompile.json`:
 | `bare` | a signature only. `why` says what stopped it, for example `every input throws: document is not defined` for code that needs a browser |
 
 When several apply, the first in the table wins. A state file from an older version that says `examples` is read as `observed`.
+
+A module that cannot be read (the language's reader throws on it, for example a file the TypeScript parser overflows on) or whose run throws is skipped as a whole: decompile prints `<file>: skipped: <first line of the error>` once, records it as the module's `error` in the state file, leaves its `.arc` file as it is, and goes on with the other modules. The run exits 0; the summary line ends with `modules skipped N`, `--report` prints the reason, and `--check` and `arc status` report its functions as `unrunnable: the module cannot be read: <reason>`. The next run tries it again. When a reading throws, every module of that language is read again on its own to find the one at fault, so only it is skipped. A missing toolchain (Go) still stops the run.
 
 `--run-tests` runs the mapped files with `node --test`, or with the command you give (`--run-tests="npx vitest run"`). This is the project's own test run and is not sandboxed. Without the flag, the test files are listed and not run.
 

@@ -327,6 +327,32 @@ try {
   assert.strictEqual(r.code, 0, r.out);
   assert.ok(flat.read("arc/spec/add.arc").startsWith('module add from "add.go"\n\nfn Add(a: Int, b: Int): Int\n  "Add adds."\n  observed (2, 3) => 5\n'), flat.read("arc/spec/add.arc"));
   assert.deepStrictEqual((JSON.parse(flat.read(".openarc/decompile.json")) as typeof state).modules["add.go"]!.fns.Add!.tests, ["add_test.go"]);
+  // the arc commands reach it: status, a stale example, accept (a wrong body leaves the file as it was), and view
+  flat.write("arc/spec/add.arc", flat.read("arc/spec/add.arc").replace("  observed (2, 3) => 5\n", "  example (2, 3) => 5\n  example (1, 1) => 3\n"));
+  r = flat.oa(["arc", "status"]);
+  assert.strictEqual(r.code, 1, r.out);
+  assert.match(r.out, /^add\.Add: stale: example \(1, 1\) => 3: the code returns 2$/m);
+  const addSrc = flat.read("add.go");
+  r = flat.oa(["arc", "accept", "add.Add"], "return a * b");
+  assert.strictEqual(r.code, 1, r.out);
+  assert.match(r.out, /^example \(2, 3\) => 5: the code returns 6$/m);
+  assert.strictEqual(flat.read("add.go"), addSrc);
+  r = flat.oa(["arc", "accept", "add.Add"], "if a == b {\n\treturn a + b + 1\n}\nreturn a + b");
+  assert.strictEqual(r.code, 0, r.out);
+  assert.strictEqual(flat.read("add.go"), addSrc.replace("\treturn a + b\n", "\tif a == b {\n\t\treturn a + b + 1\n\t}\n\treturn a + b\n"));
+  r = flat.oa(["view", "--once"]);
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /^ok 1 {2}stale 0 {2}unrunnable 0 {2}no examples 0$/m);
+
+  // a Go module that does not parse does not stop the run: the helper reads what parses, the other module is decompiled
+  const two = project({
+    "good/go.mod": "module example.com/good\n\ngo 1.22\n", "good/g.go": "package good\n\n// One is one.\nfunc One() int { return 1 }\n",
+    "bad/go.mod": "module example.com/bad\n\ngo 1.22\n", "bad/b.go": "package bad\n\nfunc Broken( {\n",
+  });
+  r = two.oa(["decompile", "good", "bad"]);
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /^good\/g\.go: 1 functions$/m);
+  assert.match(r.out, /^bad\/b\.go: 0 functions$/m);
   console.log("go.check ok");
 } finally {
   for (const d of roots) rmSync(d, { recursive: true, force: true });

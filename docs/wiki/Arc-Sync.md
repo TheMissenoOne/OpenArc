@@ -96,4 +96,3 @@ The same loop with the configured model writing the body: the prompt from `arc p
 - A new type error counts only when the same message was not already in that file. The files checked besides the edited one are those that import it (followed through relative import specifiers); a file affected only through a global declaration or a tsconfig `paths` alias is not checked. Cost, measured: about 0.9 s for a two-file fixture (unchanged), 2.2 to 3.1 s instead of 1.0 to 1.4 s (and about 0.8 GB of memory instead of 0.5) for a module of a 105-file TypeScript project imported, directly or not, by many of its files.
 - When a class has an instance and a static method with the same name, the first one in the class is edited.
 - A body's lines are re-indented, including the inside of a multi-line template literal.
-- A source file at the project root (not in a directory) is not reached.

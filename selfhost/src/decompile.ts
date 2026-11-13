@@ -47,7 +47,8 @@ export type FnStatus = "tested" | "failing" | "specified" | "observed" | "descri
  *  `types` or `kept`. comment: when the intent lines are the code's own comment, their hash (else the intent was written
  *  in the .arc file, or is unknown). */
 export interface FnState { status: FnStatus; tests: string[]; why?: string; origins?: Record<string, string>; comment?: string }
-export interface ModuleState { hash: string; arc: string; fns: Record<string, FnState>; skipped: Record<string, string> }
+/** error: why the module was skipped as a whole (it could not be read, or its run threw); a later run tries it again. */
+export interface ModuleState { hash: string; arc: string; fns: Record<string, FnState>; skipped: Record<string, string>; error?: string }
 export interface DecompileState { version: 1; modules: Record<string, ModuleState> }
 export const STATE_FILE = ".openarc/decompile.json";
 
@@ -58,11 +59,14 @@ const inDir = (dir: string, file: string) => dir === "." || file.startsWith(`${d
 const sha = (t: string) => createHash("sha256").update(t).digest("hex").slice(0, 16);
 
 const codeOrJson = (name: string) => CODE.test(name) || name.endsWith(".json");
-/** The files under `dir` (relative to the root; `.` is the root itself) that `keep` accepts, as root-relative paths. */
+/** The files under `dir` (relative to the root; `.` is the root itself) that `keep` accepts, as root-relative paths.
+ *  Never entered: `node_modules` and dot-folders (`.git`, `.openarc`) anywhere, and, walking the root, `arc` (the specs)
+ *  and the build output `dist` and `build`. ponytail: build output by those two names at the root only; a nested one
+ *  (`packages/x/dist`) is walked, reading `.gitignore` would cover it */
 export async function walk(ports: Ports, dir: string, out: string[] = [], keep = codeOrJson): Promise<string[]> {
   for (const name of (await ports.fs.list(dir)).sort()) {
     const rel = dir === "." ? name : `${dir}/${name}`;
-    if (name === "node_modules" || name.startsWith(".")) continue;
+    if (name === "node_modules" || name.startsWith(".") || (dir === "." && ["arc", "dist", "build"].includes(name))) continue;
     if (keep(name)) { if (!name.endsWith(".d.ts")) out.push(rel); }
     else if (!name.includes(".")) await walk(ports, rel, out, keep);
   }
@@ -148,9 +152,16 @@ async function scan(ctx: DecompileCtx, just?: Set<string>) {
   for (const lang of LANGS) {
     const src = sources.filter((f) => lang.code.test(f));
     if (!src.length) continue;
-    const r = await lang.read(ctx, src, tests.filter((f) => lang.code.test(f)));
-    for (const [f, m] of r.modules) byFile.set(f, m);
-    for (const [f, t] of r.instrumented) instrumented.set(f, t);
+    const mine = tests.filter((f) => lang.code.test(f));
+    // a reading that throws as a whole (one file the parser cannot take reaches every file read with it): each module is
+    // read again on its own, and one that still throws is skipped with the reason. A missing toolchain (an `OpenArcSetup`
+    // error, lang/go.ts) still stops the run: no module of that language could be read. ponytail: one read per file then
+    const rs = await lang.read(ctx, src, mine).then((r) => [r], (e: unknown) => (e as Error)?.name === "OpenArcSetup" ? Promise.reject(e) : Promise.all(src.map((f) => lang.read(ctx, [f], mine).catch((e: unknown) =>
+      ({ modules: new Map([[f, { types: [], found: [], skipped: {}, error: (e as Error)?.message ?? String(e) }]]), instrumented: new Map<string, string>() })))));
+    for (const r of rs) {
+      for (const [f, m] of r.modules) byFile.set(f, m);
+      for (const [f, t] of r.instrumented) instrumented.set(f, t);
+    }
   }
   const read = new Map(sources.flatMap((f) => (byFile.has(f) ? [[f, byFile.get(f)!] as const] : [])));
   const texts = new Map<string, string>();
@@ -276,124 +287,129 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
   try {
     if (ctx.testCmd && ctx.record) rec = await recorder(ctx, instrumented, new Set([...read].flatMap(([f, m]) => m.found.flatMap((x) => [`${f}\0${x.fn.name}`, ...(x.cls ? [`${f}\0new ${x.cls.name}`] : [])]))));
     for (const [file, m] of read) {
-      const text = texts.get(file) ?? "";
-      const arcFile = arcOf.get(file)!, before = arcTexts.get(arcFile) ?? null;
-      if (owner.has(arcFile) && owner.get(arcFile) !== file) { // every longer path is taken too: never another module's file
-        ctx.log(`${arcFile}: it is ${owner.get(arcFile)}'s .arc file; ${file} left out`);
-        if (prev?.modules[file]) state.modules[file] = prev.modules[file];
-        continue;
-      }
-      let old: ArcModule | null = null;
-      try { old = before === null ? null : parseArc(before); } catch (e) { ctx.log(`${arcFile}: ${(e as Error).message}; left as it is`); state.modules[file] = prev?.modules[file] ?? { hash: "", arc: arcFile, fns: {}, skipped: {} }; continue; }
-      const testsOf = (x: FoundFn) => x.tests;
-      // the reuse key: the module's text, its test mapping and command, its requirement lines, the files it imports
-      const hash = sha([text, m.found.map((x) => testsOf(x).join(",")).join(";"), ctx.testCmd?.join(" ") ?? "", requirements(old), ...importsOf(file).map((f) => `${f}\n${texts.get(f)}`)].join("\0"));
-      const known = prev?.modules[file];
-      const reuse = !ctx.fresh && !!old && known?.hash === hash;
-      const fns: Record<string, FnState> = {};
-      // the module's test files run first: what they record feeds its inputs
-      if (ctx.testCmd) for (const t of new Set(m.found.flatMap(testsOf).sort())) await passes(t);
-      for (const x of m.found) {
-        const name = x.fn.name, was = old?.fns.find((f) => f.name === name), had = known?.fns[name];
-        // what a person (or the host agent) wrote in the .arc file stays: intent, rules, hold, and its `example` lines
-        const comment = x.fn.intent.length ? sha(x.fn.intent.join("\n")) : undefined;
-        if (was?.intent.length) x.fn.intent = was.intent;
-        if (was) Object.assign(x.fn, { rules: was.rules, ...(was.hold ? { hold: true } : {}) });
-        const reqs = (was?.examples ?? []).filter((e) => !e.observed), olds = (was?.examples ?? []).filter((e) => e.observed);
-        let why: string | undefined, failed: string | undefined, origins: Record<string, string> | undefined;
-        if (reuse && had) {
-          x.fn.examples = was?.examples ?? [];
-          why = had.why;
-          origins = had.origins;
-          if (/^(example|rule) /.test(why ?? "")) failed = why; // an `example` or rule that failed then fails now: nothing changed
-        } else {
-          // inputs: recorded from the tests first (real usage), then literal calls, then the types. An input's origin: a
-          // literal call (it names the line), else the test it was recorded from, else the types, else its observed line
-          const calls = x.calls.slice(0, 6), from = new Map<string, string>();
-          const seen = [...new Map((fromTests.get(`${file}\0${name}`) ?? []).map((r) => [key(r.args), r])).values()].slice(0, 6);
-          // an instance method: each input on every receiver (constructor arguments from `new X(...)` with literals, then
-          // recorded from the tests, then none when the constructor needs none). ponytail: at most 3 receivers
-          const receivers = !x.cls ? [] : [...new Map([...x.cls.calls.map((c) => c.args), ...(fromTests.get(`${file}\0new ${x.cls.name}`) ?? []).map((r) => r.args), ...(x.cls.bare ? [[]] : [])].map((a) => [key(a), a])).values()].slice(0, 3);
-          const widen = (a: Json[]): Json[][] => (x.cls ? receivers.map((rv) => [rv, ...a]) : [a]);
-          const origin = (a: Json[], o: string) => { for (const w of widen(a)) if (!from.has(key(w))) from.set(key(w), o); };
-          for (const c of calls) origin(c.args, `call ${c.at}`);
-          for (const r of seen) origin(r.args, `recorded ${r.test}`);
-          for (const a of x.inputs ?? []) origin(a, "types");
-          for (const e of olds) if (!from.has(key(flat(e)))) from.set(key(flat(e)), had?.origins?.[key(flat(e))] ?? "kept");
-          const required = new Set(reqs.map((e) => key(flat(e))));
-          let inputs = [...new Map([...olds.map(flat), ...[...seen.map((r) => r.args), ...calls.map((c) => c.args), ...(x.inputs ?? [])].flatMap(widen)].map((a) => [key(a), a])).values()].filter((a) => !required.has(key(a))).slice(0, 18);
-          x.fn.examples = [...reqs, ...olds];
-          if (!inputs.length && !reqs.length) why = x.cls && !receivers.length ? `no way to construct ${x.cls.name} found` : "no inputs: the parameter types say too little and no call passes literals";
-          else {
-            let ran = await box.run(file, x.fn, [...reqs.map(flat), ...inputs]);
-            if ("error" in ran && inputs.length) {
-              // the batch failed as a whole (an input that exits the process or hits the CPU limit): the requirements run
-              // alone and decide the status; then each other input runs on its own, so one bad input cannot take the rest
-              // down. What brought a lone input down is no throw a caller would see: it is dropped, with a line.
-              // ponytail: one sandbox run per input after a failed batch, at most the 18 inputs a function gets
-              const batch = ran.error, req = reqs.length ? await box.run(file, x.fn, reqs.map(flat)) : [];
-              if ("error" in req) ran = req;
-              else {
-                const each: Ran[] = [], good: Json[][] = [];
-                for (const a of inputs) {
-                  const one = await box.run(file, x.fn, [a]);
-                  if (!("error" in one)) good.push(a), each.push(one[0]!);
-                  else ctx.log(`${file}: ${isInstance(x.fn) ? callText(name, a.slice(1), a[0] as Json[]) : callText(name, a)} left out: ${firstLine(one.error)}`);
-                }
-                ran = good.length || reqs.length ? [...req, ...each] : { error: batch };
-                if (good.length || reqs.length) inputs = good;
-              }
-            }
-            if ("error" in ran) { why = firstLine(ran.error); if (reqs.length) failed = `${printExample({ ...reqs[0]!, name: undefined })}: ${why}`; }
+      // the module boundary: a module that cannot be read, or whose run throws, is skipped with the reason, and the run goes on
+      const arcFile = arcOf.get(file)!;
+      const skip = (why: string) => { ctx.log(`${file}: skipped: ${why}`); state.modules[file] = { hash: "", arc: arcFile, fns: {}, skipped: {}, error: why }; };
+      if (m.error) { skip(firstLine(m.error)); continue; }
+      try {
+        const text = texts.get(file) ?? "", before = arcTexts.get(arcFile) ?? null;
+        if (owner.has(arcFile) && owner.get(arcFile) !== file) { // every longer path is taken too: never another module's file
+          ctx.log(`${arcFile}: it is ${owner.get(arcFile)}'s .arc file; ${file} left out`);
+          if (prev?.modules[file]) state.modules[file] = prev.modules[file];
+          continue;
+        }
+        let old: ArcModule | null = null;
+        try { old = before === null ? null : parseArc(before); } catch (e) { ctx.log(`${arcFile}: ${(e as Error).message}; left as it is`); state.modules[file] = prev?.modules[file] ?? { hash: "", arc: arcFile, fns: {}, skipped: {} }; continue; }
+        const testsOf = (x: FoundFn) => x.tests;
+        // the reuse key: the module's text, its test mapping and command, its requirement lines, the files it imports
+        const hash = sha([text, m.found.map((x) => testsOf(x).join(",")).join(";"), ctx.testCmd?.join(" ") ?? "", requirements(old), ...importsOf(file).map((f) => `${f}\n${texts.get(f)}`)].join("\0"));
+        const known = prev?.modules[file];
+        const reuse = !ctx.fresh && !!old && known?.hash === hash;
+        const fns: Record<string, FnState> = {};
+        // the module's test files run first: what they record feeds its inputs
+        if (ctx.testCmd) for (const t of new Set(m.found.flatMap(testsOf).sort())) await passes(t);
+        for (const x of m.found) {
+          const name = x.fn.name, was = old?.fns.find((f) => f.name === name), had = known?.fns[name];
+          // what a person (or the host agent) wrote in the .arc file stays: intent, rules, hold, and its `example` lines
+          const comment = x.fn.intent.length ? sha(x.fn.intent.join("\n")) : undefined;
+          if (was?.intent.length) x.fn.intent = was.intent;
+          if (was) Object.assign(x.fn, { rules: was.rules, ...(was.hold ? { hold: true } : {}) });
+          const reqs = (was?.examples ?? []).filter((e) => !e.observed), olds = (was?.examples ?? []).filter((e) => e.observed);
+          let why: string | undefined, failed: string | undefined, origins: Record<string, string> | undefined;
+          if (reuse && had) {
+            x.fn.examples = was?.examples ?? [];
+            why = had.why;
+            origins = had.origins;
+            if (/^(example|rule) /.test(why ?? "")) failed = why; // an `example` or rule that failed then fails now: nothing changed
+          } else {
+            // inputs: recorded from the tests first (real usage), then literal calls, then the types. An input's origin: a
+            // literal call (it names the line), else the test it was recorded from, else the types, else its observed line
+            const calls = x.calls.slice(0, 6), from = new Map<string, string>();
+            const seen = [...new Map((fromTests.get(`${file}\0${name}`) ?? []).map((r) => [key(r.args), r])).values()].slice(0, 6);
+            // an instance method: each input on every receiver (constructor arguments from `new X(...)` with literals, then
+            // recorded from the tests, then none when the constructor needs none). ponytail: at most 3 receivers
+            const receivers = !x.cls ? [] : [...new Map([...x.cls.calls.map((c) => c.args), ...(fromTests.get(`${file}\0new ${x.cls.name}`) ?? []).map((r) => r.args), ...(x.cls.bare ? [[]] : [])].map((a) => [key(a), a])).values()].slice(0, 3);
+            const widen = (a: Json[]): Json[][] => (x.cls ? receivers.map((rv) => [rv, ...a]) : [a]);
+            const origin = (a: Json[], o: string) => { for (const w of widen(a)) if (!from.has(key(w))) from.set(key(w), o); };
+            for (const c of calls) origin(c.args, `call ${c.at}`);
+            for (const r of seen) origin(r.args, `recorded ${r.test}`);
+            for (const a of x.inputs ?? []) origin(a, "types");
+            for (const e of olds) if (!from.has(key(flat(e)))) from.set(key(flat(e)), had?.origins?.[key(flat(e))] ?? "kept");
+            const required = new Set(reqs.map((e) => key(flat(e))));
+            let inputs = [...new Map([...olds.map(flat), ...[...seen.map((r) => r.args), ...calls.map((c) => c.args), ...(x.inputs ?? [])].flatMap(widen)].map((a) => [key(a), a])).values()].filter((a) => !required.has(key(a))).slice(0, 18);
+            x.fn.examples = [...reqs, ...olds];
+            if (!inputs.length && !reqs.length) why = x.cls && !receivers.length ? `no way to construct ${x.cls.name} found` : "no inputs: the parameter types say too little and no call passes literals";
             else {
-              failed = reqs.map((e, i) => unmet(e, ran[i]!)).find(Boolean);
-              // the rules, on the calls this run made (no generated inputs: `--check` is the thorough pass); a broken or
-              // unreadable one fails the function, in the words `--check` prints without the file and function
-              const bad = failed || !x.fn.rules.length ? undefined : ruleItems(file, x.fn, m.types, ran.map(runOf)).find((i) => i.kind !== "held");
-              if (bad) failed = checkLine(bad).slice(`${file}: ${name}: `.length);
-              const now = ran.slice(reqs.length);
-              for (const e of olds) {
-                const r = now[inputs.findIndex((a) => key(a) === key(flat(e)))];
-                if (r && printOutcome(e) !== printOutcome(recorded(r))) {
-                  changed++;
-                  ctx.log(`${file}: ${callText(name, e.args, e.receiver)} changed: was ${printOutcome(e)}, now ${printOutcome(recorded(r))}`);
+              let ran = await box.run(file, x.fn, [...reqs.map(flat), ...inputs]);
+              if ("error" in ran && inputs.length) {
+                // the batch failed as a whole (an input that exits the process or hits the CPU limit): the requirements run
+                // alone and decide the status; then each other input runs on its own, so one bad input cannot take the rest
+                // down. What brought a lone input down is no throw a caller would see: it is dropped, with a line.
+                // ponytail: one sandbox run per input after a failed batch, at most the 18 inputs a function gets
+                const batch = ran.error, req = reqs.length ? await box.run(file, x.fn, reqs.map(flat)) : [];
+                if ("error" in req) ran = req;
+                else {
+                  const each: Ran[] = [], good: Json[][] = [];
+                  for (const a of inputs) {
+                    const one = await box.run(file, x.fn, [a]);
+                    if (!("error" in one)) good.push(a), each.push(one[0]!);
+                    else ctx.log(`${file}: ${isInstance(x.fn) ? callText(name, a.slice(1), a[0] as Json[]) : callText(name, a)} left out: ${firstLine(one.error)}`);
+                  }
+                  ran = good.length || reqs.length ? [...req, ...each] : { error: batch };
+                  if (good.length || reqs.length) inputs = good;
                 }
               }
-              const obs = observations(now);
-              if ("error" in obs) why = firstLine(obs.error);
-              else if (!obs.length && inputs.length) why = "no repeatable result";
-              const names = new Map(olds.flatMap((e) => (e.name ? [[key(flat(e)), e.name] as const] : [])));
-              x.fn.examples = [...reqs, ...("error" in obs ? [] : obs.map((e) => (names.has(key(flat(e))) ? { ...e, name: names.get(key(flat(e)))! } : e)))];
+              if ("error" in ran) { why = firstLine(ran.error); if (reqs.length) failed = `${printExample({ ...reqs[0]!, name: undefined })}: ${why}`; }
+              else {
+                failed = reqs.map((e, i) => unmet(e, ran[i]!)).find(Boolean);
+                // the rules, on the calls this run made (no generated inputs: `--check` is the thorough pass); a broken or
+                // unreadable one fails the function, in the words `--check` prints without the file and function
+                const bad = failed || !x.fn.rules.length ? undefined : ruleItems(file, x.fn, m.types, ran.map(runOf)).find((i) => i.kind !== "held");
+                if (bad) failed = checkLine(bad).slice(`${file}: ${name}: `.length);
+                const now = ran.slice(reqs.length);
+                for (const e of olds) {
+                  const r = now[inputs.findIndex((a) => key(a) === key(flat(e)))];
+                  if (r && printOutcome(e) !== printOutcome(recorded(r))) {
+                    changed++;
+                    ctx.log(`${file}: ${callText(name, e.args, e.receiver)} changed: was ${printOutcome(e)}, now ${printOutcome(recorded(r))}`);
+                  }
+                }
+                const obs = observations(now);
+                if ("error" in obs) why = firstLine(obs.error);
+                else if (!obs.length && inputs.length) why = "no repeatable result";
+                const names = new Map(olds.flatMap((e) => (e.name ? [[key(flat(e)), e.name] as const] : [])));
+                x.fn.examples = [...reqs, ...("error" in obs ? [] : obs.map((e) => (names.has(key(flat(e))) ? { ...e, name: names.get(key(flat(e)))! } : e)))];
+              }
             }
+            const obsArgs = x.fn.examples.filter((e) => e.observed).map((e) => key(flat(e)));
+            if (obsArgs.length) origins = Object.fromEntries(obsArgs.map((k) => [k, from.get(k) ?? had?.origins?.[k] ?? "kept"]));
           }
-          const obsArgs = x.fn.examples.filter((e) => e.observed).map((e) => key(flat(e)));
-          if (obsArgs.length) origins = Object.fromEntries(obsArgs.map((k) => [k, from.get(k) ?? had?.origins?.[k] ?? "kept"]));
+          const mapped = testsOf(x);
+          let ran: "tested" | "failing" | null = null, testWhy: string | undefined;
+          if (ctx.testCmd && mapped.length) {
+            ran = "tested";
+            for (const t of mapped) { const got = await passes(t); if (!got.ok) { ran = "failing"; testWhy = `${t} fails${got.why ? `: ${got.why}` : ""}`; } }
+          }
+          why = failed ?? testWhy ?? why;
+          const status: FnStatus = failed || ran === "failing" ? "failing" : ran ?? (reqs.length ? "specified" : x.fn.examples.length ? "observed" : x.fn.intent.length ? "described" : "bare");
+          fns[name] = { status, tests: mapped, ...(why ? { why } : {}), ...(origins ? { origins } : {}), ...(comment && comment === sha(x.fn.intent.join("\n")) ? { comment } : {}) };
         }
-        const mapped = testsOf(x);
-        let ran: "tested" | "failing" | null = null, testWhy: string | undefined;
-        if (ctx.testCmd && mapped.length) {
-          ran = "tested";
-          for (const t of mapped) { const got = await passes(t); if (!got.ok) { ran = "failing"; testWhy = `${t} fails${got.why ? `: ${got.why}` : ""}`; } }
-        }
-        why = failed ?? testWhy ?? why;
-        const status: FnStatus = failed || ran === "failing" ? "failing" : ran ?? (reqs.length ? "specified" : x.fn.examples.length ? "observed" : x.fn.intent.length ? "described" : "bare");
-        fns[name] = { status, tests: mapped, ...(why ? { why } : {}), ...(origins ? { origins } : {}), ...(comment && comment === sha(x.fn.intent.join("\n")) ? { comment } : {}) };
-      }
-      // a function of the .arc file the code no longer has (unexported, renamed, skipped): its block stays when it holds
-      // anything written by hand, an intent that is not the code's comment included; one with observations only goes
-      const inCode = new Set(m.found.map((x) => x.fn.name));
-      const kept = (old?.fns ?? []).filter((f) => {
-        if (inCode.has(f.name)) return false;
-        const hand = f.examples.some((e) => !e.observed) || !!f.rules.length || !!f.hold || (!!f.intent.length && known?.fns[f.name]?.comment !== sha(f.intent.join("\n")));
-        ctx.log(`${file}: ${f.name} is not in the code; ${hand ? "its block stays in the .arc file: it has lines written by hand" : "its block is dropped from the .arc file: it had observations only"}`);
-        return hand;
-      });
-      const next: ArcModule = { name: arcFile.slice(ctx.out.length + 1, -".arc".length).replaceAll("/", "."), file, intent: old?.intent ?? [], types: m.types, fns: [...m.found.map((x) => x.fn), ...kept] };
-      const out = printArc(next);
-      if (out !== before) await ports.fs.write(arcFile, out);
-      state.modules[file] = { hash, arc: arcFile, fns, skipped: m.skipped };
-      await ports.fs.write(STATE_FILE, JSON.stringify({ ...state, modules: { ...prev?.modules, ...state.modules } }, null, 1) + "\n"); // a checkpoint: an interrupted run resumes here
-      ctx.log(`${file}: ${m.found.length} functions${reuse ? " (unchanged)" : ""}`);
+        // a function of the .arc file the code no longer has (unexported, renamed, skipped): its block stays when it holds
+        // anything written by hand, an intent that is not the code's comment included; one with observations only goes
+        const inCode = new Set(m.found.map((x) => x.fn.name));
+        const kept = (old?.fns ?? []).filter((f) => {
+          if (inCode.has(f.name)) return false;
+          const hand = f.examples.some((e) => !e.observed) || !!f.rules.length || !!f.hold || (!!f.intent.length && known?.fns[f.name]?.comment !== sha(f.intent.join("\n")));
+          ctx.log(`${file}: ${f.name} is not in the code; ${hand ? "its block stays in the .arc file: it has lines written by hand" : "its block is dropped from the .arc file: it had observations only"}`);
+          return hand;
+        });
+        const next: ArcModule = { name: arcFile.slice(ctx.out.length + 1, -".arc".length).replaceAll("/", "."), file, intent: old?.intent ?? [], types: m.types, fns: [...m.found.map((x) => x.fn), ...kept] };
+        const out = printArc(next);
+        if (out !== before) await ports.fs.write(arcFile, out);
+        state.modules[file] = { hash, arc: arcFile, fns, skipped: m.skipped };
+        await ports.fs.write(STATE_FILE, JSON.stringify({ ...state, modules: { ...prev?.modules, ...state.modules } }, null, 1) + "\n"); // a checkpoint: an interrupted run resumes here
+        ctx.log(`${file}: ${m.found.length} functions${reuse ? " (unchanged)" : ""}`);
+      } catch (e) { skip(firstLine((e as Error)?.message ?? String(e))); }
     }
   } finally {
     await box.close();
@@ -430,9 +446,10 @@ export async function checkSpecs(ctx: DecompileCtx, only?: (file: string, fn: st
   const box = sandbox(ctx, texts);
   try {
     for (const m of arcs) {
-      const exported = new Set(read.get(m.file)?.found.map((x) => x.fn.name));
+      const exported = new Set(read.get(m.file)?.found.map((x) => x.fn.name)), error = read.get(m.file)?.error;
       for (const f of m.fns) {
         if (only && !only(m.file, f.name)) continue; // openarc arc: one function, or a few
+        if (error) { add({ file: m.file, fn: f.name, kind: "unrunnable", why: `the module cannot be read: ${firstLine(error)}` }); continue; }
         if (!exported.has(f.name)) { add({ file: m.file, fn: f.name, kind: "removed" }); continue; }
         summary.functions++;
         if (!f.examples.length) continue;
@@ -499,6 +516,7 @@ export function report(s: DecompileState): { totals: Record<FnStatus | "skipped"
       c[st]++, totals[st]++;
     }
     totals.skipped += Object.keys(m.skipped).length;
+    if (m.error) { lines.push(`${file}: skipped: ${m.error}`); continue; }
     lines.push(`${file}: tested ${c.tested}, failing ${c.failing}, specified ${c.specified}, observed ${c.observed}, described ${c.described}, bare ${c.bare}${Object.keys(m.skipped).length ? `, skipped ${Object.keys(m.skipped).length}` : ""}`);
   }
   return { totals, lines };
