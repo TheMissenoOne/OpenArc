@@ -68,7 +68,8 @@ const codeOrJson = (name: string) => CODE.test(name) || name.endsWith(".json");
 export async function walk(ports: Ports, dir: string, out: string[] = [], keep = codeOrJson): Promise<string[]> {
   for (const name of (await ports.fs.list(dir)).sort()) {
     const rel = dir === "." ? name : `${dir}/${name}`;
-    if (name === "node_modules" || name.startsWith(".") || (dir === "." && ["arc", "dist", "build"].includes(name))) continue;
+    // arc/features holds design-language files (src/pdl.ts), never module specs, even when --out=arc walks arc/
+    if (name === "node_modules" || name.startsWith(".") || (dir === "." && ["arc", "dist", "build"].includes(name)) || (dir === "arc" && name === "features")) continue;
     if (keep(name)) { if (!name.endsWith(".d.ts")) out.push(rel); }
     else if (!name.includes(".")) await walk(ports, rel, out, keep);
   }

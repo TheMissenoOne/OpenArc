@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { AGENTS, guardCommand, mcpCommand, planSetup, type Change, type SetupInput } from "../src/setup.ts";
 
 // ── pure: the change list over an in-memory tree
-const base: SetupInput = { project: "", agents: AGENTS, remove: false, git: true, wrapper: "#!/bin/sh\nexec x\n", config: "{}\n", skills: { "openarc-sheet": "---\nname: openarc-sheet\n---\nsheet\n", "openarc-specs": "---\nname: openarc-specs\n---\nspecs\n" }, plugin: 'const PROJECT = ".";\nrest\n' };
+const base: SetupInput = { project: "", agents: AGENTS, remove: false, git: true, wrapper: "#!/bin/sh\nexec x\n", config: "{}\n", skills: { "openarc-sheet": "---\nname: openarc-sheet\n---\nsheet\n", "openarc-specs": "---\nname: openarc-specs\n---\nspecs\n", "openarc-design": "---\nname: openarc-design\n---\ndesign\n" }, plugin: 'const PROJECT = ".";\nrest\n' };
 const apply = (tree: Map<string, string>, cs: Change[]) => {
   for (const c of cs) if (c.action === "delete") tree.delete(c.path); else if (c.action !== "none" && c.action !== "manual") tree.set(c.path, c.content!);
   return tree;
@@ -26,7 +26,7 @@ const roundTrip = (start: Record<string, string>, o: Partial<SetupInput> = {}) =
 { // a fresh project
   const { first, installed, removed } = roundTrip({});
   assert.ok(first.every((c) => c.action === "create"), "everything is new");
-  for (const f of [".openarc/bin/openarc", ".openarc/.gitignore", "openarc.config.json", ".claude/skills/openarc-sheet/SKILL.md", ".claude/skills/openarc-specs/SKILL.md", ".claude/settings.local.json", ".agents/skills/openarc-specs/SKILL.md", ".codex/hooks.json", ".opencode/skills/openarc-sheet/SKILL.md", ".opencode/plugins/openarc.ts", "AGENTS.md", ".mcp.json", "opencode.json", ".codex/config.toml"]) assert.ok(installed.has(f), f);
+  for (const f of [".openarc/bin/openarc", ".openarc/.gitignore", "openarc.config.json", ".claude/skills/openarc-sheet/SKILL.md", ".claude/skills/openarc-specs/SKILL.md", ".claude/settings.local.json", ".agents/skills/openarc-specs/SKILL.md", ".codex/hooks.json", ".opencode/skills/openarc-sheet/SKILL.md", ".opencode/plugins/openarc.ts", "AGENTS.md", ".mcp.json", "opencode.json", ".codex/config.toml", ...["claude", "agents", "opencode"].map((d) => `.${d}/skills/openarc-design/SKILL.md`)]) assert.ok(installed.has(f), f);
   const cmd = mcpCommand("", true);
   assert.deepStrictEqual(JSON.parse(installed.get(".mcp.json")!), { mcpServers: { openarc: { type: "stdio", command: "sh", args: ["-c", cmd] } } });
   assert.deepStrictEqual(JSON.parse(installed.get("opencode.json")!), { mcp: { openarc: { type: "local", command: ["sh", "-c", cmd], enabled: true } } });
@@ -91,6 +91,7 @@ const roundTrip = (start: Record<string, string>, o: Partial<SetupInput> = {}) =
   const { installed, removed } = roundTrip({}, { project: "desktop" });
   assert.ok(installed.has("desktop/.openarc/bin/openarc") && installed.has("desktop/openarc.config.json") && !installed.has(".openarc/bin/openarc"));
   assert.match(installed.get("AGENTS.md")!, /`cd desktop && \.openarc\/bin\/openarc status`/);
+  assert.match(installed.get("AGENTS.md")!, /`desktop\/arc\/features\/`[^\n]*`cd desktop && \.openarc\/bin\/openarc pdl show <id>`/);
   assert.match(installed.get(".agents/skills/openarc-sheet/SKILL.md")!, /`cd desktop && \.openarc\/bin\/openarc <command>`/);
   assert.match(installed.get(".opencode/plugins/openarc.ts")!, /^const PROJECT = "desktop";/);
   assert.match(installed.get(".mcp.json")!, /cd desktop && exec \.openarc\/bin\/openarc mcp/);
@@ -153,7 +154,9 @@ try {
   assert.strictEqual(rep.agentRoot, repo);
   assert.strictEqual(rep.projectRoot, project);
   assert.deepStrictEqual(rep.agents, ["claude", "codex", "opencode"]);
-  for (const f of ["desktop/.openarc/bin/openarc", "desktop/openarc.config.json", ".claude/skills/openarc-sheet/SKILL.md", ".claude/skills/openarc-specs/SKILL.md", ".claude/settings.local.json", ".agents/skills/openarc-sheet/SKILL.md", ".agents/skills/openarc-specs/SKILL.md", ".codex/hooks.json", ".opencode/skills/openarc-specs/SKILL.md", ".opencode/plugins/openarc.ts", "AGENTS.md", ".mcp.json", "opencode.json", ".codex/config.toml"]) assert.ok(existsSync(join(repo, f)), f);
+  for (const f of ["desktop/.openarc/bin/openarc", "desktop/openarc.config.json", ".claude/skills/openarc-sheet/SKILL.md", ".claude/skills/openarc-specs/SKILL.md", ".claude/settings.local.json", ".agents/skills/openarc-sheet/SKILL.md", ".agents/skills/openarc-specs/SKILL.md", ".codex/hooks.json", ".opencode/skills/openarc-specs/SKILL.md", ".opencode/plugins/openarc.ts", "AGENTS.md", ".mcp.json", "opencode.json", ".codex/config.toml", ...["claude", "agents", "opencode"].map((d) => `.${d}/skills/openarc-design/SKILL.md`)]) assert.ok(existsSync(join(repo, f)), f);
+  for (const d of ["claude-code/skills", "codex/skills", "opencode/skill"]) assert.strictEqual(readFileSync(resolve(`../integrations/${d}/openarc-design/SKILL.md`), "utf8"), readFileSync(resolve("../integrations/claude-code/skills/openarc-design/SKILL.md"), "utf8"), `${d}: one skill text for every agent`);
+  assert.strictEqual(readFileSync(join(repo, ".agents/skills/openarc-design/SKILL.md"), "utf8").replace(/\n> Installed by[^\n]*\n/, ""), readFileSync(resolve("../integrations/claude-code/skills/openarc-design/SKILL.md"), "utf8"));
   assert.strictEqual(readFileSync(join(repo, ".claude/skills/openarc-specs/SKILL.md"), "utf8").replace(/\n> Installed by[^\n]*\n/, ""), readFileSync(resolve("../integrations/claude-code/skills/openarc-specs/SKILL.md"), "utf8"), "the shipped skill plus the preamble");
   const now = snapshot();
   assert.strictEqual(now[".claude/settings.json"], start[".claude/settings.json"]);

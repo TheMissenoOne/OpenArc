@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 export type Agent = "claude" | "codex" | "opencode";
 export const AGENTS: readonly Agent[] = ["claude", "codex", "opencode"];
-export const SKILLS = ["openarc-sheet", "openarc-specs"] as const;
+export const SKILLS = ["openarc-sheet", "openarc-specs", "openarc-design"] as const;
 /** "manual": a file setup can't merge safely; `content` is what to add by hand, and nothing is written. */
 export type Change = { path: string; action: "create" | "modify" | "delete" | "none" | "manual"; reason: string; content?: string };
 export type SetupInput = {
@@ -78,7 +78,8 @@ function agentsSection(project: string): string {
   return [BEGIN, "## OpenArc", "",
     `This project's behaviour is described in OpenArc specs under \`${arc}\`: \`concept.arc\` (goals), \`architecture.arc\` (parts and modules) and \`spec/<module>.arc\` (one per source module). Read a module's \`.arc\` file before its source: it is much smaller.`, "",
     `Run OpenArc as \`${run(project, "<command>")}\`, for example \`${run(project, "status")}\`. Never \`npx openarc\`.`, "",
-    "Do not edit code between `// @openarc:begin` and `// @openarc:end` markers: change its spec instead. The `openarc-specs` and `openarc-sheet` skills say more.",
+    `Design files under \`${p(project, "arc/features/")}\` (\`.arc\`) describe features in plain pseudocode: read \`${run(project, "pdl show <id>")}\` before the source, and keep design and code in step with \`pdl status\` and \`pdl sync\`.`, "",
+    "Do not edit code between `// @openarc:begin` and `// @openarc:end` markers: change its spec instead. The `openarc-specs`, `openarc-design` and `openarc-sheet` skills say more.",
     END].join("\n") + "\n";
 }
 

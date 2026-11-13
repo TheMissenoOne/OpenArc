@@ -176,7 +176,9 @@ export function printArc(m: ArcModule): string {
   return out.join("\n") + "\n";
 }
 
-function parseExample(text: string): ArcExample {
+/** One example line after its `example`/`observed` word: `(3) => 6`, `new (10) . ("a") throws "full"`. Throws on a bad
+ *  line, the error naming the column. */
+export function parseExample(text: string): ArcExample {
   const c = new Cursor(text);
   const list = (): Json[] => {
     c.need("(");

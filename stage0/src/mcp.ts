@@ -52,6 +52,21 @@ export const TOOLS: Tool[] = [
   { name: "arc_status", description: "Which functions the code does not meet their .arc spec (stale), with the failing example or rule.", inputSchema: obj({ name: str("module or module.fn") }), argv: (i) => ["arc", "status", ...(i.name === undefined ? [] : [pos(i.name)]), "--json"] },
   { name: "arc_prompt", description: "To change a function from its .arc spec: its spec, current code and failing examples. Write the body, then call arc_accept.", inputSchema: obj({ name: str("module.fn") }, ["name"]), argv: (i) => ["arc", "prompt", pos(i.name), "--json"] },
   { name: "arc_accept", description: "Verify your body against the function's examples and rules; replaces the body if all pass, else changes nothing.", inputSchema: obj({ name: str("module.fn"), body: str("the function body: statements only, no signature") }, ["name", "body"]), argv: (i) => ["arc", "accept", pos(i.name), "--json"], stdin: (i) => String(i.body) },
+  // the design language, arc/features/*.arc (docs/wiki/PDL.md)
+  { name: "pdl_status", description: "Design files (arc/features): each block's status (design ahead, code ahead, ...) and design/code size. Start here.", inputSchema: obj({ id: str("only this feature or block") }), argv: (i) => ["pdl", "status", ...(i.id === undefined ? [] : [pos(i.id)]), "--json"] },
+  { name: "pdl_show", description: "One design block with its feature's purpose, assume, uses, source paths and status. Read it before the source.", inputSchema: obj({ id: str("block id, as Feature.block") }, ["id"]), argv: (i) => ["pdl", "show", pos(i.id), "--json"] },
+  { name: "pdl_verify", description: "Run a design's example and check lines against the code; says what failed and what could not be run.", inputSchema: obj({ id: str("only this feature or block") }), argv: (i) => ["pdl", "verify", ...(i.id === undefined ? [] : [pos(i.id)]), "--json"] },
+  { name: "pdl_draft", description: "Write a first skeleton design for existing code (a file or folder); then fill, prune and add notes.", inputSchema: obj({ path: str("source file or folder") }, ["path"]), argv: (i) => ["pdl", "draft", pos(i.path), "--json"] },
+  { name: "pdl_check", description: "Structural errors and notes in the design files (a design over 50% of its code, a call with no block).", inputSchema: obj(), argv: () => ["pdl", "check", "--json"] },
+  {
+    name: "pdl_sync", description: "Once a design block and its code agree, record them as in step. Refused on a pdl_check error or a failing example.",
+    inputSchema: obj({ ids: strs("block ids to record") }, ["ids"]),
+    argv: (i) => {
+      const ids = (i.ids as string[]).map(pos);
+      if (!ids.length) throw new Error("give at least one block id");
+      return ["pdl", "sync", ...ids];
+    },
+  },
 ];
 
 const MODERN = "2026-07-28";
