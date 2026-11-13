@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -f openarc.config.json && { [ -x node_modules/.bin/openarc ] && node_modules/.bin/openarc sync --brief --no-model || openarc sync --brief --no-model; } 2>/dev/null || true",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
