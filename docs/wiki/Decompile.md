@@ -6,7 +6,7 @@
 openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>] [--no-record]] [--fresh] [--json]
 openarc decompile --report [--json]
 openarc decompile --todo [--json]
-openarc decompile --check [dirs...] [--out=<dir>] [--json]
+openarc decompile --check [dirs...] [--out=<dir>] [--rule-inputs <n>] [--json]
 ```
 
 `dirs` are the source directories (default `src`). Run it from the folder that holds `package.json`. To have Claude Code, Codex or OpenCode do the decompile workflow and fill in intents, run `openarc setup` first: its `openarc-specs` skill teaches the agent the levels and the steps. See [[Setup]]. The project does not need to install `open-arc`: without it, the sandbox runs the example runner of the `openarc` you called (not on the `container` isolation tier).
@@ -50,7 +50,7 @@ fn drain(stats: Any, effort?: Num): { water: Num }
 fn label(rain: Any): "heavy rain" | "clear"
   observed (0.9) => "heavy rain"
   observed (0) => "clear"
-  rule known: result in ["heavy rain", "clear"]
+  rule known: result in "heavy rain" | "clear"
 ```
 
 | Line | Meaning |
@@ -63,7 +63,7 @@ fn label(rain: Any): "heavy rain" | "clear"
 | `example (args) => value after (args) # name` | the call changes its arguments: they are as listed after it. A function that returns nothing shows `=> "$undefined" after (...)` |
 | `example (args) throws "text"` | the call throws, and the message contains the text |
 | `observed ...` | the same forms, recorded from the code: what it did, not what it should do |
-| `rule name: <predicate>` | kept and printed. Rules are not evaluated yet |
+| `rule name: <predicate>` | a property every call must have, checked by `--check` on many inputs. See [[Rules]] |
 | `hold` | reserved for sync |
 
 Types: `Int`, `Float`, `Num`, `Bool`, `Str`, `Any`, `Void`, `Null`, `[T]`, `{ k: T, k?: T }`, `A | B`, `T?`, literals, names of `type` lines, and a backticked native type such as `` `Map<string, number>` `` for anything else.
@@ -119,8 +119,11 @@ After a refactor or a regeneration, `openarc decompile --check` asks: did behavi
 | `unrunnable` | the module cannot run now. The reason is given once per function |
 | `removed` | the `.arc` file has a function the code no longer exports |
 | `new` | the code exports a function the `.arc` file lacks |
+| `held` | a rule was true on every call it was checked on: `rule bounded: held on 37 inputs` |
+| `broken` | a rule was false on a call, printed with the first such call: `rule bounded: broken by (-50) -> -50` |
+| `unparsable` | a rule does not parse, or names something that is not a parameter, `result`, `threw`, `after` or `old` |
 
-It prints one line per finding that is not `preserved`, then `checked N functions: preserved P, changed C, failing F, unrunnable U, removed R, new W`. With `--json`: `{ ok, summary, items: [{ file, fn, kind, args?, was?, now?, why? }] }`. The exit code is 0 when nothing changed, failed or was removed, else 1. `unrunnable` and `new` alone do not fail.
+It prints one line per finding that is not `preserved`, then `checked N functions: preserved P, changed C, failing F, unrunnable U, removed R, new W`. Rule lines (`held` included) come before the summary line. With `--json`: `{ ok, summary, items: [{ file, fn, kind, args?, was?, now?, why?, rule?, inputs? }] }`. The exit code is 0 when nothing changed, failed or was removed and no rule is broken or unparsable, else 1. `unrunnable` and `new` alone do not fail.
 
 To accept a `changed` observation, run `openarc decompile` (it re-records the line) or edit or promote the line. A pass shows that the code agrees on these inputs only: finitely many inputs do not prove two versions equal.
 

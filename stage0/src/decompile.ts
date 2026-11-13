@@ -15,6 +15,7 @@ import type { CompileRequest, Ports } from "./types.ts";
 import * as engine from "./engine.ts";
 import { parseArc, printArc, printExample, printOutcome, printValue, type ArcExample, type ArcFn, type ArcModule, type ArcType } from "./arc.ts";
 import { inputsFor, valuesOf } from "./sync.ts";
+import { argsFit, checkRules } from "./rules.ts";
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
@@ -34,6 +35,8 @@ export interface DecompileCtx {
   fresh?: boolean;
   /** With testCmd: record the arguments the exported functions receive while the tests run (core/record.mjs). */
   record?: boolean;
+  /** `--check`: at most this many generated inputs per function with rules (default 50). */
+  ruleInputs?: number;
 }
 
 /** tested: its test files ran and passed. failing: one of them fails, or an `example` line does not hold. specified: it has
@@ -498,8 +501,9 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
 }
 
 /** One finding of `decompile --check`. `was`/`now`: outcomes as `.arc` prints them. */
-export interface CheckItem { file: string; fn: string; kind: "changed" | "failing" | "unrunnable" | "removed" | "new"; args?: Json[]; was?: string; now?: string; why?: string }
-export interface CheckSummary { functions: number; preserved: number; changed: number; failing: number; unrunnable: number; removed: number; new: number }
+/** Rules: `held` (on `inputs` calls), `broken` (the first call it was false on: `args`, `now`), `unparsable`. */
+export interface CheckItem { file: string; fn: string; kind: "changed" | "failing" | "unrunnable" | "removed" | "new" | "held" | "broken" | "unparsable"; args?: Json[]; was?: string; now?: string; why?: string; rule?: string; inputs?: number }
+export interface CheckSummary { functions: number; preserved: number; changed: number; failing: number; unrunnable: number; removed: number; new: number; held: number; broken: number; unparsable: number }
 
 /** `decompile --check`: every `example` and `observed` line in the `.arc` files under `ctx.out` against the code as it is
  *  now. Reads only the `.arc` files and the code (not the state file) and writes nothing. ok: nothing changed, failed or
@@ -510,7 +514,7 @@ export async function checkSpecs(ctx: DecompileCtx): Promise<{ ok: boolean; summ
   for (const f of await walk(ctx.ports, ctx.out, [], (n) => n.endsWith(".arc"))) {
     try { arcs.push(parseArc((await ctx.ports.fs.read(f)) ?? "")); } catch (e) { ctx.log(`${f}: ${(e as Error).message}; not checked`); }
   }
-  const items: CheckItem[] = [], summary: CheckSummary = { functions: 0, preserved: 0, changed: 0, failing: 0, unrunnable: 0, removed: 0, new: 0 };
+  const items: CheckItem[] = [], summary: CheckSummary = { functions: 0, preserved: 0, changed: 0, failing: 0, unrunnable: 0, removed: 0, new: 0, held: 0, broken: 0, unparsable: 0 };
   const add = (i: CheckItem) => { items.push(i); summary[i.kind]++; };
   const box = await sandbox(ctx, texts);
   try {
@@ -528,6 +532,20 @@ export async function checkSpecs(ctx: DecompileCtx): Promise<{ ok: boolean; summ
           else if (e.observed && printOutcome(e) !== now) add({ file: m.file, fn: f.name, kind: "changed", args: e.args, was: printOutcome(e), now });
           else summary.preserved++;
         });
+        if (f.rules.length) {
+          // the rules, on every call above and on generated inputs: structural edits of these arguments that fit the types
+          const seen = new Set(f.examples.map((e) => key(e.args))), cap = ctx.ruleInputs ?? 50;
+          const extra = engine.oracleInputs(f.examples.map((e) => ({ args: e.args })), seen.size + cap, 1, [], argsFit(f, m.types)).filter((a) => !seen.has(key(a))).slice(0, cap);
+          const more = extra.length ? await box.run(m.file, f.name, extra) : [];
+          if ("error" in more) ctx.log(`${m.file}: ${f.name}: generated inputs unrunnable, rules checked on the written lines only: ${firstLine(more.error)}`);
+          const runs = [...ran, ...("error" in more ? [] : more)].map((r) => (isThrown(r.got) ? { args: r.args, threw: true } : { args: r.args, result: r.got, ...(r.after ? { after: r.after } : {}), threw: false }));
+          for (const r of checkRules(f, m.types, runs)) {
+            const at = { file: m.file, fn: f.name, rule: r.rule };
+            if (r.broken) add({ ...at, kind: "broken", args: r.broken.args, now: r.broken.result === undefined ? "throws" : printOutcome({ args: [], expected: r.broken.result, ...(r.broken.after ? { after: r.broken.after } : {}) }), ...(r.error ? { why: r.error } : {}) });
+            else if (r.error) add({ ...at, kind: "unparsable", why: r.error });
+            else add({ ...at, kind: "held", inputs: r.held });
+          }
+        }
       }
     }
     for (const [file, m] of read) {
@@ -537,12 +555,13 @@ export async function checkSpecs(ctx: DecompileCtx): Promise<{ ok: boolean; summ
   } finally {
     await box.close();
   }
-  return { ok: !summary.changed && !summary.failing && !summary.removed, summary, items };
+  return { ok: !summary.changed && !summary.failing && !summary.removed && !summary.broken && !summary.unparsable, summary, items };
 }
 
 /** One line per finding: the text `decompile --check` prints. */
 export function checkLine(i: CheckItem): string {
   const call = `${i.file}: ${i.fn}${i.args ? `(${i.args.map(printValue).join(", ")})` : ""}`;
+  if (i.rule) return `${i.file}: ${i.fn}: rule ${i.rule}: ${i.kind === "held" ? `held on ${i.inputs} input${i.inputs === 1 ? "" : "s"}` : i.kind === "broken" ? `broken by (${i.args!.map(printValue).join(", ")}) -> ${i.now}${i.why ? `: ${i.why}` : ""}` : i.why}`;
   return i.kind === "changed" ? `${call} changed: was ${i.was}, now ${i.now}`
     : i.kind === "failing" ? `${i.file}: ${i.fn}: ${i.why}`
     : i.kind === "unrunnable" ? `${call} unrunnable: ${i.why}`
