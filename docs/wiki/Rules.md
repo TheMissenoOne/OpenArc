@@ -37,6 +37,8 @@ names    = each parameter (its value before the call), result, threw,
            after.<param> (the argument as the call left it), old.<param> (the value before, said explicitly)
 ```
 
+`result`, `threw`, `after` and `old` always mean what the list above says, also when a parameter has one of these names. Such a parameter is reached as `old.<name>` (its value before the call) and `after.<name>` (as the call left it): for `fn f(result: Num): Num`, `result` is the return value and `old.result` the argument. When a rule writes such a name bare and cannot be parsed or evaluated, its error ends with a hint saying this.
+
 Loosest to tightest: `implies`, `or`, `and`, `not`, comparisons and `in`, `+ -`, `* / %`, unary `-`, `.` and `[]`. Comparisons do not chain. There are no list or object literals, no definitions, no assignment and no calls into the program.
 
 ## How it is checked

@@ -141,6 +141,24 @@ const tree = (e: RuleExpr): string => {
   assert.deepStrictEqual(got[5], { rule: "eval", held: 0, broken: { args: [[1], 2], result: 2, after: [[1, 2], 2] }, error: "cannot evaluate: 2 has no field n" });
 }
 
+// ── a parameter named like a keyword: the keyword wins, the parameter is old.<name> / after.<name>, an error says so
+{
+  const fn: ArcFn = { name: "f", params: [{ name: "threw", type: "{ n: Num }" }, { name: "old", type: "Num" }], returns: "Num", intent: [], examples: [], rules: [
+    { name: "bare", text: "threw.n > 0" },
+    { name: "spelled", text: "old.threw.n > 0 and after.threw.n > 0 and old.old == 1" },
+    { name: "parse", text: "threw.n >" },
+    { name: "fine", text: "result > 0" },
+    { name: "other", text: "result.x > 0" },
+  ] };
+  const got = checkRules(fn, [], [{ args: [{ n: 1 }, 1], result: 2, threw: false }]);
+  const hint = "; the parameter threw is shadowed by the keyword threw: write old.threw for its value before the call, after.threw for after it";
+  assert.strictEqual(got[0]!.error, `cannot evaluate: false has no field n${hint}`);
+  assert.deepStrictEqual(got[1], { rule: "spelled", held: 1 });
+  assert.strictEqual(got[2]!.error, `cannot parse: expected a value, found the end at column 10${hint}`);
+  assert.deepStrictEqual(got[3], { rule: "fine", held: 1 });
+  assert.strictEqual(got[4]!.error, "cannot evaluate: 2 has no field x"); // names no shadowed parameter: no hint
+}
+
 // ── end to end: `openarc decompile --check` on a plain JavaScript project
 {
   const MAIN = resolve("src/main.ts");
