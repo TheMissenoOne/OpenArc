@@ -1,6 +1,6 @@
 // Example equality (spec §9.3): numeric tolerance, -0, NaN, value tokens, faithful printing. Run: node tests/equality.check.ts
 import assert from "node:assert";
-import { decodeTokens, runExamples, showValue, toJson, valuesEqual } from "open-arc/harness";
+import { decodeTokens, runExamples, runOracle, showValue, timedCall, toJson, valuesEqual } from "open-arc/harness";
 import type { AnyFn, RegionSpec } from "open-arc";
 import * as arc from "open-arc";
 
@@ -96,4 +96,25 @@ assert.equal(showValue(toJson(undefined)), "undefined");
   });
   assert.deepStrictEqual(await runExamples(process.cwd(), notify, spec as unknown as RegionSpec<AnyFn>), [{ name: "#1", ok: true }]);
 }
-console.log("equality: tolerance, -0, NaN, tokens, faithful printing, fitLine repro, nested fakes ok");
+// per-call timeout: a body that loops forever fails that example, named, and the next one still runs
+{
+  type Decode = (b: number[]) => number;
+  const decode: Decode = (b) => {
+    let i = 0;
+    while (i < b.length) if (b[i]! < 128) i++; // a continuation byte never advances: the decoder hang from #14
+    return i;
+  };
+  const spec = arc.defineRegion<Decode>({ id: "t.decode", intent: "", examples: [{ name: "stuck", args: [[128, 0]], expected: 2 }, { args: [[1, 2]], expected: 2 }] });
+  const t0 = Date.now();
+  const out = await runExamples(process.cwd(), decode, spec as unknown as RegionSpec<AnyFn>);
+  assert.deepStrictEqual(out, [{ name: "stuck", ok: false, actual: { throws: "timed out after 5000 ms (does it loop forever?)" } }, { name: "#2", ok: true }]);
+  assert.ok(Date.now() - t0 < 8000);
+  const ref: Decode = (b) => b.length;
+  assert.deepStrictEqual(await runOracle(decode, ref, [[[1]], [[128]]]), [
+    { name: "#1", ok: true },
+    { name: "#2", ok: false, actual: { args: [[128]], got: { throws: "timed out after 5000 ms (does it loop forever?)" }, oracle: 1 } },
+  ]);
+  assert.throws(() => timedCall(() => { throw new RangeError("own"); }, []), RangeError); // the body's own errors pass through
+  assert.equal(timedCall((a: number, b: number) => a + b, [2, 3]), 5);
+}
+console.log("equality: tolerance, -0, NaN, tokens, faithful printing, fitLine repro, nested fakes, call timeout ok");
