@@ -110,7 +110,8 @@ class Cursor {
 const printParam = (p: ArcParam) => `${p.rest ? "..." : ""}${p.name}${p.optional ? "?" : ""}: ${p.type}`;
 export const printSignature = (f: Pick<ArcFn, "name" | "params" | "returns">) => `${f.name}(${f.params.map(printParam).join(", ")}): ${f.returns}`;
 
-/** Split at top-level `sep`: brackets, strings and backticked native types keep their commas. */
+/** Split at top-level `sep`: brackets, strings and backticked native types keep their commas. The `>` of `=>` is no
+ *  bracket, and a stray closing bracket never makes the depth negative. */
 function splitTop(s: string, sep: string): string[] {
   const out: string[] = [];
   let depth = 0, from = 0, quote = "";
@@ -119,7 +120,7 @@ function splitTop(s: string, sep: string): string[] {
     if (quote) { if (c === "\\") i++; else if (c === quote) quote = ""; }
     else if (c === '"' || c === "`") quote = c;
     else if ("([{<".includes(c)) depth++;
-    else if (")]}>".includes(c)) depth--;
+    else if (")]}>".includes(c) && !(c === ">" && s[i - 1] === "=")) depth = Math.max(0, depth - 1);
     else if (c === sep && depth === 0) { out.push(s.slice(from, i)); from = i + 1; }
   }
   out.push(s.slice(from));

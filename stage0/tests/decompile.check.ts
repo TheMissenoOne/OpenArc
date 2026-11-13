@@ -30,6 +30,11 @@ import { instrument } from "../src/decompile.ts";
   // canonical order: an observation written before an example prints after it
   const loose = 'module a from "a.js"\n\nfn f(x: Num): Num\n  rule r: result > 0\n  observed (1) => 2\n  example (2) => 4\n  "Doubles."\n';
   assert.strictEqual(printArc(parseArc(loose)), 'module a from "a.js"\n\nfn f(x: Num): Num\n  "Doubles."\n  example (2) => 4\n  observed (1) => 2\n  rule r: result > 0\n');
+  // the `>` of an unquoted `=>` is no bracket: the parameters after a function type still split
+  const arrow = 'module a from "a.js"\n\nfn each(cb: (x: Num) => Void, n: Int, m: [Int]): Void\n';
+  assert.deepStrictEqual(parseArc(arrow).fns[0]!.params, [{ name: "cb", type: "(x: Num) => Void" }, { name: "n", type: "Int" }, { name: "m", type: "[Int]" }]);
+  assert.strictEqual(printArc(parseArc(arrow)), arrow);
+  assert.deepStrictEqual(parseArc('module a from "a.js"\n\nfn f(a: `x >> y`, b: Num>, c: Int): Void\n').fns[0]!.params.map((p) => p.name), ["a", "b", "c"]);
 }
 
 // ── pure: the instrumenter adds one recorder call per function, on the line it starts, and changes nothing else
