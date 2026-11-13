@@ -70,6 +70,7 @@ export interface SpecInfo {
   codeFirst?: implicit.CodeFirstInfo; // code-first: the declaration is the spec (§3.8)
   backend?: string; // code-first: `@arc backend` / arc.configure (openarc.config.json regions[id] still wins)
   outputFormat?: "json" | "code"; // code-first: likewise
+  member?: { name: string; static?: boolean }; // decompile: a class member, `symbol` is the class (HarnessPlanEntry.member)
 }
 
 export interface ManifestEntry {
@@ -2221,7 +2222,7 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
   const tolerance = typeof spec.literal.tolerance === "number" ? { tolerance: spec.literal.tolerance } : {};
   // palette: a UI region's module is its component file; the harness gets the structure tree for the derived checks
   const uiPlan = spec.ui ? { module: p.regions.find((x) => x.id === rootId)!.file, ui: spec.ui as unknown as Json } : {};
-  await ports.fs.write(`${dir}/.openarc/harness-plan.json`, JSON.stringify({ [rootId]: { module: spec.file, symbol: spec.symbol, specExport: spec.exportName, examples: spec.examples, ...tolerance, ...(oracle ? { oracle } : {}), ...uiPlan, ...(tests ? { tests } : {}) } }));
+  await ports.fs.write(`${dir}/.openarc/harness-plan.json`, JSON.stringify({ [rootId]: { module: spec.file, symbol: spec.symbol, specExport: spec.exportName, examples: spec.examples, ...tolerance, ...(oracle ? { oracle } : {}), ...uiPlan, ...(tests ? { tests } : {}), ...(spec.member ? { member: spec.member } : {}) } }));
   const sb = p.config.sandbox ?? {};
   const limits = {
     nodeBin: req.sandbox.nodeBin, nodePrefix: req.sandbox.nodePrefix, heapMb: sb.heapMb ?? req.sandbox.heapMb,
@@ -3012,9 +3013,9 @@ export async function observe(ports: Ports, req: CompileRequest, p: Project, id:
 /** observe() for an exported function that is no region (openarc decompile reads code it does not own): `files` is what
  *  the sandbox stages. The stage is kept between calls, since staging node_modules costs more than the run; the caller
  *  ends with closeSandbox. */
-export async function observeExport(ports: Ports, req: CompileRequest, p: Project, target: { file: string; symbol: string }, inputs: Json[][], files: Map<string, string>): Promise<Observed[] | { error: string }> {
+export async function observeExport(ports: Ports, req: CompileRequest, p: Project, target: { file: string; symbol: string; member?: SpecInfo["member"] }, inputs: Json[][], files: Map<string, string>): Promise<Observed[] | { error: string }> {
   const id = "openarc.observed", module = ".openarc/observe-reference.mjs";
-  p.specs.set(id, { id, kind: "function", file: target.file, symbol: target.symbol, exportName: "", literal: {}, examples: [] } as unknown as SpecInfo);
+  p.specs.set(id, { id, kind: "function", file: target.file, symbol: target.symbol, exportName: "", literal: {}, examples: [], ...(target.member ? { member: target.member } : {}) } as unknown as SpecInfo);
   try {
     const res = await runSandbox(ports, req, p, id, new Map(files).set(module, 'export const reference = () => "__openarc_observe__";\n'), { module, export: "reference", inputs });
     if (res.error) return { error: res.error };

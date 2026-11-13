@@ -14,6 +14,18 @@
 //     observed ({water: 0, food: 0}, {temperature: 40}) => {cold: 0}
 //     rule bounded: after.stats in Stats
 //
+//   type Inventory = { capacity: Num }
+//
+//   fn Inventory.add(item: Str, count?: Int): Int
+//     observed new (10) . ("apple", 2) => 2
+//
+//   async fn static Inventory.load(path: Str): Inventory
+//
+// A method is a function with a qualified name, `<Class>.<method>`; `static` after `fn` marks a static one, and the
+// fixed word order is `async fn static`. An instance method's example says how its receiver is built:
+// `new (<constructor args>) . (<method args>) => value` is `new Inventory(10).add("apple", 2)`, on a fresh receiver
+// for every example; `after` still lists the method's arguments.
+//
 // `example` is a requirement: a person (or an agent on their behalf) wrote or confirmed it. `observed` is what the code did
 // when it was recorded, with no authority: promoting one is changing the word to `example`. Inside a function the order is
 // intent, hold, examples, observations, rules.
@@ -26,14 +38,16 @@ type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 export interface ArcParam { name: string; type: string; optional?: boolean; rest?: boolean }
 /** `throws`: true for any error, a string that must appear in the message. `after`: every argument as the call leaves
  *  it, for a function that changes its arguments in place (never on a `throws` example). `observed`: recorded from the
- *  code, not required of it. */
-export interface ArcExample { args: Json[]; expected?: Json; throws?: string | true; after?: Json[]; name?: string; observed?: true }
+ *  code, not required of it. `receiver`: an instance method's constructor arguments (`new (receiver) . (args)`). */
+export interface ArcExample { receiver?: Json[]; args: Json[]; expected?: Json; throws?: string | true; after?: Json[]; name?: string; observed?: true }
 export interface ArcRule { name: string; text: string }
-export interface ArcFn { name: string; params: ArcParam[]; returns: string; async?: boolean; hold?: boolean; intent: string[]; examples: ArcExample[]; rules: ArcRule[] }
+/** name: `f`, or `Class.method` for a method; `static` only on a method. */
+export interface ArcFn { name: string; params: ArcParam[]; returns: string; async?: boolean; static?: boolean; hold?: boolean; intent: string[]; examples: ArcExample[]; rules: ArcRule[] }
 export interface ArcType { name: string; type: string }
 export interface ArcModule { name: string; file: string; intent: string[]; types: ArcType[]; fns: ArcFn[] }
 
 const IDENT = /^[A-Za-z_$][\w$]*$/;
+const FN_NAME = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?$/;
 
 // ── values: JSON, with object keys unquoted when they are identifiers ──
 export function printValue(v: Json): string {
@@ -127,7 +141,7 @@ function closing(s: string, open: number): number {
 function parseSignature(text: string): Pick<ArcFn, "name" | "params" | "returns"> {
   const open = text.indexOf("(");
   const name = text.slice(0, open).trim();
-  if (open < 0 || !IDENT.test(name)) throw new Error("expected name(params): Type");
+  if (open < 0 || !FN_NAME.test(name)) throw new Error("expected name(params): Type");
   const close = closing(text, open);
   const ret = /^\s*:\s*(\S.*)$/.exec(text.slice(close + 1));
   if (!ret) throw new Error("expected `: Type` after the parameters");
@@ -145,14 +159,14 @@ export const printOutcome = (e: ArcExample): string =>
   e.throws !== undefined ? `throws${e.throws === true ? "" : ` ${JSON.stringify(e.throws)}`}` : `${printValue(e.expected ?? null)}${e.after ? ` after (${e.after.map(printValue).join(", ")})` : ""}`;
 /** One example line, unindented: `example (3) => 6 # name`, `observed (null) throws "stats"`. */
 export const printExample = (e: ArcExample): string =>
-  `${e.observed ? "observed" : "example"} (${e.args.map(printValue).join(", ")})${e.throws !== undefined ? " " : " => "}${printOutcome(e)}${e.name ? ` # ${e.name}` : ""}`;
+  `${e.observed ? "observed" : "example"} ${e.receiver ? `new (${e.receiver.map(printValue).join(", ")}) . ` : ""}(${e.args.map(printValue).join(", ")})${e.throws !== undefined ? " " : " => "}${printOutcome(e)}${e.name ? ` # ${e.name}` : ""}`;
 
 // ── modules ──
 export function printArc(m: ArcModule): string {
   const out = [`module ${m.name} from ${JSON.stringify(m.file)}`, ...m.intent.map((l) => `  ${JSON.stringify(l)}`)];
   for (const t of m.types) out.push("", `type ${t.name} = ${t.type}`);
   for (const f of m.fns) {
-    out.push("", `${f.async ? "async " : ""}fn ${printSignature(f)}`, ...f.intent.map((l) => `  ${JSON.stringify(l)}`));
+    out.push("", `${f.async ? "async " : ""}fn ${f.static ? "static " : ""}${printSignature(f)}`, ...f.intent.map((l) => `  ${JSON.stringify(l)}`));
     if (f.hold) out.push("  hold");
     for (const e of [...f.examples.filter((x) => !x.observed), ...f.examples.filter((x) => x.observed)]) out.push(`  ${printExample(e)}`);
     for (const r of f.rules) out.push(`  rule ${r.name}: ${r.text}`);
@@ -171,7 +185,9 @@ function parseExample(text: string): ArcExample {
     }
     return out;
   };
-  const ex: ArcExample = { args: list() };
+  const receiver = c.eat("new") ? list() : undefined;
+  if (receiver) c.need(".");
+  const ex: ArcExample = { ...(receiver ? { receiver } : {}), args: list() };
   if (c.eat("=>")) {
     ex.expected = c.value();
     if (c.eat("after")) ex.after = list();
@@ -201,7 +217,11 @@ export function parseArc(text: string): ArcModule {
           mod = { name: m[1]!, file: JSON.parse(m[2]!) as string, intent: [], types: [], fns: [] };
         } else if (!mod) throw new Error('a file starts with `module <name> from "<file>"`');
         else if ((m = /^type\s+([A-Za-z_$][\w$]*)\s*=\s*(\S.*)$/.exec(line))) mod.types.push({ name: m[1]!, type: m[2]! });
-        else if ((m = /^(async\s+)?fn\s+(.*)$/.exec(line))) mod.fns.push((fn = { ...parseSignature(m[2]!), ...(m[1] ? { async: true } : {}), intent: [], examples: [], rules: [] }));
+        else if ((m = /^(async\s+)?fn\s+(static\s+)?(.*)$/.exec(line))) {
+          const sig = parseSignature(m[3]!);
+          if (m[2] && !sig.name.includes(".")) throw new Error("`static` belongs to a method: fn static Class.name(...)");
+          mod.fns.push((fn = { ...sig, ...(m[1] ? { async: true } : {}), ...(m[2] ? { static: true } : {}), intent: [], examples: [], rules: [] }));
+        }
         else throw new Error("expected module, type or fn");
         continue;
       }

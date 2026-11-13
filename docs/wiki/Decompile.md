@@ -13,7 +13,7 @@ openarc decompile --check [dirs...] [--out=<dir>] [--json]
 
 ## What it recovers
 
-For every exported function:
+For every exported function, and every public method of an exported class:
 
 | Part | Where it comes from |
 |---|---|
@@ -22,7 +22,18 @@ For every exported function:
 | Observations | running the function in the sandbox. Inputs come from the arguments the tests passed (with `--run-tests`, see [Recorded arguments](#recorded-arguments)), from literal calls found in the project (tests first, also through a `const` bound to a literal) and from the parameter types. Each input runs twice, and one whose results or changed arguments differ is dropped |
 | Tests | the test files that use the function, found by their imports |
 
-Exported type aliases and interfaces become `type` lines. Classes and generic functions are skipped and counted.
+Exported type aliases and interfaces become `type` lines. CommonJS exports count as exports in every shape: `module.exports = { a, b }`, `module.exports = { a() {}, b: function () {} }`, `exports.a = ...`, `module.exports.a = ...`, and `module.exports = <function or class>`, which is named `default` (what Node's `import` calls it), also in a `.js` file of a package with no `"type"` field.
+
+### Classes
+
+An exported class gives:
+
+- a `type <Class> = { ... }` line with its public data fields, when the checker knows any (declared fields in TypeScript, `this.x = ...` in a JavaScript constructor). With none, no type line.
+- one function per public method, named `<Class>.<method>`: `fn Inventory.add(...)` for an instance method, `fn static Inventory.fromJSON(...)` for a static one. A static method is observed exactly like a function.
+- An instance method runs on a fresh receiver for every input. The receiver's constructor arguments come from, in order: `new <Class>(...)` expressions in the project whose arguments are literals, the constructor arguments recorded from the tests (with `--run-tests`), and no arguments when the constructor needs none. At most 3 receivers, each tried with every input. With no receiver, the method keeps its signature and intent, and `why` says `no way to construct <Class> found`.
+- Not listed: the constructor, private members (`#x`, TypeScript `private` and `protected`, names starting with `_`), and inherited methods (they are listed on the class that declares them). Getters and setters are skipped and counted, with the reason in the state file.
+
+A generic function or method is listed with its type parameters erased to `Any`: `first<T>(xs: T[]): T` is `fn first(xs: [Any]): Any`.
 
 ## Observations and examples
 
@@ -33,7 +44,7 @@ Decompile records what the code does today, bugs included. So an `.arc` file has
 
 To promote an observation, change the word `observed` to `example`. From then on decompile never rewrites or drops that line. It checks it against the code on every run that executes the module, and the function is `failing` when the code does not satisfy it.
 
-The state file records where each observation's input came from (`origins`, keyed by the JSON of the arguments): `call <file>:<line>` for a literal call in the project, `recorded <test file>` for arguments recorded while that test file ran, `types` for an input derived from the parameter types, `kept` for one taken from an existing `observed` line whose origin is unknown. The `.arc` file does not carry it.
+The state file records where each observation's input came from (`origins`, keyed by the JSON of the arguments; for an instance method `[<constructor args>, ...<method args>]`, and the origin is that of the method's arguments): `call <file>:<line>` for a literal call in the project, `recorded <test file>` for arguments recorded while that test file ran, `types` for an input derived from the parameter types, `kept` for one taken from an existing `observed` line whose origin is unknown. The `.arc` file does not carry it.
 
 ## The `.arc` file
 
@@ -58,10 +69,12 @@ fn label(rain: Any): "heavy rain" | "clear"
 | `module <name> from "<file>"` | one per file. Indented strings under it are the module's intent |
 | `type Name = <type>` | a named type |
 | `fn name(p: T, q?: T, ...r: [T]): R` | a function. `async fn` when it returns a promise |
+| `fn Class.method(...): R` | an instance method. `fn static Class.method(...)` for a static one. The words always come in the order `async fn static` |
 | `"text"` | one line of intent |
 | `example (args) => value # name` | a requirement: the call returns the value. Values are JSON; object keys need no quotes |
 | `example (args) => value after (args) # name` | the call changes its arguments: they are as listed after it. A function that returns nothing shows `=> "$undefined" after (...)` |
 | `example (args) throws "text"` | the call throws, and the message contains the text |
+| `example new (ctor args) . (args) => value` | an instance method: `new Class(ctor args).method(args)` returns the value, on a fresh receiver. `after` and `throws` work as above; `after` lists the method's arguments |
 | `observed ...` | the same forms, recorded from the code: what it did, not what it should do |
 | `rule name: <predicate>` | kept and printed. Rules are not evaluated yet |
 | `hold` | reserved for sync |
@@ -100,7 +113,8 @@ How it works: decompile writes a copy of each source file with one added call at
 
 Limits:
 
-- It sees only code that Node's own module loader loads through `import`: ESM sources, TypeScript sources Node type-strips, and CommonJS sources that are imported. Tested on Node 22, 23 and 25. A `require()` from a CommonJS test file is not recorded (on Node 25 a `require()` inside an imported CommonJS module is). Test runners that transform sources themselves, such as Vitest and Jest, record nothing. The run still works; pass `--no-record` to skip the overhead.
+- It sees only code that Node's own module loaders load: through `import` (ESM sources, TypeScript sources Node type-strips, and CommonJS sources that are imported; tested on Node 22, 23 and 25) and through `require()` of a `.js` or `.cjs` file (tested on Node 25). A `require()` of a `.ts` file is not recorded. Test runners that transform sources themselves, such as Vitest and Jest, record nothing. The run still works; pass `--no-record` to skip the overhead.
+- A class's constructor arguments are recorded as well, and become receivers for its instance methods.
 - Only arguments are recorded, never results or other state.
 - An arrow function with a destructured or rest parameter is not recorded. A generator's arguments are recorded at its first `next()`.
 - Recorded argument values end up in `.arc` files as `observed` lines. If tests pass secrets (keys, tokens, passwords) as arguments, run with `--no-record`.
@@ -120,7 +134,7 @@ After a refactor or a regeneration, `openarc decompile --check` asks: did behavi
 | `removed` | the `.arc` file has a function the code no longer exports |
 | `new` | the code exports a function the `.arc` file lacks |
 
-It prints one line per finding that is not `preserved`, then `checked N functions: preserved P, changed C, failing F, unrunnable U, removed R, new W`. With `--json`: `{ ok, summary, items: [{ file, fn, kind, args?, was?, now?, why? }] }`. The exit code is 0 when nothing changed, failed or was removed, else 1. `unrunnable` and `new` alone do not fail.
+It prints one line per finding that is not `preserved` (an instance method's call as `new Inventory(10).add("apple", 2)`), then `checked N functions: preserved P, changed C, failing F, unrunnable U, removed R, new W`. With `--json`: `{ ok, summary, items: [{ file, fn, kind, args?, receiver?, was?, now?, why? }] }`. The exit code is 0 when nothing changed, failed or was removed, else 1. `unrunnable` and `new` alone do not fail.
 
 To accept a `changed` observation, run `openarc decompile` (it re-records the line) or edit or promote the line. A pass shows that the code agrees on these inputs only: finitely many inputs do not prove two versions equal.
 
@@ -131,7 +145,8 @@ A module whose source and test mapping are unchanged is not run again, and the s
 A run that executes a module checks every `example` line and re-records the `observed` ones: on the arguments of the existing observed lines plus the inputs derived now. Each observation whose result differs from the line that was in the file prints `<file>: <fn>(<args>) changed: was <old>, now <new>`, and the summary counts them. A reused module runs nothing and keeps its status.
 
 ## Limits
-- Only exported functions. Methods and classes are skipped.
+- Only exported functions and the public methods of exported classes. Getters, setters, methods assigned to a prototype (`X.prototype.f = ...`) and function-valued class fields are not listed.
+- An instance method's receiver is built only from literal constructor arguments or recorded ones; a constructor that needs a class instance or a function gets none.
 - An untyped JavaScript function that no test or other code calls with literals gets no observations, unless `--run-tests` records its arguments from the tests.
 - Results longer than 600 characters of JSON are not kept as observations.
 - An `.arc` file written before `observed` existed has recorded lines as `example`: they now count as requirements.
