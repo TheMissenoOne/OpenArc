@@ -36,6 +36,7 @@ import { parseCodeOutput } from "./output-format.ts";
 import { setupCommand } from "./setup.ts";
 import { serveMcp } from "./mcp.ts";
 import { view } from "./view.ts";
+import { PDL_DIR, overall, pct, pdlCheck, pdlFormat, pdlShow, pdlStatus, pdlSync, type PdlRow } from "./pdlsync.ts";
 
 const MESSAGES: Record<string, string> = {
   "OARC-W001": "'@openarc:' text that is not a valid marker",
@@ -325,6 +326,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>] [--no-record]] [--fresh] [--json] | decompile --report|--todo [--json] | decompile --check [dirs...] [--out=<dir>] [--rule-inputs <n>] [--json]
        openarc arc status [<module>|<module.fn>] [--json] | arc prompt <module.fn> [--json] | arc accept <module.fn> [--file <path>] [--json] | arc compile <module.fn>|<module>|--stale [--json]
        openarc view [<module>] [--once] [--width <n>] [--out=<dir>]
+       openarc pdl status [<feature>|<id>] [--json] | pdl check [--json] | pdl show <id> [--json] | pdl sync <ids...>|--all | pdl format [--check] [files...]
        openarc arch [dirs...] [--check] [--json] | concept [--check] [--json]
        openarc status [--json] [--part <name>] [--goal <name>]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
@@ -481,6 +483,73 @@ async function viewCmd(root: string, ports: Ports, argv: string[]): Promise<numb
   if (!(await loadConfig(ports))) return 1; // its checks and compiles print the sandbox notice themselves
   const ctx = { ports, root, out, request: (p: engine.Project | null, ids: string[]) => request(root, p, ids), log: (l: string) => console.error(l) };
   return view(ctx, { once: argv.includes("--once"), cli: [process.execPath, ...process.execArgv, process.argv[1]!], ...(args[0] ? { module: args[0] } : {}), ...(width ? { width } : {}) });
+}
+
+/** One `pdl status` row: `Checkout.confirm: in step, design 12% of code`. */
+const pdlLine = (r: PdlRow) =>
+  `${r.id}: ${r.status}${r.linked ? "" : ", not linked"}${r.missing ? `, missing ${r.missing.join(", ")}` : ""}${r.ratio !== undefined ? `, design ${pct(r.ratio)} of code` : ""}`;
+
+/** `openarc pdl status|check|show|sync|format`: the design language in arc/features (src/pdl.ts, src/pdlsync.ts). No
+ *  model. status and show are reports (exit 0); check exits 1 on an error; sync refuses (1) when its files have one;
+ *  format --check exits 1 when a file would change. */
+async function pdlCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  const flags = rest.filter((a) => a.startsWith("--")), args = rest.filter((a) => !a.startsWith("--"));
+  const allowed: Record<string, string[]> = { status: ["--json"], check: ["--json"], show: ["--json"], sync: ["--all"], format: ["--check"] };
+  const bad = !allowed[sub ?? ""] || flags.some((f) => !allowed[sub!]!.includes(f))
+    || (sub === "status" && args.length > 1) || (sub === "check" && args.length) || (sub === "show" && args.length !== 1)
+    || (sub === "sync" && (flags.includes("--all") ? args.length > 0 : !args.length));
+  if (bad) return console.error(`openarc: bad-flag\n\n${USAGE}`), 2;
+  const json = flags.includes("--json");
+  if (sub === "status") {
+    const rows = await pdlStatus(ports, args[0]);
+    const count = (s: string) => rows.filter((r) => r.status === s).length, all = overall(rows);
+    const summary = { blocks: rows.length, new: count("new"), inStep: count("in step"), designAhead: count("design ahead"), codeAhead: count("code ahead"), bothChanged: count("both changed"), notLinked: rows.filter((r) => !r.linked).length, ...(all !== null ? { ratio: all } : {}) };
+    if (json) console.log(JSON.stringify({ summary, blocks: rows }));
+    else {
+      for (const r of rows) console.log(pdlLine(r));
+      console.log(`${summary.blocks} blocks: new ${summary.new}, in step ${summary.inStep}, design ahead ${summary.designAhead}, code ahead ${summary.codeAhead}, both changed ${summary.bothChanged}, not linked ${summary.notLinked}${all !== null ? `; design ${pct(all)} of code` : ""}`);
+    }
+    if (args[0] && !rows.length) console.error(`openarc: no feature or block ${args[0]} in ${PDL_DIR}`);
+    return 0;
+  }
+  if (sub === "check") {
+    const fs = await pdlCheck(ports), errors = fs.filter((f) => f.level === "error").length;
+    if (json) console.log(JSON.stringify({ ok: !errors, findings: fs }));
+    else {
+      for (const f of fs) console.log(`${f.level}: ${f.text}`);
+      console.log(`${errors} errors, ${fs.length - errors} notes`);
+    }
+    return errors ? 1 : 0;
+  }
+  if (sub === "show") {
+    const s = await pdlShow(ports, args[0]!);
+    if (!s) return console.error(`openarc: no block ${args[0]} in ${PDL_DIR}; \`openarc pdl status\` lists them`), 1;
+    if (json) return console.log(JSON.stringify(s)), 0;
+    console.log([
+      s.text, "",
+      ...(s.purpose.length ? ["purpose:", ...s.purpose.map((l) => `  ${l}`)] : []),
+      ...(s.assume ? ["assume:", s.assume] : []),
+      ...(s.uses.length || s.external.length ? [`uses: ${[...s.uses, ...s.external.map((x) => `${x} (external)`)].join(", ")}`] : []),
+      `source: ${s.source.length ? s.source.join(", ") : "none (not linked)"}${s.missing ? `; missing ${s.missing.join(", ")}` : ""}`,
+      ...(s.blocks ? [`blocks: ${s.blocks.join(", ")}`] : []),
+      `status: ${pdlLine(s).slice(s.id.length + 2)}`,
+    ].join("\n"));
+    return 0;
+  }
+  for (const txid of await recover(ports.fs)) console.error(fmt({ code: "OARC-W094", detail: txid }));
+  if (sub === "sync") {
+    const r = await pdlSync(ports, flags.includes("--all") ? "all" : args);
+    if ("refused" in r) return r.refused.forEach((l) => console.error(l)), 1;
+    console.log(`synced ${r.synced.length} blocks${r.synced.length ? `: ${r.synced.join(", ")}` : ""}`);
+    return 0;
+  }
+  const check = flags.includes("--check");
+  const r = await pdlFormat(ports, args.map((a) => relative(root, resolve(process.cwd(), a)).split(sep).join("/")), check);
+  for (const f of r.changed) console.log(check ? `${f}: not in canonical layout (openarc pdl format)` : `formatted ${f}`);
+  for (const f of r.broken) console.error(`${f}: not formatted, it has structural problems (openarc pdl check)`);
+  for (const f of r.missing) console.error(`${f}: no such file`);
+  return (check && r.changed.length) || r.broken.length || r.missing.length ? 1 : 0;
 }
 
 /** The source dirs on a command line, one spelling each: `./src/`, `src/` and `src` are `src`; `.` and `./` are `.`, the
@@ -968,6 +1037,7 @@ async function main(argv: string[]): Promise<number> {
   if (argv[0] === "decompile") return decompileCmd(root, ports, argv.slice(1));
   if (argv[0] === "arc") return arcCmd(root, ports, argv.slice(1));
   if (argv[0] === "view") return viewCmd(root, ports, argv.slice(1));
+  if (argv[0] === "pdl") return pdlCmd(root, ports, argv.slice(1));
   if (argv[0] === "arch" || argv[0] === "concept") return (argv[0] === "arch" ? archCmd : conceptCmd)(root, ports, argv.slice(1));
   if (argv[0] === "prompt" || argv[0] === "accept") return hostCmd(root, ports, argv);
   if (argv[0] === "guard") return guardCmd(root, ports, argv.slice(1));
