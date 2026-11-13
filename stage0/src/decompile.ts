@@ -257,17 +257,17 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
   }
   const arcOf = arcPaths(ctx, [...read.keys()], owner);
   let changed = 0;
-  const testRuns = new Map<string, boolean>();
+  const testRuns = new Map<string, { ok: boolean; why?: string }>();
   let rec: Awaited<ReturnType<typeof recorder>> | null = null;
   const fromTests = new Map<string, { args: Json[]; test: string }[]>(); // per "<file>\0<name>", in the order the tests ran
   /** Runs a test file once per decompile. With recording, a file that fails runs again without it, and that run decides:
    *  when the two disagree, what was recorded from it is dropped. */
-  const passes = async (file: string): Promise<boolean> => {
+  const passes = async (file: string): Promise<{ ok: boolean; why?: string }> => {
     if (testRuns.has(file)) return testRuns.get(file)!;
     const run = (env?: Record<string, string>) => langOf(file)!.runTest(ctx, file, env);
     let ok = await run(rec?.env(file));
     const got = rec ? await rec.collect() : new Map<string, Json[][]>();
-    if (rec && !ok && (ok = await run())) ctx.log(`${file}: recording changed the outcome of this test file; its result without recording counts, and nothing recorded from it is used`);
+    if (rec && !ok.ok && (ok = await run()).ok) ctx.log(`${file}: recording changed the outcome of this test file; its result without recording counts, and nothing recorded from it is used`);
     else for (const [k, lists] of got) (fromTests.get(k) ?? fromTests.set(k, []).get(k)!).push(...lists.map((args) => ({ args, test: file })));
     testRuns.set(file, ok);
     return ok;
@@ -372,7 +372,7 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
         let ran: "tested" | "failing" | null = null, testWhy: string | undefined;
         if (ctx.testCmd && mapped.length) {
           ran = "tested";
-          for (const t of mapped) if (!(await passes(t))) { ran = "failing"; testWhy = `${t} fails`; }
+          for (const t of mapped) { const got = await passes(t); if (!got.ok) { ran = "failing"; testWhy = `${t} fails${got.why ? `: ${got.why}` : ""}`; } }
         }
         why = failed ?? testWhy ?? why;
         const status: FnStatus = failed || ran === "failing" ? "failing" : ran ?? (reqs.length ? "specified" : x.fn.examples.length ? "observed" : x.fn.intent.length ? "described" : "bare");

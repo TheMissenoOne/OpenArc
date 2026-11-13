@@ -9,6 +9,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { parseArc, printArc } from "../src/arc.ts";
+import "../src/decompile.ts"; // first: the language modules import it back
+import type { DecompileCtx } from "../src/decompile.ts";
+import { langOf } from "../src/lang/lang.ts";
+import type { Ports } from "../src/types.ts";
 
 const MAIN = resolve("src/main.ts");
 const go = process.env.OPENARC_GO || (process.env.PATH ?? "").split(delimiter).map((d) => join(d, "go")).find((p) => existsSync(p));
@@ -220,6 +224,28 @@ try {
   const ran = JSON.parse(read(".openarc/decompile.json")) as typeof state;
   assert.deepStrictEqual(ran.modules["src/calc.go"]!.fns.IsEven, { ...ran.modules["src/calc.go"]!.fns.IsEven, status: "failing", why: "src/even_test.go fails" });
   rmSync(join(p.dir, "src/even_test.go"));
+  // a `go test` run that fails as a whole (a non-zero exit, no test or package failing) fails every test file of the
+  // module, with its first plain-text line as the reason; a go wrapper makes `go test -json` do that
+  write("fakego", `#!/bin/sh\nif [ "$1" = test ] && [ "$2" = -json ]; then echo "go: something broke before any test ran" >&2; exit 1; fi\nexec ${go} "$@"\n`);
+  spawnSync("chmod", ["+x", join(p.dir, "fakego")]);
+  r = oa(["decompile", "--run-tests"], undefined, { OPENARC_GO: join(p.dir, "fakego") });
+  assert.strictEqual(r.code, 0, r.out);
+  const whole = JSON.parse(read(".openarc/decompile.json")) as typeof state;
+  assert.deepStrictEqual([whole.modules["src/calc.go"]!.fns.Add!.status, (whole.modules["src/calc.go"]!.fns.Add as { why?: string }).why], ["failing", "src/calc_test.go fails: go: something broke before any test ran"]);
+  rmSync(join(p.dir, "fakego"));
+  // and one that times out (proc.run stubbed for `go test -json`), with "timed out after N s"
+  {
+    const run = (argv: string[], _ms: number, opts?: { cwd?: string; env?: Record<string, string>; stdin?: string }) => {
+      if (argv[1] === "test") return Promise.resolve({ code: null, stdout: "", timedOut: true });
+      const x = spawnSync(argv[0]!, argv.slice(1), { cwd: opts?.cwd ?? p.dir, env: { ...process.env, ...opts?.env }, encoding: "utf8", ...(opts?.stdin !== undefined ? { input: opts.stdin } : {}) });
+      return Promise.resolve({ code: x.status, stdout: x.stdout + (x.status ? x.stderr : ""), timedOut: false });
+    };
+    const fs = { read: async (rel: string) => { try { return readFileSync(join(p.dir, rel), "utf8"); } catch { return null; } } };
+    const ctx = { ports: { fs, proc: { run } } as unknown as Ports, root: p.dir, out: "arc/spec", dirs: ["src"], log: () => {}, request: () => { throw new Error("not here"); } } as unknown as DecompileCtx;
+    const goLang = langOf("x.go")!;
+    await goLang.read(ctx, ["src/calc.go"], []);
+    assert.deepStrictEqual(await goLang.runTest(ctx, "src/calc_test.go"), { ok: false, why: "timed out after 300 s" });
+  }
 
   // ── --check: preserved; a changed function is caught; a rule holds and a generated input breaks another
   r = oa(["decompile", "--check"]);

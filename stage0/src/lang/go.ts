@@ -266,15 +266,16 @@ function open(ctx: DecompileCtx, _texts: Map<string, string>): Runner {
 }
 
 // ── --run-tests: `go test -json ./...` once per module, a test file failing when one of its tests does ──
-const testRuns = new WeakMap<object, Map<string, Promise<{ failed: Set<string>; broken: Set<string> }>>>();
-async function runTest(ctx: DecompileCtx, file: string): Promise<boolean> {
+const testRuns = new WeakMap<object, Map<string, Promise<{ failed: Set<string>; broken: Set<string>; whole?: string }>>>();
+const TEST_MS = 300_000;
+async function runTest(ctx: DecompileCtx, file: string): Promise<{ ok: boolean; why?: string }> {
   const mod = await moduleOf(ctx.ports, file);
   const info = seen.get(file);
-  if (mod === null || !info) return false;
+  if (mod === null || !info) return { ok: false };
   const runs = testRuns.get(ctx) ?? testRuns.set(ctx, new Map()).get(ctx)!;
   const run = runs.get(mod) ?? runs.set(mod, (async () => {
     const { go, env } = await goTool(ctx.ports);
-    const r = await ctx.ports.proc.run([go, "test", "-json", "./..."], 300_000, { cwd: mod ? join(ctx.root, mod) : ctx.root, env });
+    const r = await ctx.ports.proc.run([go, "test", "-json", "./..."], TEST_MS, { cwd: mod ? join(ctx.root, mod) : ctx.root, env });
     // failed: "<package>\0<test>"; broken: a package that failed with no test failing (it did not build)
     const failed = new Set<string>(), pkgs = new Set<string>(), broken = new Set<string>();
     for (const line of r.stdout.split("\n")) {
@@ -286,11 +287,16 @@ async function runTest(ctx: DecompileCtx, file: string): Promise<boolean> {
       } catch { /* not a test event */ }
     }
     for (const p of pkgs) broken.delete(p);
-    return { failed, broken };
+    // the run failed as a whole: it timed out, or it exited non-zero with no test or package failing (go.mod unreadable,
+    // a toolchain error). Every test file of the module fails, with the reason: the first plain-text line
+    const whole = r.timedOut ? `timed out after ${TEST_MS / 1000} s`
+      : r.code !== 0 && !failed.size && !broken.size ? r.stdout.split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("{")) ?? `go test exited with code ${r.code}` : undefined;
+    return { failed, broken, ...(whole ? { whole } : {}) };
   })()).get(mod)!;
-  const { failed, broken } = await run;
+  const { failed, broken, whole } = await run;
+  if (whole) return { ok: false, why: whole };
   const dir = dirOf(relTo(mod, file)), pkg = dir ? `${info.module}/${dir}` : info.module;
-  return !broken.has(pkg) && !info.file.tests.some((t) => failed.has(`${pkg}\0${t}`));
+  return { ok: !broken.has(pkg) && !info.file.tests.some((t) => failed.has(`${pkg}\0${t}`)) };
 }
 
 // ── accept ──

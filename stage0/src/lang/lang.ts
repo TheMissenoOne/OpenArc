@@ -42,8 +42,8 @@ export interface Lang {
   read(ctx: DecompileCtx, sources: string[], tests: string[]): Promise<Read>;
   /** A sandbox staging `texts` (the source tree as ports.fs reads it). */
   open(ctx: DecompileCtx, texts: Map<string, string>): Runner;
-  /** Runs one test file (--run-tests); env: added to its environment. */
-  runTest(ctx: DecompileCtx, file: string, env?: Record<string, string>): Promise<boolean>;
+  /** Runs one test file (--run-tests); env: added to its environment. why: a reason for a failure beyond "it fails". */
+  runTest(ctx: DecompileCtx, file: string, env?: Record<string, string>): Promise<{ ok: boolean; why?: string }>;
   locate(ctx: Omit<DecompileCtx, "dirs">, file: string, text: string, name: string): Promise<Located | undefined>;
   /** The reply is not a body: it repeats the declaration. */
   notBody(file: string, body: string, name: string): boolean;
