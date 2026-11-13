@@ -135,4 +135,4 @@ A run that executes a module checks every `example` line and re-records the `obs
 - An untyped JavaScript function that no test or other code calls with literals gets no observations, unless `--run-tests` records its arguments from the tests.
 - Results longer than 600 characters of JSON are not kept as observations.
 - An `.arc` file written before `observed` existed has recorded lines as `example`: they now count as requirements.
-- Sync and compile don't read `.arc` files yet. Today they are the output of decompile and a readable map of the code.
+- `openarc sync` and `openarc compile` don't read `.arc` files. `openarc arc` does: an edit to a function's examples reaches its body. See [[Arc Sync]].

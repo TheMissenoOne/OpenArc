@@ -15,6 +15,7 @@
 - [[Agent Sync]]
 - [[Host Agent Mode]]
 - [[Decompile]]
+- [[Arc Sync]]
 - [[Levels]]
 - [[CLI Reference]]
 - [[Bootstrap]]
