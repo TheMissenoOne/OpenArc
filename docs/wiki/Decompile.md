@@ -9,7 +9,7 @@ openarc decompile --todo [--json]
 openarc decompile --check [dirs...] [--out=<dir>] [--json]
 ```
 
-`dirs` are the source directories (default `src`). Run it from the folder that holds `package.json`. The project does not need to install `open-arc`: without it, the sandbox runs the example runner of the `openarc` you called (not on the `container` isolation tier).
+`dirs` are the source directories (default `src`). Run it from the folder that holds `package.json`. To have Claude Code, Codex or OpenCode do the decompile workflow and fill in intents, run `openarc setup` first: its `openarc-specs` skill teaches the agent the levels and the steps. See [[Setup]]. The project does not need to install `open-arc`: without it, the sandbox runs the example runner of the `openarc` you called (not on the `container` isolation tier).
 
 ## What it recovers
 

@@ -32,6 +32,7 @@ import { LINT_USAGE, lintCommand } from "./lint.ts";
 import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools, type TierChoice } from "./isolation.ts";
 import { guardHook, hostPorts, hostPrompt, hostRefusal } from "./host.ts";
 import { parseCodeOutput } from "./output-format.ts";
+import { setupCommand } from "./setup.ts";
 
 const MESSAGES: Record<string, string> = {
   "OARC-W001": "'@openarc:' text that is not a valid marker",
@@ -313,6 +314,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc status [--json] [--part <name>] [--goal <name>]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
        openarc prompt <id> [--json] | accept <id> [--file <path>] [--json] | guard [files...] [--json] | guard --hook
+       openarc setup [--agents claude,codex,opencode] [--agent-root <dir>] [--dry-run] [--yes] [--remove] [--json]
        ${LINT_USAGE}`;
 
 /** What git doesn't need from .openarc/: adds the lines that are missing. True when it wrote. */
@@ -521,6 +523,12 @@ async function statusCmd(ports: Ports, argv: string[]): Promise<number> {
   const x = only.part ? r.parts.find((p) => p.name === only.part) : r.goals.find((g) => g.name === only.goal);
   if (!x) return console.error(only.part ? `openarc: no part ${only.part} in ${ARCH_FILE}` : `openarc: no goal ${only.goal} in ${CONCEPT_FILE}`), 1;
   return console.log(json ? JSON.stringify(x) : statusDetail(x, s)), 0;
+}
+
+/** `openarc setup`: install the skills, the guard hook and AGENTS.md section for this project's agents (src/setup.ts).
+ *  Run in the project folder itself, not findRoot's: any folder can be made an OpenArc project. */
+function setupCmd(argv: string[]): Promise<number> {
+  return setupCommand(process.cwd(), argv, JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n", USAGE);
 }
 
 /** `openarc adopt` and `openarc sync [--watch] [--brief] [--json] [--no-model]` (src/sync.ts). */
@@ -870,6 +878,7 @@ async function main(argv: string[]): Promise<number> {
   if (argv[0] === "prompt" || argv[0] === "accept") return hostCmd(root, ports, argv);
   if (argv[0] === "guard") return guardCmd(root, ports, argv.slice(1));
   if (argv[0] === "status") return statusCmd(ports, argv.slice(1));
+  if (argv[0] === "setup") return setupCmd(argv.slice(1));
   if (argv[0] === "lint") { // spec rules, offline: no model, no sandbox (src/lint.ts)
     const args = argv.slice(1).map((a, i, all) => (/[/\\]|\.tsx?$/.test(a) && all[i - 1] !== "--profile" && all[i - 1] !== "--format" ? relative(root, resolve(process.cwd(), a)).split(sep).join("/") : a));
     return lintCommand(ports, request(root, null, []), args, { out: (l) => console.log(l), err: (l) => console.error(l), message: (c) => MESSAGES[c] ?? "" });

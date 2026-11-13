@@ -2,6 +2,7 @@
 
 - [[Home]]
 - [[Getting Started]]
+- [[Setup]]
 - [[Code First]]
 - [[Writing Specs]]
 - [[Your own palette|Palette]]
