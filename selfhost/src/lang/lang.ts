@@ -1,12 +1,13 @@
 // The language seam: what decompile.ts, arcsync.ts and levels.ts need from a language. One implementation per
-// language (lang/ts.ts for TypeScript and JavaScript), picked per file by extension. Everything else stays
-// language-neutral.
+// language (lang/ts.ts for TypeScript and JavaScript, lang/go.ts for Go), picked per file by extension. Everything else
+// stays language-neutral.
 import type { Ports } from "../types.ts";
 import type { ArcFn, ArcType } from "../arc.ts";
 import type { DecompileCtx } from "../decompile.ts";
 import type { Observed } from "../engine.ts";
 import type { Edge } from "../levels.ts";
 import { tsLang } from "./ts.ts";
+import { goLang } from "./go.ts";
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 /** A call with literal arguments, where it is: `<file>:<1-based line>`. */
@@ -52,5 +53,5 @@ export interface Lang {
   imports(ports: Ports, files: Map<string, string>): Promise<Edge[]>;
 }
 
-export const LANGS: Lang[] = [tsLang];
+export const LANGS: Lang[] = [tsLang, goLang];
 export const langOf = (file: string): Lang | undefined => LANGS.find((l) => l.code.test(file));

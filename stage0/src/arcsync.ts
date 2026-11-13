@@ -71,8 +71,8 @@ export const failLine = (x: { example: string; got: string }): string =>
 const ruleText = (i: CheckItem): string => checkLine(i).split(`rule ${i.rule}: `)[1] ?? i.why ?? "";
 
 // ── the function in the source file (its language finds it: lang/lang.ts) ──
-/** parseCodeOutput, also taking a ```js / ```javascript fence: the body may be JavaScript. */
-const readReply = (raw: string) => parseCodeOutput(raw.replace(/^(\s*```)\s*(?:js|javascript|jsx|tsx|mjs|cjs)\s*$/gim, "$1"));
+/** parseCodeOutput, also taking a ```js / ```javascript / ```go fence: the body may be JavaScript or Go. */
+const readReply = (raw: string) => parseCodeOutput(raw.replace(/^(\s*```)\s*(?:js|javascript|jsx|tsx|mjs|cjs|go)\s*$/gim, "$1"));
 
 /** The file with `body` (statements) as the function's body: a block indented one step past the line the function
  *  starts on. Everything outside the body's braces (or its expression, for an arrow) is kept byte for byte. */

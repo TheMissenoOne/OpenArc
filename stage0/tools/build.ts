@@ -11,6 +11,8 @@ rmSync(`${root}/build/dist`, { recursive: true, force: true }); // keep earlier 
 execFileSync(process.execPath, [`${root}/node_modules/typescript/bin/tsc`, "-p", "tsconfig.build.json"], { stdio: "inherit" });
 // tsc compiles only .ts: the argument recorder decompile loads into test processes is plain .mjs, next to it in dist/core
 for (const f of readdirSync(`${root}/core`).filter((x) => x.endsWith(".mjs"))) cpSync(`${root}/core/${f}`, `${root}/build/dist/core/${f}`);
+// Go (src/lang/go.ts): the helper's sources, built on first use, and the harness template, at the same relative place
+cpSync(`${root}/lang-go`, `${root}/build/dist/lang-go`, { recursive: true });
 const tsVersion = JSON.parse(readFileSync(`${root}/node_modules/typescript/package.json`, "utf8")).version as string;
 writeFileSync(`${root}/build/package.json`, JSON.stringify({
   name: "open-arc",

@@ -1186,4 +1186,9 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
-process.exitCode = await main(process.argv.slice(2));
+// a missing toolchain a language needs (lang/go.ts NO_GO): one line, not a stack
+process.exitCode = await main(process.argv.slice(2)).catch((e: unknown) => {
+  if ((e as Error | null)?.name !== "OpenArcSetup") throw e;
+  console.error(`openarc: ${(e as Error).message}`);
+  return 1;
+});
