@@ -320,11 +320,29 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
           for (const a of x.inputs ?? []) origin(a, "types");
           for (const e of olds) if (!from.has(key(flat(e)))) from.set(key(flat(e)), had?.origins?.[key(flat(e))] ?? "kept");
           const required = new Set(reqs.map((e) => key(flat(e))));
-          const inputs = [...new Map([...olds.map(flat), ...[...seen.map((r) => r.args), ...calls.map((c) => c.args), ...(x.inputs ?? [])].flatMap(widen)].map((a) => [key(a), a])).values()].filter((a) => !required.has(key(a))).slice(0, 18);
+          let inputs = [...new Map([...olds.map(flat), ...[...seen.map((r) => r.args), ...calls.map((c) => c.args), ...(x.inputs ?? [])].flatMap(widen)].map((a) => [key(a), a])).values()].filter((a) => !required.has(key(a))).slice(0, 18);
           x.fn.examples = [...reqs, ...olds];
           if (!inputs.length && !reqs.length) why = x.cls && !receivers.length ? `no way to construct ${x.cls.name} found` : "no inputs: the parameter types say too little and no call passes literals";
           else {
-            const ran = await box.run(file, x.fn, [...reqs.map(flat), ...inputs]);
+            let ran = await box.run(file, x.fn, [...reqs.map(flat), ...inputs]);
+            if ("error" in ran && inputs.length) {
+              // the batch failed as a whole (an input that exits the process or hits the CPU limit): the requirements run
+              // alone and decide the status; then each other input runs on its own, so one bad input cannot take the rest
+              // down. What brought a lone input down is no throw a caller would see: it is dropped, with a line.
+              // ponytail: one sandbox run per input after a failed batch, at most the 18 inputs a function gets
+              const batch = ran.error, req = reqs.length ? await box.run(file, x.fn, reqs.map(flat)) : [];
+              if ("error" in req) ran = req;
+              else {
+                const each: Ran[] = [], good: Json[][] = [];
+                for (const a of inputs) {
+                  const one = await box.run(file, x.fn, [a]);
+                  if (!("error" in one)) good.push(a), each.push(one[0]!);
+                  else ctx.log(`${file}: ${isInstance(x.fn) ? callText(name, a.slice(1), a[0] as Json[]) : callText(name, a)} left out: ${firstLine(one.error)}`);
+                }
+                ran = good.length || reqs.length ? [...req, ...each] : { error: batch };
+                if (good.length || reqs.length) inputs = good;
+              }
+            }
             if ("error" in ran) { why = firstLine(ran.error); if (reqs.length) failed = `${printExample({ ...reqs[0]!, name: undefined })}: ${why}`; }
             else {
               failed = reqs.map((e, i) => unmet(e, ran[i]!)).find(Boolean);

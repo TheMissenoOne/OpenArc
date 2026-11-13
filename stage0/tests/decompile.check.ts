@@ -533,6 +533,26 @@ try {
     assert.ok(["b", "c", "d", "f"].every((n) => c.out.includes(`src/r.js: ${n} removed: the code no longer exports it\n`)), c.out);
     assert.match(p.run("arc", "status", "r.b").out, /^r\.b: unrunnable: the code no longer exports it$/m);
   }
+
+  // one input that ends the sandbox process: the requirements decide the status, the other inputs still run
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"exits","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/x.js", "/** @param {number} n */\nexport function guard(n) { if (n === 42) process.exit(3); return n + 1; }\n");
+    let r = p.run("decompile");
+    assert.ok(r.out.includes("src/x.js: guard(42) left out: OARC-E090 harness crashed (exit 3): no output\n"), r.out);
+    assert.strictEqual(p.get("arc/spec/x.arc"), 'module x from "src/x.js"\n\nfn guard(n: Num): Num\n  observed (0) => 1\n  observed (1) => 2\n  observed (-1) => 0\n');
+    assert.strictEqual(p.state().modules["src/x.js"]!.fns.guard!.status, "observed");
+    p.put("arc/spec/x.arc", p.get("arc/spec/x.arc").replace("  observed (1) => 2\n", "  example (1) => 2\n"));
+    r = p.run("decompile");
+    assert.deepStrictEqual(p.state().modules["src/x.js"]!.fns.guard, { status: "specified", tests: [], origins: { "[0]": "types", "[-1]": "types" } });
+    // a requirement that brings the process down itself still fails the function
+    p.put("arc/spec/x.arc", p.get("arc/spec/x.arc").replace("  example (1) => 2\n", "  example (1) => 2\n  example (42) => 43\n"));
+    r = p.run("decompile");
+    assert.strictEqual(p.state().modules["src/x.js"]!.fns.guard!.status, "failing");
+    assert.match(p.state().modules["src/x.js"]!.fns.guard!.why!, /^example \(.*: OARC-E090 harness crashed \(exit 3\): no output$/);
+  }
 } finally {
   for (const d of roots) rmSync(d, { recursive: true, force: true });
 }
