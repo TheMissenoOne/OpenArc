@@ -462,7 +462,7 @@ export const tsLang: Lang = {
       close: async () => { if (init) await engine.closeSandbox(ctx.ports, (await init).p); },
     };
   },
-  runTest: async (ctx, file, env) => (await ctx.ports.proc.run([...ctx.testCmd!, file], 300_000, { cwd: ctx.root, ...(env ? { env } : {}) })).code === 0,
+  runTest: async (ctx, file, env) => ({ ok: (await ctx.ports.proc.run([...ctx.testCmd!, file], 300_000, { cwd: ctx.root, ...(env ? { env } : {}) })).code === 0 }),
   locate: async (_ctx, file, text, name): Promise<Located | undefined> => {
     const sf = parse(file, text), node = locate(sf, name);
     if (!node) return undefined;

@@ -9,7 +9,7 @@ openarc arc accept <module.fn> [--file <path>] [--json]     # body on stdin
 openarc arc compile <module.fn>|<module>|--stale [--json]
 ```
 
-All four take `--out=<dir>` when the `.arc` files are not under `arc/spec`. A function is named `<module>.<fn>`, where the module is the name on the `.arc` file's `module` line (`deep.screen` for `arc/spec/deep/screen.arc`).
+All four take `--out=<dir>` when the `.arc` files are not under `arc/spec`. A function is named `<module>.<fn>`, where the module is the name on the `.arc` file's `module` line (`deep.screen` for `arc/spec/deep/screen.arc`, `lib.index.dec` for a module whose name decompile lengthened: see [[Decompile]]).
 
 ## Worked example
 

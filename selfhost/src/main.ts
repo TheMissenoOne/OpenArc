@@ -468,11 +468,15 @@ async function viewCmd(root: string, ports: Ports, argv: string[]): Promise<numb
   return view(ctx, { once: argv.includes("--once"), cli: [process.execPath, ...process.execArgv, process.argv[1]!], ...(args[0] ? { module: args[0] } : {}), ...(width ? { width } : {}) });
 }
 
+/** The source dirs on a command line, one spelling each: `./src/`, `src/` and `src` are `src`; `.` and `./` are `.`, the
+ *  project root. */
+const dirArgs = (argv: string[]) => argv.filter((a) => !a.startsWith("--")).map((d) => d.replace(/^(\.\/+)+/, "").replace(/\/+$/, "") || ".");
+
 /** `openarc decompile [dirs...]`: code to `.arc` specs, nothing in the code changes. `--report` and `--todo` read the last run.
  *  `--check` runs the `.arc` lines against the code and writes nothing: exit 1 when behaviour changed. */
 async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
   argv = argv.map((a, i) => (argv[i - 1] === "--rule-inputs" ? `--rule-inputs=${a}` : a)).filter((a) => a !== "--rule-inputs"); // `--rule-inputs <n>`
-  const flags = argv.filter((a) => a.startsWith("--")), dirs = argv.filter((a) => !a.startsWith("--")).map((d) => d.replace(/\/+$/, ""));
+  const flags = argv.filter((a) => a.startsWith("--")), dirs = dirArgs(argv);
   const known = /^--(report|todo|check|json|fresh|no-record|run-tests(=.+)?|out=.+|rule-inputs=\d+)$/;
   if (flags.some((f) => !known.test(f)) || dirs.some((d) => d.startsWith("/") || d.split("/").includes(".."))) {
     console.error(`openarc: bad-flag\n\n${USAGE}`);
@@ -525,7 +529,7 @@ async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise
 /** `openarc arch [dirs...] [--check] [--json]`: the parts, which part uses which, and the packages, derived from the real
  *  imports and checked against them (src/levels.ts). A later derive only adds. */
 async function archCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
-  const flags = argv.filter((a) => a.startsWith("--")), dirs = argv.filter((a) => !a.startsWith("--")).map((d) => d.replace(/\/+$/, ""));
+  const flags = argv.filter((a) => a.startsWith("--")), dirs = dirArgs(argv);
   if (flags.some((f) => f !== "--check" && f !== "--json") || dirs.some((d) => d.startsWith("/") || d.split("/").includes(".."))) {
     console.error(`openarc: bad-flag\n\n${USAGE}`);
     return 2;

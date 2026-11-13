@@ -104,6 +104,9 @@ the files that import the edited one.)
 - Recording arguments from test runs (`--run-tests`) is not supported: Go inputs come from literal calls and types only.
 - `--run-tests` maps by test file, as JavaScript does: a file fails when one of its tests fails, and every test file of
   a package that does not build fails.
+  A run that times out (after 300 s), or exits non-zero with no test or package failing, fails every test file of its
+  module, and each function's `why` gives the reason: `<test file> fails: <first plain-text line of the output>`, or
+  `<test file> fails: timed out after 300 s`.
 - A receiver is built from a composite literal with literal fields or the zero value only; a type whose methods need a
   constructor (`NewT(...)`) to set unexported state gets observations on the zero value, which may say little.
 - Embedded struct fields (which encoding/json flattens into the parent) are not in the `type` line.
