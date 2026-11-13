@@ -185,7 +185,7 @@ export const handshakeSpec = arc.defineRegion<Handshake>({
   intent: [
     "One step of the handshake state machine; pure. start (from idle): phase sent, send hello with our supported versions.",
     "hello (idle or sent): the highest version both sides support -> phase ready with it, send ack; none in common -> phase failed, error 'version-mismatch', send reject 'version-mismatch'.",
-    "ack (sent): a version we support -> ready; otherwise failed + reject, as for hello. reject (any phase but failed): failed with its reason, send nothing.",
+    "ack (sent): a version we support -> ready; otherwise failed + reject, as for hello. reject (idle or sent): failed with its reason, send nothing.",
     "Anything else (an ack while idle, any event once ready or failed) changes nothing and sends nothing.",
   ],
   examples: [
@@ -197,56 +197,64 @@ export const handshakeSpec = arc.defineRegion<Handshake>({
     { name: "ack for a version we never offered", args: [{ phase: "sent", version: null, error: null }, { type: "ack", version: 7 }, [1, 2]], expected: { state: { phase: "failed", version: null, error: "version-mismatch" }, send: [{ type: "reject", reason: "version-mismatch" }] } },
     { name: "the peer rejects us", args: [{ phase: "sent", version: null, error: null }, { type: "reject", reason: "busy" }, [1]], expected: { state: { phase: "failed", version: null, error: "busy" }, send: [] } },
     { name: "ready ignores a late hello", args: [{ phase: "ready", version: 2, error: null }, { type: "hello", versions: [1] }, [1, 2]], expected: { state: { phase: "ready", version: 2, error: null }, send: [] } },
+    { name: "ready ignores a reject", args: [{ phase: "ready", version: 2, error: null }, { type: "reject", reason: "busy" }, [1, 2]], expected: { state: { phase: "ready", version: 2, error: null }, send: [] } },
   ],
 });
 
 /** @deprecated Bundled palette is deprecated and frozen since 0.9.0; write your own concepts (see Palette wiki: Building your own palette). */
 // @openarc:begin p2p.handshake
 export const handshake: Handshake = (state, event, supported) => {
-  let newState: HsState = { ...state };
-  let send: HsMessage[] = [];
   switch (event.type) {
-      case 'start':
-        if (state.phase === 'idle') {
-          newState.phase = 'sent';
-          send = [{ type: 'hello', versions: supported }];
+    case 'start':
+      if (state.phase === 'idle') {
+        return {
+          state: { ...state, phase: 'sent' },
+          send: [{ type: 'hello', versions: supported }]
+        };
+      }
+      break;
+    case 'hello':
+      if (state.phase === 'idle' || state.phase === 'sent') {
+        const commonVersions = event.versions.filter(v => supported.includes(v));
+        if (commonVersions.length > 0) {
+          const highestCommonVersion = Math.max(...commonVersions);
+          return {
+            state: { ...state, phase: 'ready', version: highestCommonVersion },
+            send: [{ type: 'ack', version: highestCommonVersion }]
+          };
+        } else {
+          return {
+            state: { ...state, phase: 'failed', error: 'version-mismatch' },
+            send: [{ type: 'reject', reason: 'version-mismatch' }]
+          };
         }
-        break;
-      case 'hello':
-        if (state.phase === 'idle' || state.phase === 'sent') {
-          const commonVersions = event.versions.filter(v => supported.includes(v));
-          if (commonVersions.length > 0) {
-            const version = Math.max(...commonVersions);
-            newState.phase = 'ready';
-            newState.version = version;
-            send = [{ type: 'ack', version }];
-          } else {
-            newState.phase = 'failed';
-            newState.error = 'version-mismatch';
-            send = [{ type: 'reject', reason: 'version-mismatch' }];
-          }
+      }
+      break;
+    case 'ack':
+      if (state.phase === 'sent') {
+        if (supported.includes(event.version)) {
+          return {
+            state: { ...state, phase: 'ready', version: event.version },
+            send: []
+          };
+        } else {
+          return {
+            state: { ...state, phase: 'failed', error: 'version-mismatch' },
+            send: [{ type: 'reject', reason: 'version-mismatch' }]
+          };
         }
-        break;
-      case 'ack':
-        if (state.phase === 'sent') {
-          if (supported.includes(event.version)) {
-            newState.phase = 'ready';
-            newState.version = event.version;
-          } else {
-            newState.phase = 'failed';
-            newState.error = 'version-mismatch';
-            send = [{ type: 'reject', reason: 'version-mismatch' }];
-          }
-        }
-        break;
-      case 'reject':
-        if (state.phase !== 'failed') {
-          newState.phase = 'failed';
-          newState.error = event.reason;
-        }
-        break;
-    }
-  return { state: newState, send: send };
+      }
+      break;
+    case 'reject':
+      if (state.phase === 'idle' || state.phase === 'sent') {
+        return {
+          state: { ...state, phase: 'failed', error: event.reason },
+          send: []
+        };
+      }
+      break;
+  }
+  return { state, send: [] };
 };
 // @openarc:end p2p.handshake
 

@@ -677,9 +677,9 @@
       "file": "src/palette/p2p.ts",
       "symbol": "handshake",
       "ownership": "compiler",
-      "hash": "sha256:eb03543d3d562df8d920c7da47916f5f7c0227dcae3cf5566616878a3a82e46b",
-      "specHash": "sha256:ed7dc27ddc4d83b0117978b23ad73670688766ab412bc422a6f22cfaf6838063",
-      "fingerprint": "sha256:5754dd318b5556bceb2529f8e2eccac4482a486aa8c76cdb1617c2490a7c2528",
+      "hash": "sha256:bdc26e5c7301f67d764982a457b6efeddb7bc6f77f1ca17fbb3fcea4e618fd1d",
+      "specHash": "sha256:48bf20638312da3db4e20d5d60f35fac30359e50de9abd58d126905a858c59bb",
+      "fingerprint": "sha256:8744245b16cb33cad73e6f59e59de1ab245b519d630af1a05ba194377c062149",
       "provenance": {
         "source": "generated",
         "backend": "q14",
@@ -691,9 +691,13 @@
         "verifiedBy": [
           "tsc",
           "static",
-          "examples:8/8"
+          "examples:9/9"
         ],
-        "at": "2026-11-05T01:37:05.484Z"
+        "tokens": {
+          "prompt": 1143,
+          "completion": 464
+        },
+        "at": "2026-11-10T05:25:07.660Z"
       }
     },
     "p2p.peerTable": {
