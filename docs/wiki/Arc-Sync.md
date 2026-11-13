@@ -67,11 +67,11 @@ Prints what a writer needs: the instruction line, the `.arc` signature, the `typ
 
 ## `arc accept`
 
-Reads a body (statements, no signature; a code fence is dropped) from stdin or `--file`, and replaces the body of the function in its source file. The function is found the way decompile finds exports: `function f`, `const f = <fn>`, `export default <fn>`, `exports.f = <fn>`. An arrow with an expression body gets a block body. The new body is indented one step past the line the function starts on. Everything outside the body stays byte for byte.
+Reads a body (statements, no signature; a code fence is dropped) from stdin or `--file`, and replaces the body of the function in its source file. The function is found the way decompile finds exports: `function f`, `const f = <fn>`, `export default <fn>`, `exports.f = <fn>`; in Go, `func F` or `func (r T) M` ([[Languages]]). An arrow with an expression body gets a block body. The new body is indented one step past the line the function starts on. Everything outside the body stays byte for byte.
 
 Then it checks, without writing anything yet:
 
-1. The file still parses, and for a TypeScript file the type check adds no error to it (the program decompile builds: the project's `tsconfig.json`, or its defaults).
+1. The file still parses, and for a TypeScript file the type check adds no error to it (the program decompile builds: the project's `tsconfig.json`, or its defaults). For a Go file, `go build` and `go vet` on its package add no error ([[Languages]]).
 2. Every `example` line holds in the sandbox, `after (...)` and `throws` included.
 
 When both pass, the file and the function's entry in `.openarc/decompile.json` are written in one transaction. The entry becomes `specified`, as decompile records a function whose examples all hold. On a failure the file is not touched, the problems are printed one per line (`example (3) => 9: the code returns 12`, `TS2322 line 5: ...`), and the exit code is 1. No model is called.

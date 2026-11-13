@@ -62,7 +62,7 @@ It never removes a `uses`, and prints one line per addition.
 
 Warnings, exit 0: a `uses` no import needs, and parts that use each other in a cycle (each group of parts listed once). `--json` prints `{ "ok", "violations", "warnings" }`.
 
-Imports are read with the TypeScript compiler's import scanner (static imports, re-exports, `require` and dynamic `import()`). A relative import is resolved to a source file as written, then with a code extension, then as `dir/index.*`; one that resolves to no source file (JSON, a test) is ignored. This is the one language-specific step: the file format and the checks know nothing about TypeScript.
+Imports are read with the TypeScript compiler's import scanner (static imports, re-exports, `require` and dynamic `import()`). A relative import is resolved to a source file as written, then with a code extension, then as `dir/index.*`; one that resolves to no source file (JSON, a test) is ignored. This is the one language-specific step: the file format and the checks know nothing about TypeScript. For Go, a package is a directory, an import inside the module points at a file of that directory, the standard library reads as `go:<path>` (like `node:fs`), and a third-party import belongs to the `go.mod` requirement it falls under ([[Languages]]).
 
 ## Concept
 

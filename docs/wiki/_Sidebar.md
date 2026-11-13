@@ -19,6 +19,7 @@
 - [[Rules]]
 - [[Arc Sync]]
 - [[Levels]]
+- [[Languages]]
 - [[CLI Reference]]
 - [[Bootstrap]]
 - [[Design Log]]

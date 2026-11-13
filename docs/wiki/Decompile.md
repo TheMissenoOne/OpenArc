@@ -1,6 +1,6 @@
 # Decompile
 
-`openarc decompile` reads a project's code into `.arc` spec files. It works on TypeScript and plain JavaScript, changes nothing in the code, writes no markers, and calls no model.
+`openarc decompile` reads a project's code into `.arc` spec files. It works on TypeScript, plain JavaScript and Go (one folder may mix them), changes nothing in the code, writes no markers, and calls no model. This page describes TypeScript and JavaScript; [[Languages]] has what differs for Go.
 
 ```
 openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>] [--no-record]] [--fresh] [--json]
