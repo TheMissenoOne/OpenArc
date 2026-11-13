@@ -34,6 +34,7 @@ import { arcAccept, arcCompile, arcPrompt, arcStatus, compileTargets, failLine }
 import { guardHook, hostPorts, hostPrompt, hostRefusal } from "./host.ts";
 import { parseCodeOutput } from "./output-format.ts";
 import { setupCommand } from "./setup.ts";
+import { view } from "./view.ts";
 
 const MESSAGES: Record<string, string> = {
   "OARC-W001": "'@openarc:' text that is not a valid marker",
@@ -312,6 +313,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc adopt [--brief] [--json] [--no-model] | sync [--watch] [--brief] [--json] [--no-model]
        openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>] [--no-record]] [--fresh] [--json] | decompile --report|--todo [--json] | decompile --check [dirs...] [--out=<dir>] [--rule-inputs <n>] [--json]
        openarc arc status [<module>|<module.fn>] [--json] | arc prompt <module.fn> [--json] | arc accept <module.fn> [--file <path>] [--json] | arc compile <module.fn>|<module>|--stale [--json]
+       openarc view [<module>] [--once] [--width <n>] [--out=<dir>]
        openarc arch [dirs...] [--check] [--json] | concept [--check] [--json]
        openarc status [--json] [--part <name>] [--goal <name>]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
@@ -452,6 +454,17 @@ async function arcCmd(root: string, ports: Ports, argv: string[]): Promise<numbe
   if (json) console.log(JSON.stringify({ ok: res.every((r) => r.ok), fns: res }));
   else for (const r of res) console.log(r.ok ? `compiled ${r.id} (attempt ${r.attempts})` : [`${r.id}: not compiled after ${r.attempts} attempts`, ...r.problems.map((l) => `  ${l}`)].join("\n"));
   return res.every((r) => r.ok) ? 0 : 1;
+}
+
+/** `openarc view [<module>] [--once] [--width <n>]`: the `.arc` spec and whether the code meets it, in the terminal
+ *  (src/view.ts). Checks and compiles run as `openarc arc status|compile` child processes. */
+async function viewCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
+  const wi = argv.indexOf("--width"), width = wi >= 0 ? Number(argv[wi + 1]) : undefined;
+  const out = argv.find((a) => a.startsWith("--out="))?.slice(6) ?? "arc/spec";
+  const args = argv.filter((a, i) => a !== "--once" && !a.startsWith("--out=") && (wi < 0 || (i !== wi && i !== wi + 1)));
+  if (args.length > 1 || args[0]?.startsWith("-") || (width !== undefined && !(Number.isInteger(width) && width >= 20))) return console.error(`openarc: bad-flag\n\n${USAGE}`), 2;
+  const ctx = { ports, root, out, request: (p: engine.Project | null, ids: string[]) => request(root, p, ids), log: (l: string) => console.error(l) };
+  return view(ctx, { once: argv.includes("--once"), cli: [process.execPath, ...process.execArgv, process.argv[1]!], ...(args[0] ? { module: args[0] } : {}), ...(width ? { width } : {}) });
 }
 
 /** `openarc decompile [dirs...]`: code to `.arc` specs, nothing in the code changes. `--report` and `--todo` read the last run.
@@ -932,6 +945,7 @@ async function main(argv: string[]): Promise<number> {
   if (argv[0] === "adopt" || argv[0] === "sync") return syncCmd(root, ports, argv);
   if (argv[0] === "decompile") return decompileCmd(root, ports, argv.slice(1));
   if (argv[0] === "arc") return arcCmd(root, ports, argv.slice(1));
+  if (argv[0] === "view") return viewCmd(root, ports, argv.slice(1));
   if (argv[0] === "arch" || argv[0] === "concept") return (argv[0] === "arch" ? archCmd : conceptCmd)(root, ports, argv.slice(1));
   if (argv[0] === "prompt" || argv[0] === "accept") return hostCmd(root, ports, argv);
   if (argv[0] === "guard") return guardCmd(root, ports, argv.slice(1));

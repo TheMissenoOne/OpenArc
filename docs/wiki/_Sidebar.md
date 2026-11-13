@@ -17,6 +17,7 @@
 - [[Decompile]]
 - [[Rules]]
 - [[Arc Sync]]
+- [[View]]
 - [[Levels]]
 - [[CLI Reference]]
 - [[Bootstrap]]
