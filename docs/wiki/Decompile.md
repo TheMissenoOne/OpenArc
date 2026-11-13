@@ -143,7 +143,7 @@ To accept a `changed` observation, run `openarc decompile` (it re-records the li
 
 ## Resuming
 
-A module whose source and test mapping are unchanged is not run again, and the state file is written after every module, so an interrupted run continues where it stopped. `--fresh` runs everything again.
+A module is not run again when nothing it depends on changed: its source text, its test mapping and the `--run-tests` command, the `example` and `rule` lines of its `.arc` file (an intent or `observed` edit does not count), and the text of the project files it imports, directly or through other files. The state file is written after every module, so an interrupted run continues where it stopped. `--fresh` runs everything again. Imports are followed as the language reads them: a dynamic `import()`, a tsconfig `paths` alias or a file outside the scanned dirs is not followed, and in Go an import names one file of the imported package, so a change to another file of a Go package does not re-run the modules that import it (`--fresh` does).
 
 A run that executes a module checks every `example` line and re-records the `observed` ones: on the arguments of the existing observed lines plus the inputs derived now. Each observation whose result differs from the line that was in the file prints `<file>: <fn>(<args>) changed: was <old>, now <new>`, and the summary counts them. A reused module runs nothing and keeps its status.
 

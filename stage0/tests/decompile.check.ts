@@ -254,14 +254,21 @@ test("probe", () => {
   assert.ok(!existsSync(join(dir, ".openarc/recorded")), "the recording is removed after the run");
   assert.ok(read(".openarc/.gitignore").split("\n").includes("recorded/"));
 
-  // what a person writes in the .arc file survives the next run, and an unchanged module is not run again
+  // what a person writes in the .arc file survives the next run. A new rule re-runs the module (an `example` or `rule`
+  // line is part of the reuse key; this used to expect `(unchanged)`, which left the new rule unchecked)
   write("arc/spec/survival.arc", read("arc/spec/survival.arc").replace('fn label(rain: Any): "heavy rain" | "clear"\n', 'fn label(rain: Any): "heavy rain" | "clear"\n  "Names the weather from the rain level."\n').replace('  observed (0) => "clear"\n', '  observed (0) => "clear"\n  rule known: result in "heavy rain" | "clear"\n'));
   const kept = read("arc/spec/survival.arc");
   assert.ok(kept.includes("rule known"));
   assert.ok(kept.includes('  observed (0) => "clear"\n  rule known'));
   r = oa("decompile", "--run-tests");
-  assert.match(r.out, /src\/survival\.js: 6 functions \(unchanged\)/);
-  assert.strictEqual(read("arc/spec/survival.arc"), kept);
+  assert.match(r.out, /^src\/survival\.js: 6 functions$/m);
+  const rerun = read("arc/spec/survival.arc"); // the observations re-recorded, the intent and rule as written
+  assert.ok(rerun.includes('fn label(rain: Any): "heavy rain" | "clear"\n  "Names the weather from the rain level."\n') && rerun.includes('  observed (0) => "clear"\n  rule known'), rerun);
+  // an intent edit alone is no reason to run again
+  write("arc/spec/survival.arc", rerun.replace('  "Names the weather from the rain level."\n', '  "Names the weather."\n'));
+  r = oa("decompile", "--run-tests");
+  assert.match(r.out, /^src\/survival\.js: 6 functions \(unchanged\)$/m);
+  write("arc/spec/survival.arc", rerun);
   r = oa("decompile", "--todo");
   assert.deepStrictEqual(r.out.trim().split("\n"), ["arc/spec/deep/screen.arc: resize", "arc/spec/deep/screen.arc: later", "arc/spec/deep/screen.arc: untouched", "arc/spec/survival.arc: broken", "arc/spec/survival.arc: reset"]);
   r = oa("decompile", "--report", "--json");
@@ -276,7 +283,10 @@ test("probe", () => {
   assert.ok(promoted.includes(`fn add(a: Num, b: Num): Num\n  "Adds two numbers."\n${line({ ...req, observed: undefined })}`));
   r = oa("decompile", "--run-tests");
   assert.strictEqual(r.code, 0, r.out);
-  assert.strictEqual(read("arc/spec/survival.arc"), promoted);
+  // the promotion re-runs the module: the example and the named line as written, the observations re-recorded
+  const repromoted = read("arc/spec/survival.arc");
+  assert.ok(repromoted.includes(`fn add(a: Num, b: Num): Num\n  "Adds two numbers."\n${line({ ...req, observed: undefined })}`) && repromoted.includes(line({ ...other, name: "sum" })), repromoted);
+  assert.strictEqual(repromoted.replace(/\nfn add[^]*?\n\n/, ""), promoted.replace(/\nfn add[^]*?\n\n/, ""));
   const status = () => (JSON.parse(read(".openarc/decompile.json")) as State).modules["src/survival.js"]!.fns.add!;
   assert.strictEqual(status().status, "specified");
   assert.match(r.out, /specified 1, observed 1,/);
@@ -386,6 +396,42 @@ try {
     assert.match(r.out, /^src\/x\.js: 1 functions$/m);
     assert.match(p.run("decompile", "src/").out, /^src\/x\.js: 1 functions \(unchanged\)$/m);
     assert.match(p.run("decompile", "src").out, /^src\/x\.js: 1 functions \(unchanged\)$/m);
+  }
+
+  // the reuse key: an `example` or `rule` line written in the .arc file, and a file the module imports, re-run it
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"key","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/k.js", "export const K = 2;\n");
+    p.put("src/mid.js", 'import { K } from "./k.js";\nexport const k = () => K;\n');
+    p.put("src/m.js", 'import { k } from "./mid.js";\n/** @param {number} n */\nexport const dbl = (n) => n * k();\n');
+    assert.strictEqual(p.run("decompile").code, 0);
+    const dbl = () => p.state().modules["src/m.js"]!.fns.dbl!;
+    const spec = p.get("arc/spec/m.arc");
+    assert.ok(spec.includes("  observed (1) => 2\n"), spec);
+    // a wrong example is checked, not reused as "specified"
+    p.put("arc/spec/m.arc", spec.replace("  observed (1) => 2\n", "  example (1) => 2\n  example (3) => 7\n"));
+    let r = p.run("decompile");
+    assert.match(r.out, /^src\/m\.js: 1 functions$/m);
+    assert.deepStrictEqual([dbl().status, dbl().why], ["failing", "example (3) => 7: the code returns 6"]);
+    assert.match(p.run("decompile").out, /^src\/m\.js: 1 functions \(unchanged\)$/m);
+    // corrected, it is specified; a rule the code breaks makes it failing
+    p.put("arc/spec/m.arc", p.get("arc/spec/m.arc").replace("example (3) => 7", "example (3) => 6"));
+    p.run("decompile");
+    assert.strictEqual(dbl().status, "specified");
+    p.put("arc/spec/m.arc", p.get("arc/spec/m.arc") + "  rule big: result > 100\n");
+    p.run("decompile");
+    assert.strictEqual(dbl().status, "failing");
+    assert.match(dbl().why!, /^rule big: broken by/);
+    p.put("arc/spec/m.arc", p.get("arc/spec/m.arc").replace("  rule big: result > 100\n", ""));
+    p.run("decompile");
+    // a change two imports away re-runs it: the observations are of the code as it is now
+    p.put("src/k.js", "export const K = 3;\n");
+    r = p.run("decompile");
+    assert.match(r.out, /^src\/m\.js: 1 functions$/m);
+    assert.match(r.out, /^src\/m\.js: dbl\(-1\) changed: was -2, now -3$/m);
+    assert.deepStrictEqual([dbl().status, dbl().why], ["failing", "example (1) => 2: the code returns 3"]);
   }
 } finally {
   for (const d of roots) rmSync(d, { recursive: true, force: true });

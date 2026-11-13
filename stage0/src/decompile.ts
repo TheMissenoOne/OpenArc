@@ -196,13 +196,33 @@ async function recorder(ctx: DecompileCtx, instrumented: Map<string, string>, wa
   return { env, collect };
 }
 
+/** A module's requirement lines as its `.arc` file has them, per function: `example` and `rule` lines (not intent, not
+ *  `observed`). Part of the reuse key: editing one re-runs the module. */
+const requirements = (m: ArcModule | null): string =>
+  (m?.fns ?? []).map((f) => [f.name, ...f.examples.filter((e) => !e.observed).map(printExample), ...f.rules.map((r) => `rule ${r.name}: ${r.text}`)])
+    .filter((l) => l.length > 1).map((l) => l.join("\n")).sort().join("\0");
+
+/** The project files each source imports, directly or through others, from the imports its language reads (lang/lang.ts).
+ *  ponytail: what a language's `imports` resolves only: dynamic `import()`, tsconfig `paths` aliases and files outside the
+ *  scanned dirs are not followed, and a Go import names one file of the imported package (and none of the importer's own
+ *  package), so a change elsewhere in a Go package does not re-run its importers. */
+async function importClosure(ports: Ports, texts: Map<string, string>): Promise<(file: string) => string[]> {
+  const edges = (await Promise.all(LANGS.map((l) => { const mine = new Map([...texts].filter(([f]) => l.code.test(f))); return mine.size ? l.imports(ports, mine) : []; }))).flat().filter((e) => !e.external);
+  return (file) => {
+    const seen = new Set([file]);
+    for (let grew = true; grew;) { grew = false; for (const e of edges) if (seen.has(e.from) && !seen.has(e.to)) seen.add(e.to), grew = true; }
+    seen.delete(file);
+    return [...seen].sort();
+  };
+}
+
 /** The state, and how many re-recorded observations differ from the line that was in the file. */
 export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { changed: number }> {
   const { ports } = ctx;
   const { read, texts, instrumented } = await scan(ctx);
   const prev = JSON.parse((await ports.fs.read(STATE_FILE)) ?? "null") as DecompileState | null;
   const state: DecompileState = { version: 1, modules: {} };
-  const box = sandbox(ctx, texts);
+  const box = sandbox(ctx, texts), importsOf = await importClosure(ports, texts);
   let changed = 0;
   const testRuns = new Map<string, boolean>();
   let rec: Awaited<ReturnType<typeof recorder>> | null = null;
@@ -230,7 +250,8 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
       let old: ArcModule | null = null;
       try { old = before === null ? null : parseArc(before); } catch (e) { ctx.log(`${arcFile}: ${(e as Error).message}; left as it is`); state.modules[file] = prev?.modules[file] ?? { hash: "", arc: arcFile, fns: {}, skipped: {} }; continue; }
       const testsOf = (x: FoundFn) => x.tests;
-      const hash = sha(`${text}\0${m.found.map((x) => testsOf(x).join(",")).join(";")}\0${ctx.testCmd?.join(" ") ?? ""}`);
+      // the reuse key: the module's text, its test mapping and command, its requirement lines, the files it imports
+      const hash = sha([text, m.found.map((x) => testsOf(x).join(",")).join(";"), ctx.testCmd?.join(" ") ?? "", requirements(old), ...importsOf(file).map((f) => `${f}\n${texts.get(f)}`)].join("\0"));
       const known = prev?.modules[file];
       const reuse = !ctx.fresh && !!old && known?.hash === hash;
       const fns: Record<string, FnState> = {};
