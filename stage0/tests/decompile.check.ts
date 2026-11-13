@@ -30,6 +30,11 @@ import { instrument } from "../src/decompile.ts";
   // canonical order: an observation written before an example prints after it
   const loose = 'module a from "a.js"\n\nfn f(x: Num): Num\n  rule r: result > 0\n  observed (1) => 2\n  example (2) => 4\n  "Doubles."\n';
   assert.strictEqual(printArc(parseArc(loose)), 'module a from "a.js"\n\nfn f(x: Num): Num\n  "Doubles."\n  example (2) => 4\n  observed (1) => 2\n  rule r: result > 0\n');
+  // the `>` of an unquoted `=>` is no bracket: the parameters after a function type still split
+  const arrow = 'module a from "a.js"\n\nfn each(cb: (x: Num) => Void, n: Int, m: [Int]): Void\n';
+  assert.deepStrictEqual(parseArc(arrow).fns[0]!.params, [{ name: "cb", type: "(x: Num) => Void" }, { name: "n", type: "Int" }, { name: "m", type: "[Int]" }]);
+  assert.strictEqual(printArc(parseArc(arrow)), arrow);
+  assert.deepStrictEqual(parseArc('module a from "a.js"\n\nfn f(a: `x >> y`, b: Num>, c: Int): Void\n').fns[0]!.params.map((p) => p.name), ["a", "b", "c"]);
 }
 
 // ── pure: the instrumenter adds one recorder call per function, on the line it starts, and changes nothing else
@@ -249,14 +254,21 @@ test("probe", () => {
   assert.ok(!existsSync(join(dir, ".openarc/recorded")), "the recording is removed after the run");
   assert.ok(read(".openarc/.gitignore").split("\n").includes("recorded/"));
 
-  // what a person writes in the .arc file survives the next run, and an unchanged module is not run again
+  // what a person writes in the .arc file survives the next run. A new rule re-runs the module (an `example` or `rule`
+  // line is part of the reuse key; this used to expect `(unchanged)`, which left the new rule unchecked)
   write("arc/spec/survival.arc", read("arc/spec/survival.arc").replace('fn label(rain: Any): "heavy rain" | "clear"\n', 'fn label(rain: Any): "heavy rain" | "clear"\n  "Names the weather from the rain level."\n').replace('  observed (0) => "clear"\n', '  observed (0) => "clear"\n  rule known: result in "heavy rain" | "clear"\n'));
   const kept = read("arc/spec/survival.arc");
   assert.ok(kept.includes("rule known"));
   assert.ok(kept.includes('  observed (0) => "clear"\n  rule known'));
   r = oa("decompile", "--run-tests");
-  assert.match(r.out, /src\/survival\.js: 6 functions \(unchanged\)/);
-  assert.strictEqual(read("arc/spec/survival.arc"), kept);
+  assert.match(r.out, /^src\/survival\.js: 6 functions$/m);
+  const rerun = read("arc/spec/survival.arc"); // the observations re-recorded, the intent and rule as written
+  assert.ok(rerun.includes('fn label(rain: Any): "heavy rain" | "clear"\n  "Names the weather from the rain level."\n') && rerun.includes('  observed (0) => "clear"\n  rule known'), rerun);
+  // an intent edit alone is no reason to run again
+  write("arc/spec/survival.arc", rerun.replace('  "Names the weather from the rain level."\n', '  "Names the weather."\n'));
+  r = oa("decompile", "--run-tests");
+  assert.match(r.out, /^src\/survival\.js: 6 functions \(unchanged\)$/m);
+  write("arc/spec/survival.arc", rerun);
   r = oa("decompile", "--todo");
   assert.deepStrictEqual(r.out.trim().split("\n"), ["arc/spec/deep/screen.arc: resize", "arc/spec/deep/screen.arc: later", "arc/spec/deep/screen.arc: untouched", "arc/spec/survival.arc: broken", "arc/spec/survival.arc: reset"]);
   r = oa("decompile", "--report", "--json");
@@ -271,7 +283,10 @@ test("probe", () => {
   assert.ok(promoted.includes(`fn add(a: Num, b: Num): Num\n  "Adds two numbers."\n${line({ ...req, observed: undefined })}`));
   r = oa("decompile", "--run-tests");
   assert.strictEqual(r.code, 0, r.out);
-  assert.strictEqual(read("arc/spec/survival.arc"), promoted);
+  // the promotion re-runs the module: the example and the named line as written, the observations re-recorded
+  const repromoted = read("arc/spec/survival.arc");
+  assert.ok(repromoted.includes(`fn add(a: Num, b: Num): Num\n  "Adds two numbers."\n${line({ ...req, observed: undefined })}`) && repromoted.includes(line({ ...other, name: "sum" })), repromoted);
+  assert.strictEqual(repromoted.replace(/\nfn add[^]*?\n\n/, ""), promoted.replace(/\nfn add[^]*?\n\n/, ""));
   const status = () => (JSON.parse(read(".openarc/decompile.json")) as State).modules["src/survival.js"]!.fns.add!;
   assert.strictEqual(status().status, "specified");
   assert.match(r.out, /specified 1, observed 1,/);
@@ -348,5 +363,304 @@ test("probe", () => {
   assert.strictEqual(sources(), before.replace("a + b;", "a + b + 1;").replace("function reset(", "function refill("));
 } finally {
   rmSync(dir, { recursive: true, force: true });
+}
+
+// ── more projects: how the dirs are spelled, what triggers a re-run, colliding module names, kept blocks, the state file
+// across runs over different dirs, and a batch one bad input brings down
+const project = () => {
+  const root = mkdtempSync(join(resolve(".."), ".decompile-check-"));
+  const pipe = (input: string | undefined, ...args: string[]) => { const r = spawnSync(process.execPath, ["--no-warnings", MAIN, ...args], { cwd: root, encoding: "utf8", input }); return { code: r.status, out: r.stdout + r.stderr }; };
+  const run = (...args: string[]) => pipe(undefined, ...args);
+  const put = (f: string, t: string) => (mkdirSync(dirname(join(root, f)), { recursive: true }), writeFileSync(join(root, f), t));
+  const get = (f: string) => readFileSync(join(root, f), "utf8");
+  type St = { modules: Record<string, { arc: string; fns: Record<string, { status: string; tests: string[]; why?: string }> }> };
+  return { root, run, pipe, put, get, state: () => JSON.parse(get(".openarc/decompile.json")) as St };
+};
+const roots: string[] = [];
+try {
+  // `.`: a project with its code at the root, its test file beside it. Same paths as any other dir: no `./` prefix
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"flat","version":"1.0.0","private":true,"type":"module"}');
+    p.put("util.js", "export function half(n) { return n / 2; }\n");
+    p.put("util.test.js", 'import test from "node:test";\nimport assert from "node:assert";\nimport { half } from "./util.js";\ntest("h", () => assert.strictEqual(half(8), 4));\n');
+    let r = p.run("decompile", ".");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.strictEqual(p.get("arc/spec/util.arc"), 'module util from "util.js"\n\nfn half(n: Any): Num\n  observed (8) => 4\n');
+    assert.deepStrictEqual(p.state().modules["util.js"]!.fns.half, { status: "observed", tests: ["util.test.js"], origins: { "[8]": "call util.test.js:4" } });
+    r = p.run("decompile", "./");
+    assert.match(r.out, /^util\.js: 1 functions \(unchanged\)$/m);
+    // `./src/`, `src/` and `src` are one dir
+    p.put("src/x.js", "export const one = () => 1;\n");
+    r = p.run("decompile", "./src/");
+    assert.match(r.out, /^src\/x\.js: 1 functions$/m);
+    assert.match(p.run("decompile", "src/").out, /^src\/x\.js: 1 functions \(unchanged\)$/m);
+    assert.match(p.run("decompile", "src").out, /^src\/x\.js: 1 functions \(unchanged\)$/m);
+    // walking the root, build output, arc/ and node_modules are not read
+    p.put("dist/util.js", "export function half(n) { return 0; }\n");
+    p.put("node_modules/dep/index.js", "export const dep = () => 1;\n");
+    r = p.run("decompile", ".");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.deepStrictEqual(Object.keys(p.state().modules).sort(), ["src/x.js", "util.js"]);
+    // the arc commands reach a module at the root: status, a stale example, accept (a wrong body leaves the file as it
+    // was), and view
+    p.put("arc/spec/util.arc", p.get("arc/spec/util.arc").replace("  observed (8) => 4\n", "  example (8) => 4\n  example (3) => 1\n"));
+    r = p.run("arc", "status");
+    assert.strictEqual(r.code, 1, r.out);
+    assert.match(r.out, /^util\.half: stale: example \(3\) => 1: the code returns 1\.5$/m);
+    const util = p.get("util.js");
+    r = p.pipe("return n;", "arc", "accept", "util.half");
+    assert.strictEqual(r.code, 1, r.out);
+    assert.match(r.out, /^example \(8\) => 4: the code returns 8$/m);
+    assert.strictEqual(p.get("util.js"), util);
+    r = p.pipe("return Math.floor(n / 2);", "arc", "accept", "util.half");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.strictEqual(p.get("util.js"), "export function half(n) {\n  return Math.floor(n / 2);\n}\n");
+    r = p.run("arc", "status", "util");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /^util\.half: ok$/m);
+    r = p.run("view", "--once");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /^ok 1 {2}stale 0 {2}unrunnable 0 {2}no examples \d+$/m);
+  }
+
+  // the module boundary: a file the TypeScript parser itself cannot take (it overflows the stack) is skipped with the
+  // reason; the other modules are still read, the run exits 0, `--report` and `--check` say why
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"deep","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/deep.js", `export const f = (x) => x;\nf(${"[".repeat(3000)}${"]".repeat(3000)});\n`);
+    p.put("src/ok.js", "/** @param {number} n */\nexport const inc = (n) => n + 1;\n");
+    let r = p.run("decompile");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /^src\/deep\.js: skipped: Maximum call stack size exceeded$/m);
+    assert.match(r.out, /^src\/ok\.js: 1 functions$/m);
+    assert.match(r.out, /, modules skipped 1 \(`openarc decompile --report` says why\)$/m);
+    assert.match(p.run("decompile", "--report").out, /^src\/deep\.js: skipped: Maximum call stack size exceeded$/m);
+    p.put("arc/spec/deep.arc", 'module deep from "src/deep.js"\n\nfn f(x: Any): Any\n  observed (1) => 1\n');
+    r = p.run("decompile", "--check");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /^src\/deep\.js: f unrunnable: the module cannot be read: Maximum call stack size exceeded$/m);
+  }
+
+  // a recursive type alias from outside the project (a `.d.ts` file): printed by its name, with one `type` line
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"rec","version":"1.0.0","private":true,"type":"module"}');
+    p.put("tsconfig.json", '{"compilerOptions":{"strict":true,"allowImportingTsExtensions":true}}');
+    p.put("src/json.d.ts", "export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };\n");
+    p.put("src/j.ts", 'import type { Json } from "./json.d.ts";\nexport function wrap(x: Json): Json[] { return [x]; }\nexport function maybe(x?: Json): Json | undefined { return x; }\n');
+    const r = p.run("decompile");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.strictEqual(p.get("arc/spec/j.arc").split("\n\n").slice(0, 3).join("\n\n"), 'module j from "src/j.ts"\n\ntype Json = Bool | Null | Str | Num | [Json] | `{ [k: string]: Json; }`\n\nfn wrap(x: Json): [Json]');
+    assert.match(p.get("arc/spec/j.arc"), /^fn maybe\(x\?: Json\): Json\?$/m);
+  }
+
+  // the reuse key: an `example` or `rule` line written in the .arc file, and a file the module imports, re-run it
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"key","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/k.js", "export const K = 2;\n");
+    p.put("src/mid.js", 'import { K } from "./k.js";\nexport const k = () => K;\n');
+    p.put("src/m.js", 'import { k } from "./mid.js";\n/** @param {number} n */\nexport const dbl = (n) => n * k();\n');
+    assert.strictEqual(p.run("decompile").code, 0);
+    const dbl = () => p.state().modules["src/m.js"]!.fns.dbl!;
+    const spec = p.get("arc/spec/m.arc");
+    assert.ok(spec.includes("  observed (1) => 2\n"), spec);
+    // a wrong example is checked, not reused as "specified"
+    p.put("arc/spec/m.arc", spec.replace("  observed (1) => 2\n", "  example (1) => 2\n  example (3) => 7\n"));
+    let r = p.run("decompile");
+    assert.match(r.out, /^src\/m\.js: 1 functions$/m);
+    assert.deepStrictEqual([dbl().status, dbl().why], ["failing", "example (3) => 7: the code returns 6"]);
+    assert.match(p.run("decompile").out, /^src\/m\.js: 1 functions \(unchanged\)$/m);
+    // corrected, it is specified; a rule the code breaks makes it failing
+    p.put("arc/spec/m.arc", p.get("arc/spec/m.arc").replace("example (3) => 7", "example (3) => 6"));
+    p.run("decompile");
+    assert.strictEqual(dbl().status, "specified");
+    p.put("arc/spec/m.arc", p.get("arc/spec/m.arc") + "  rule big: result > 100\n");
+    p.run("decompile");
+    assert.strictEqual(dbl().status, "failing");
+    assert.match(dbl().why!, /^rule big: broken by/);
+    p.put("arc/spec/m.arc", p.get("arc/spec/m.arc").replace("  rule big: result > 100\n", ""));
+    p.run("decompile");
+    // a change two imports away re-runs it: the observations are of the code as it is now
+    p.put("src/k.js", "export const K = 3;\n");
+    r = p.run("decompile");
+    assert.match(r.out, /^src\/m\.js: 1 functions$/m);
+    assert.match(r.out, /^src\/m\.js: dbl\(-1\) changed: was -2, now -3$/m);
+    assert.deepStrictEqual([dbl().status, dbl().why], ["failing", "example (1) => 2: the code returns 3"]);
+  }
+
+  // colliding module names: each gets a longer one, the same whatever the order; the others keep theirs
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"twins","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/index.js", "/** @param {number} n */\nexport function inc(n) { return n + 1; }\n");
+    p.put("lib/index.js", "/** @param {number} n */\nexport function dec(n) { return n - 1; }\n");
+    p.put("src/a.js", "export const fromJs = () => 1;\n");
+    p.put("src/a.ts", "export const fromTs = (): number => 2;\n");
+    p.put("src/other.js", "export const other = () => 3;\n");
+    let r = p.run("decompile", "lib", "src");
+    assert.strictEqual(r.code, 0, r.out);
+    for (const l of ["lib/index.js: its .arc file is arc/spec/lib/index.arc: arc/spec/index.arc would be another module's too", "src/index.js: its .arc file is arc/spec/src/index.arc: arc/spec/index.arc would be another module's too", "src/a.js: its .arc file is arc/spec/a.js.arc: arc/spec/a.arc would be another module's too", "src/a.ts: its .arc file is arc/spec/a.ts.arc: arc/spec/a.arc would be another module's too"]) assert.ok(r.out.includes(`${l}\n`), r.out);
+    const heads = () => Object.fromEntries(Object.entries(p.state().modules).map(([f, m]) => [f, `${m.arc}: ${p.get(m.arc).split("\n")[0]}`]));
+    const want = {
+      "lib/index.js": 'arc/spec/lib/index.arc: module lib.index from "lib/index.js"', "src/index.js": 'arc/spec/src/index.arc: module src.index from "src/index.js"',
+      "src/a.js": 'arc/spec/a.js.arc: module a.js from "src/a.js"', "src/a.ts": 'arc/spec/a.ts.arc: module a.ts from "src/a.ts"', "src/other.js": 'arc/spec/other.arc: module other from "src/other.js"',
+    };
+    assert.deepStrictEqual(heads(), want);
+    assert.ok(!existsSync(join(p.root, "arc/spec/index.arc")) && !existsSync(join(p.root, "arc/spec/a.arc")));
+    // the other order, from scratch: the same files
+    rmSync(join(p.root, "arc"), { recursive: true });
+    rmSync(join(p.root, ".openarc"), { recursive: true });
+    assert.strictEqual(p.run("decompile", "src", "lib").code, 0);
+    assert.deepStrictEqual(heads(), want);
+    // a second run: each module keeps its file, nothing is lengthened again
+    r = p.run("decompile", "src", "lib");
+    assert.ok(!r.out.includes("would be another"), r.out);
+    assert.match(r.out, /^lib\/index\.js: 1 functions \(unchanged\)$/m);
+    // the longer names address the modules everywhere
+    p.put("arc/spec/lib/index.arc", p.get("arc/spec/lib/index.arc").replace("  observed (1) => 0\n", "  example (1) => 0\n"));
+    r = p.run("arc", "status", "lib.index");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /^lib\.index\.dec: ok$/m);
+    assert.match(p.run("arc", "status", "a.js").out, /^a\.js\.fromJs: no examples$/m);
+    const accept = spawnSync(process.execPath, ["--no-warnings", MAIN, "arc", "accept", "lib.index.dec"], { cwd: p.root, encoding: "utf8", input: "return n - 1;" });
+    assert.deepStrictEqual([accept.status, accept.stdout], [0, "accepted lib.index.dec\n"]);
+    assert.match(p.run("decompile", "src", "lib").out, /^lib\/index\.js: 1 functions$/m);
+    assert.ok(p.run("decompile", "--report").out.includes("lib/index.js: tested 0, failing 0, specified 1,"));
+    assert.ok(p.run("decompile", "--todo").out.split("\n").includes("arc/spec/lib/index.arc: dec"));
+    assert.strictEqual(p.run("decompile", "--check", "src", "lib").code, 0);
+    assert.strictEqual(p.run("arch", "src", "lib").code, 0);
+    assert.match(p.run("status").out, /^total: 5 modules, 5 functions/m);
+  }
+
+  // one dir at a time: the second run never takes (or reads as its own) the .arc file of a module from the first
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"steps","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/index.js", "/** @param {number} n */\nexport function inc(n) { return n + 1; }\n");
+    p.put("lib/index.js", "/** @param {number} n */\nexport function dec(n) { return n - 1; }\n");
+    assert.strictEqual(p.run("decompile", "src").code, 0);
+    const srcArc = p.get("arc/spec/index.arc");
+    const r = p.run("decompile", "lib");
+    assert.ok(r.out.includes("lib/index.js: its .arc file is arc/spec/lib/index.arc: arc/spec/index.arc would be another module's too\n"), r.out);
+    assert.strictEqual(p.get("arc/spec/index.arc"), srcArc);
+    assert.ok(p.get("arc/spec/lib/index.arc").startsWith('module lib.index from "lib/index.js"\n\nfn dec(n: Num): Num\n'));
+    // the state file keeps both dirs; a module whose source is gone leaves it, in a scanned dir or not
+    assert.deepStrictEqual(Object.keys(p.state().modules).sort(), ["lib/index.js", "src/index.js"]);
+    assert.match(p.run("decompile", "--report").out, /^src\/index\.js: tested 0, failing 0, specified 0, observed 1,/m);
+    p.put("lib/extra.js", "export const x = () => 1;\n");
+    p.run("decompile", "lib");
+    assert.deepStrictEqual(Object.keys(p.state().modules).sort(), ["lib/extra.js", "lib/index.js", "src/index.js"]);
+    rmSync(join(p.root, "lib/extra.js"));
+    rmSync(join(p.root, "src/index.js"));
+    p.run("decompile", "lib");
+    assert.deepStrictEqual(Object.keys(p.state().modules), ["lib/index.js"]);
+  }
+
+  // a function the code no longer exports: its block stays when it holds lines written by hand, else it goes
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"gone","version":"1.0.0","private":true,"type":"module"}');
+    const fn = (name: string, doc = "") => `/** ${doc}\n *  @param {number} n */\nexport function ${name}(n) { return n; }\n`;
+    p.put("src/r.js", fn("a", "Code comment a.") + fn("b") + fn("c") + fn("d", "Code comment d.") + fn("e") + fn("f"));
+    assert.strictEqual(p.run("decompile").code, 0);
+    const block = (name: string) => new RegExp(`\\nfn ${name}\\(n: Num\\): Num\\n(  .*\\n)*`).exec(p.get("arc/spec/r.arc"))?.[0];
+    p.put("arc/spec/r.arc", p.get("arc/spec/r.arc")
+      .replace(/(fn b\(n: Num\): Num\n)  observed/, "$1  example")
+      .replace("fn c(n: Num): Num\n", 'fn c(n: Num): Num\n  "Written by hand."\n')
+      .replace('  "Code comment d."\n', '  "Edited by hand."\n')
+      .replace("fn f(n: Num): Num\n", "fn f(n: Num): Num\n  hold\n"));
+    assert.strictEqual(p.run("decompile").code, 0);
+    const written = Object.fromEntries(["b", "c", "d", "f"].map((n) => [n, block(n)]));
+    assert.ok(Object.values(written).every(Boolean) && block("a") && block("e"), p.get("arc/spec/r.arc"));
+    p.put("src/r.js", p.get("src/r.js").replaceAll("export function", "function") + "export const keep = () => 1;\n");
+    const r = p.run("decompile");
+    for (const [n, kept] of [["a", false], ["b", true], ["c", true], ["d", true], ["e", false], ["f", true]] as const)
+      assert.ok(r.out.includes(`src/r.js: ${n} is not in the code; ${kept ? "its block stays in the .arc file: it has lines written by hand" : "its block is dropped from the .arc file: it had observations only"}\n`), r.out);
+    assert.deepStrictEqual(Object.fromEntries(["b", "c", "d", "f"].map((n) => [n, block(n)])), written);
+    assert.ok(!block("a") && !block("e") && p.get("arc/spec/r.arc").startsWith('module r from "src/r.js"\n\nfn keep(): Num\n'), p.get("arc/spec/r.arc"));
+    // --check and arc status say they are gone
+    const c = p.run("decompile", "--check");
+    assert.strictEqual(c.code, 1, c.out);
+    assert.ok(["b", "c", "d", "f"].every((n) => c.out.includes(`src/r.js: ${n} removed: the code no longer exports it\n`)), c.out);
+    assert.match(p.run("arc", "status", "r.b").out, /^r\.b: unrunnable: the code no longer exports it$/m);
+  }
+
+  // one input that ends the sandbox process: the requirements decide the status, the other inputs still run
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"exits","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/x.js", "/** @param {number} n */\nexport function guard(n) { if (n === 42) process.exit(3); return n + 1; }\n");
+    let r = p.run("decompile");
+    assert.ok(r.out.includes("src/x.js: guard(42) left out: OARC-E090 harness crashed (exit 3): no output\n"), r.out);
+    assert.strictEqual(p.get("arc/spec/x.arc"), 'module x from "src/x.js"\n\nfn guard(n: Num): Num\n  observed (0) => 1\n  observed (1) => 2\n  observed (-1) => 0\n');
+    assert.strictEqual(p.state().modules["src/x.js"]!.fns.guard!.status, "observed");
+    p.put("arc/spec/x.arc", p.get("arc/spec/x.arc").replace("  observed (1) => 2\n", "  example (1) => 2\n"));
+    r = p.run("decompile");
+    assert.deepStrictEqual(p.state().modules["src/x.js"]!.fns.guard, { status: "specified", tests: [], origins: { "[0]": "types", "[-1]": "types" } });
+    // a requirement that brings the process down itself still fails the function
+    p.put("arc/spec/x.arc", p.get("arc/spec/x.arc").replace("  example (1) => 2\n", "  example (1) => 2\n  example (42) => 43\n"));
+    r = p.run("decompile");
+    assert.strictEqual(p.state().modules["src/x.js"]!.fns.guard!.status, "failing");
+    assert.match(p.state().modules["src/x.js"]!.fns.guard!.why!, /^example \(.*: OARC-E090 harness crashed \(exit 3\): no output$/);
+  }
+  // openarc.config.json: invalid stops every command that runs code, as `openarc doctor` does; missing means the defaults.
+  // The sandbox notice goes to stderr once per command (stdout stays JSON), and the tier is part of the reuse key
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"cfg","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/x.js", "/** @param {number} n */\nexport function inc(n) { return n + 1; }\n");
+    assert.strictEqual(p.run("decompile").code, 0); // no config file: the defaults
+    const cfg = (isolation: string) => p.put("openarc.config.json", JSON.stringify({ version: 1, backends: { local: { provider: "openai", baseUrl: "http://127.0.0.1:8080/v1", model: "m", maxContextTokens: 8192 } }, sandbox: { isolation } }));
+    cfg("bwarp");
+    const doctor = p.run("doctor");
+    assert.strictEqual(doctor.code, 1);
+    for (const args of [["decompile"], ["decompile", "--check"], ["decompile", "--fresh", "--json"], ["arc", "status"], ["arc", "prompt", "x.inc"], ["arc", "compile", "x.inc"], ["view", "--once"], ["check", "x.inc", "--oracle", "y"], ["check", "--mutants"]])
+      assert.deepStrictEqual(p.run(...args), doctor, args.join(" "));
+    const split = (...args: string[]) => spawnSync(process.execPath, ["--no-warnings", MAIN, ...args], { cwd: p.root, encoding: "utf8" });
+    cfg("node");
+    for (const args of [["decompile", "--json"], ["decompile", "--check", "--json"], ["arc", "status", "--json"]]) {
+      const r = split(...args);
+      assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+      assert.strictEqual(r.stderr.match(/OARC-W046/g)?.length, 1, `${args.join(" ")}: ${r.stderr}`);
+      JSON.parse(r.stdout);
+    }
+    // a change of tier runs the module again
+    cfg("unsafe-none");
+    const r = p.run("decompile");
+    assert.match(r.out, /OARC-W047/);
+    assert.match(r.out, /^src\/x\.js: 1 functions$/m, r.out);
+    assert.match(p.run("decompile").out, /^src\/x\.js: 1 functions \(unchanged\)$/m);
+  }
+  // nested dirs name a file by the most specific one, whatever the order; a module line an earlier run wrote as
+  // `./src/a.js` still owns its file; the returned state counts the modules of other dirs too
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"nest","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/a.js", "/** @param {number} n */\nexport function inc(n) { return n + 1; }\n");
+    p.put("lib/b.js", "/** @param {number} n */\nexport function dec(n) { return n - 1; }\n");
+    assert.strictEqual(p.run("decompile", ".", "src").code, 0);
+    assert.deepStrictEqual([p.state().modules["src/a.js"]!.arc, p.state().modules["lib/b.js"]!.arc], ["arc/spec/a.arc", "arc/spec/lib/b.arc"]);
+    p.put("arc/spec/a.arc", p.get("arc/spec/a.arc").replace('from "src/a.js"', 'from "./src/a.js"').replace("observed (", "example ("));
+    const r = p.run("decompile", "src", "--json");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.strictEqual(p.state().modules["src/a.js"]!.arc, "arc/spec/a.arc");
+    assert.match(p.get("arc/spec/a.arc"), /^  example \(/m); // the requirement was read from the file it was in
+    assert.deepStrictEqual(Object.keys((JSON.parse(r.out.slice(r.out.indexOf("{"))) as { modules: object }).modules).sort(), ["lib/b.js", "src/a.js"]);
+  }
+} finally {
+  for (const d of roots) rmSync(d, { recursive: true, force: true });
 }
 console.log("decompile.check ok");

@@ -22,6 +22,8 @@ The project chooses its agents, the same way `package.json` chooses dependencies
 }
 ```
 
+No file means the built-in defaults. An invalid file stops `openarc doctor`, `backends`, `decompile`, `decompile --check`, `arc` and `view` with the reason and exit 1 (`compile` reports it as `OARC-E051`, exit 1), instead of falling back to the defaults: a misspelt `sandbox.isolation` never runs code under another tier. `--report`, `--todo`, `arch`, `concept` and `status` run no code and do not read it.
+
 ## Providers
 
 | `provider` | Talks to | Structured output | Fields |

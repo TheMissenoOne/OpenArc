@@ -28,7 +28,15 @@ export function makeProgram(root: string, files: string[]): ts.Program {
 // ── types, as `.arc` text ──
 const opaque = (text: string) => (text.length > 100 ? "Any" : `\`${text.replaceAll("`", "'")}\``);
 
-export function arcType(checker: ts.TypeChecker, t: ts.Type, inProject: (s: ts.Symbol) => boolean, depth = 0, top = false): string {
+/** open: the types being expanded now. lines: per recursive named type met inside its own expansion, its name and its
+ *  `type` line's text ("" while it is still being expanded); the module gets the lines. */
+export interface Rec { open: Set<ts.Type>; lines: Map<ts.Type, { name: string; text: string }> }
+const newRec = (): Rec => ({ open: new Set(), lines: new Map() });
+
+/** A type as `.arc` text. A named type of the project is printed by its name; any other type is expanded. One met again
+ *  inside its own expansion is recursive: when named, it is printed by its name and gets a `type` line in rec.lines,
+ *  else it is a backticked native type, as is anything nested deeper than 6. */
+export function arcType(checker: ts.TypeChecker, t: ts.Type, inProject: (s: ts.Symbol) => boolean, depth = 0, top = false, rec: Rec = newRec()): string {
   const f = t.flags;
   if (f & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) return "Any"; // a generic's type parameters are erased
   if (f & ts.TypeFlags.BooleanLiteral) return checker.typeToString(t);
@@ -40,21 +48,45 @@ export function arcType(checker: ts.TypeChecker, t: ts.Type, inProject: (s: ts.S
   if (f & (ts.TypeFlags.Void | ts.TypeFlags.Undefined)) return "Void";
   if (f & ts.TypeFlags.Null) return "Null";
   const named = t.aliasSymbol ?? (t.symbol && !(t.symbol.flags & (ts.SymbolFlags.TypeLiteral | ts.SymbolFlags.ObjectLiteral)) ? t.symbol : undefined);
-  if (!top && named && inProject(named) && /^[A-Za-z_$][\w$]*$/.test(named.name) && !(t as ts.TypeReference).typeArguments?.length && !t.aliasTypeArguments?.length) return named.name;
+  const plain = !!named && /^[A-Za-z_$][\w$]*$/.test(named.name) && !(t as ts.TypeReference).typeArguments?.length && !t.aliasTypeArguments?.length;
+  if (!top && plain && inProject(named!)) return named!.name;
+  // a type inside its own expansion (a recursive alias from outside the project, `type Json = ... | Json[]`), or one
+  // nested too deep: without this a union and an array recurse with no end
+  if (rec.lines.has(t)) return rec.lines.get(t)!.name;
+  if (rec.open.has(t)) {
+    if (!plain) return opaque(checker.typeToString(t));
+    rec.lines.set(t, { name: named!.name, text: "" });
+    return named!.name;
+  }
+  if (depth > 6) return opaque(checker.typeToString(t));
+  rec.open.add(t);
+  const text = expand(checker, t, inProject, depth, top, rec, named);
+  rec.open.delete(t);
+  const line = rec.lines.get(t);
+  if (!line) return text;
+  line.text = text;
+  return line.name;
+}
+
+function expand(checker: ts.TypeChecker, t: ts.Type, inProject: (s: ts.Symbol) => boolean, depth: number, top: boolean, rec: Rec, named: ts.Symbol | undefined): string {
+  const f = t.flags;
   if (t.isUnion()) {
     const parts = t.types.filter((x) => !(x.flags & ts.TypeFlags.Undefined));
     // boolean is the union true | false: print it as one type
-    const names = [...new Set(parts.map((x) => arcType(checker, x, inProject, depth)))];
+    let names = [...new Set(parts.map((x) => arcType(checker, x, inProject, depth, false, rec)))];
+    // `Json | undefined` is a new union of Json's members: a recursive type with exactly those keeps its name
+    const same = [...rec.lines].find(([r]) => r !== t && r.isUnion() && r.types.length === parts.length && r.types.every((x) => parts.includes(x)));
+    if (same) names = [same[1].name];
     const bools = names.includes("true") && names.includes("false") ? ["Bool", ...names.filter((n) => n !== "true" && n !== "false")] : names;
     const text = bools.join(" | ");
     return parts.length < t.types.length ? (bools.length === 1 ? `${text}?` : `(${text})?`) : text;
   }
-  if (checker.isArrayType(t)) return `[${arcType(checker, checker.getTypeArguments(t as ts.TypeReference)[0]!, inProject, depth + 1)}]`;
+  if (checker.isArrayType(t)) return `[${arcType(checker, checker.getTypeArguments(t as ts.TypeReference)[0]!, inProject, depth + 1, false, rec)}]`;
   const props = t.getProperties();
   if (f & ts.TypeFlags.Object && !t.getCallSignatures().length && !t.getConstructSignatures().length && !(t.symbol?.flags & ts.SymbolFlags.Class) && (top || !named) && depth < 3 && props.length && props.length <= 12) {
     const fields = props.map((s) => {
       const decl = s.valueDeclaration ?? s.declarations?.[0];
-      const type = decl ? arcType(checker, checker.getTypeOfSymbolAtLocation(s, decl), inProject, depth + 1) : "Any";
+      const type = decl ? arcType(checker, checker.getTypeOfSymbolAtLocation(s, decl), inProject, depth + 1, false, rec) : "Any";
       const optional = !!(s.flags & ts.SymbolFlags.Optional);
       return `${/^[A-Za-z_$][\w$]*$/.test(s.name) ? s.name : JSON.stringify(s.name)}${optional ? "?" : ""}: ${optional ? type.replace(/\?$/, "") : type}`;
     });
@@ -159,7 +191,7 @@ export function instrument(sf: ts.SourceFile, file: string, targets: { name: str
 }
 
 /** A function's `.arc` entry from its call signature, and the inputs its required parameter types allow. */
-function fromSignature(checker: ts.TypeChecker, inProject: (s: ts.Symbol) => boolean, sig: ts.Signature, name: string, decl: ts.Node, sf: ts.SourceFile): { fn: ArcFn; inputs: Json[][] | null } {
+function fromSignature(checker: ts.TypeChecker, inProject: (s: ts.Symbol) => boolean, sig: ts.Signature, name: string, decl: ts.Node, sf: ts.SourceFile, rec: Rec): { fn: ArcFn; inputs: Json[][] | null } {
   const paramTypes = sig.parameters.map((p) => checker.getTypeOfSymbolAtLocation(p, p.valueDeclaration ?? decl));
   const decls = sig.parameters.map((p) => p.valueDeclaration as ts.ParameterDeclaration | undefined);
   let ret = sig.getReturnType(), isAsync = false;
@@ -169,10 +201,10 @@ function fromSignature(checker: ts.TypeChecker, inProject: (s: ts.Symbol) => boo
     params: sig.parameters.map((p, i) => {
       const d = decls[i];
       const optional = !!d && checker.isOptionalParameter(d);
-      const type = arcType(checker, paramTypes[i]!, inProject);
+      const type = arcType(checker, paramTypes[i]!, inProject, 0, false, rec);
       return { name: d && ts.isIdentifier(d.name) ? p.name : `arg${i + 1}`, type: optional ? type.replace(/\?$/, "") : type, ...(optional && !d.dotDotDotToken ? { optional: true } : {}), ...(d?.dotDotDotToken ? { rest: true } : {}) };
     }),
-    returns: arcType(checker, ret, inProject),
+    returns: arcType(checker, ret, inProject, 0, false, rec),
     ...(isAsync ? { async: true } : {}),
     intent: commentOf(decl, sf), examples: [], rules: [],
   };
@@ -186,7 +218,7 @@ const hidden = (name: string, d: ts.Node | undefined) => /^(_|#)/.test(name) || 
 
 /** An exported class: a `type` line of its public data fields (when the checker knows any) and its public methods, each
  *  named `<Class>.<method>`. Inherited methods belong to the class that declares them. */
-function readClass(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: ts.Symbol) => boolean, name: string, sym: ts.Symbol, decl: ts.Node, out: { types: ArcType[]; found: Found[]; skipped: Record<string, string> }): void {
+function readClass(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: ts.Symbol) => boolean, name: string, sym: ts.Symbol, decl: ts.Node, out: { types: ArcType[]; found: Found[]; skipped: Record<string, string> }, rec: Rec): void {
   const cd = (sym.declarations ?? []).find((d): d is ts.ClassLikeDeclaration => ts.isClassLike(d));
   if (!cd) return;
   const fields = checker.getDeclaredTypeOfSymbol(sym).getProperties().flatMap((p) => {
@@ -194,7 +226,7 @@ function readClass(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: ts
     if (!d || p.flags & (ts.SymbolFlags.Method | ts.SymbolFlags.Accessor) || hidden(p.name, d)) return []; // a `#x` field's symbol is named `__#...`
     const t = checker.getTypeOfSymbolAtLocation(p, d);
     if (t.getCallSignatures().length) return []; // a function-valued field is behaviour, not data
-    const optional = !!(p.flags & ts.SymbolFlags.Optional), type = arcType(checker, t, inProject);
+    const optional = !!(p.flags & ts.SymbolFlags.Optional), type = arcType(checker, t, inProject, 0, false, rec);
     return [`${/^[A-Za-z_$][\w$]*$/.test(p.name) ? p.name : JSON.stringify(p.name)}${optional ? "?" : ""}: ${optional ? type.replace(/\?$/, "") : type}`];
   });
   if (fields.length) out.types.push({ name, type: `{ ${fields.join(", ")} }` });
@@ -214,14 +246,14 @@ function readClass(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: ts
     const sig = msym && checker.getTypeOfSymbolAtLocation(msym, m).getCallSignatures().at(-1);
     if (!msym || !sig) continue;
     const isStatic = !!(ts.getCombinedModifierFlags(m) & ts.ModifierFlags.Static);
-    const { fn, inputs } = fromSignature(checker, inProject, sig, full, m, sf);
+    const { fn, inputs } = fromSignature(checker, inProject, sig, full, m, sf, rec);
     out.found.push({ fn: isStatic ? { ...fn, static: true } : fn, symbol: msym, inputs, pos: m.getStart(sf), node: m, ...(isStatic ? {} : { cls }) });
   }
 }
 
 function readModule(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: ts.Symbol) => boolean): { types: ArcType[]; found: Found[]; skipped: Record<string, string> } {
   const out = { types: [] as ArcType[], found: [] as Found[], skipped: {} as Record<string, string> };
-  const { types, found, skipped } = out;
+  const { types, found, skipped } = out, rec = newRec();
   const mod = checker.getSymbolAtLocation(sf);
   // with `module.exports = { a() {} }` the exports are the object's properties; `module.exports = <function or class>`
   // is what Node's `import` calls `default`
@@ -237,17 +269,20 @@ function readModule(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: t
     const decl = sym.valueDeclaration ?? sym.declarations?.[0];
     if (!decl || decl.getSourceFile() !== sf) continue; // a re-export belongs to the module that declares it
     if (sym.flags & (ts.SymbolFlags.Interface | ts.SymbolFlags.TypeAlias) && !(sym.flags & ts.SymbolFlags.Value)) {
-      types.push({ name: expName, type: arcType(checker, checker.getDeclaredTypeOfSymbol(sym), inProject, 0, true) });
+      types.push({ name: expName, type: arcType(checker, checker.getDeclaredTypeOfSymbol(sym), inProject, 0, true, rec) });
       continue;
     }
-    if (sym.flags & ts.SymbolFlags.Class) { readClass(checker, sf, inProject, expName, sym, decl, out); continue; }
+    if (sym.flags & ts.SymbolFlags.Class) { readClass(checker, sf, inProject, expName, sym, decl, out, rec); continue; }
     const sigs = checker.getTypeOfSymbolAtLocation(sym, decl).getCallSignatures();
     if (!sigs.length) continue; // a constant
     if (!/^[A-Za-z_$][\w$]*$/.test(expName)) { skipped[expName] = "not a plain name"; continue; }
-    const { fn, inputs } = fromSignature(checker, inProject, sigs.at(-1)!, expName, decl, sf);
+    const { fn, inputs } = fromSignature(checker, inProject, sigs.at(-1)!, expName, decl, sf, rec);
     const node = (sym.declarations ?? [decl]).filter((d) => d.getSourceFile() === sf).map(fnOf).find(Boolean); // an overloaded function: the one with a body
     found.push({ fn, symbol: sym, inputs, pos: decl.getStart(sf), ...(node ? { node } : {}) });
   }
+  // the recursive types from outside the project the signatures name, one line each. ponytail: a name the module's own
+  // types already have keeps the module's line
+  for (const { name, text } of rec.lines.values()) if (!types.some((x) => x.name === name)) types.push({ name, type: text });
   return { types, found: found.sort((a, b) => a.pos - b.pos), skipped }; // source order: the file reads like the code
 }
 
@@ -279,50 +314,103 @@ function usesOf(checker: ts.TypeChecker, files: readonly ts.SourceFile[], rel: (
 }
 
 // ── the function in the source file (arc accept) ──
-/** The function `name` binds at the top level of `sf`, found the way decompile finds exports: `function f`,
- *  `const f = <fn>`, `export default <fn>`, `exports.f = <fn>` (and `module.exports.f`). */
-export function locate(sf: ts.SourceFile, name: string): ts.FunctionLikeDeclaration | undefined {
+const unwrap = (n: ts.Expression | undefined) => { while (n && ts.isParenthesizedExpression(n)) n = n.expression; return n; };
+const isExports = (n: ts.Expression, sf: ts.SourceFile) => /^(module\.)?exports$/.test(n.getText(sf));
+
+/** The class `name` binds at the top level of `sf`: `class C`, `const C = class`, `exports.C = class`, and for `default`
+ *  `export default class`, `export default C`, `module.exports = class` (or `= C`). ponytail: `export { C as D }`
+ *  renames are not followed. */
+function classOf(sf: ts.SourceFile, name: string): ts.ClassLikeDeclaration | undefined {
+  const named = (e: ts.Expression | undefined) => { const n = unwrap(e); return n && ts.isClassExpression(n) ? n : n && ts.isIdentifier(n) && n.text !== name ? classOf(sf, n.text) : undefined; };
   for (const st of sf.statements) {
-    if (ts.isFunctionDeclaration(st)) {
-      const isDefault = !!st.modifiers?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword);
-      if (st.body && (name === "default" ? isDefault : st.name?.text === name)) return st;
-    } else if (ts.isVariableStatement(st)) {
+    if (ts.isClassDeclaration(st) && (name === "default" ? !!st.modifiers?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword) : st.name?.text === name)) return st;
+    if (ts.isVariableStatement(st)) {
       const d = st.declarationList.declarations.find((v) => ts.isIdentifier(v.name) && v.name.text === name);
-      if (d) return fnOf(d);
-    } else if (ts.isExportAssignment(st) && !st.isExportEquals && name === "default") return fnOf(st);
+      const c = unwrap(d?.initializer);
+      if (c && ts.isClassExpression(c)) return c;
+    } else if (ts.isExportAssignment(st) && name === "default") { const c = named(st.expression); if (c) return c; }
     else if (ts.isExpressionStatement(st) && ts.isBinaryExpression(st.expression) && st.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
       const l = st.expression.left;
-      if (ts.isPropertyAccessExpression(l) && l.name.text === name && /^(module\.)?exports$/.test(l.expression.getText(sf))) {
-        const f = fnOf(st.expression);
-        if (f) return f;
-      }
+      const hit = name === "default" ? isExports(l, sf) && l.getText(sf) === "module.exports" : ts.isPropertyAccessExpression(l) && l.name.text === name && isExports(l.expression, sf);
+      const c = hit ? named(st.expression.right) : undefined;
+      if (c) return c;
     }
   }
   return undefined;
 }
 
+/** The function `name` binds at the top level of `sf`, found the way decompile finds exports: `function f`,
+ *  `const f = <fn>`, `export default <fn>`, `exports.f = <fn>` (and `module.exports.f`), a property of
+ *  `module.exports = { f() {} }`, and a method `C.m` (instance or static) of a class classOf finds. */
+export function locate(sf: ts.SourceFile, name: string): ts.FunctionLikeDeclaration | undefined {
+  const dot = name.indexOf(".");
+  if (dot > 0) {
+    // ponytail: an instance and a static method with the same name: the first in the class is found
+    const m = classOf(sf, name.slice(0, dot))?.members.find((x) => ts.isMethodDeclaration(x) && !!x.body && !!x.name && !ts.isComputedPropertyName(x.name) && x.name.text === name.slice(dot + 1));
+    return m as ts.MethodDeclaration | undefined;
+  }
+  // what `exports` binds wins over a local declaration of the same name: it is the one decompile read
+  let inObject: ts.FunctionLikeDeclaration | undefined, local: ts.FunctionLikeDeclaration | undefined;
+  for (const st of sf.statements) {
+    if (ts.isFunctionDeclaration(st)) {
+      const isDefault = !!st.modifiers?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword);
+      if (st.body && (name === "default" ? isDefault : st.name?.text === name)) local ??= st;
+    } else if (ts.isVariableStatement(st)) {
+      const d = st.declarationList.declarations.find((v) => ts.isIdentifier(v.name) && v.name.text === name);
+      if (d) local ??= fnOf(d);
+    } else if (ts.isExportAssignment(st) && !st.isExportEquals && name === "default") return fnOf(st);
+    else if (ts.isExpressionStatement(st) && ts.isBinaryExpression(st.expression) && st.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const l = st.expression.left, r = unwrap(st.expression.right);
+      if (ts.isPropertyAccessExpression(l) && l.name.text === name && isExports(l.expression, sf)) {
+        const f = fnOf(st.expression);
+        if (f) return f;
+      } else if (r && ts.isObjectLiteralExpression(r) && l.getText(sf) === "module.exports") {
+        const p = r.properties.find((x) => x.name && (ts.isIdentifier(x.name) || ts.isStringLiteral(x.name)) && x.name.text === name);
+        inObject ??= p && fnOf(p);
+      }
+    }
+  }
+  return inObject ?? local;
+}
+
 const parse = (file: string, text: string) => ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, isTs(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS);
 
-/** Type and syntax errors the new text adds to the file. Syntax for every file; types for TypeScript, in the program
- *  decompile builds (the project's tsconfig, or its defaults). ponytail: only the edited file is checked, and errors are
- *  matched by message, so a caller elsewhere that the new body breaks is not reported. */
+/** Type and syntax errors the new text adds: syntax in the file; types (TypeScript) in the file and in every TypeScript
+ *  file that imports it, directly or through others, so a caller the new body breaks (a narrower inferred return, say) is
+ *  named. The program is the project's tsconfig files (or its defaults) with the file. Errors are matched by file and
+ *  message, at most 6 lines. ponytail: dependents come from the import specifiers (importsOf), so a file affected only
+ *  through a global declaration or a tsconfig `paths` alias is not checked; checking the whole program would catch those
+ *  at the cost of type-checking every file twice. */
 function tsProblems(root: string, file: string, after: string): string[] {
   const abs = resolve(root, file);
-  const before = makeProgram(root, [file]);
+  const cfg = ts.readConfigFile(`${root}/tsconfig.json`, ts.sys.readFile);
+  const project = ts.parseJsonConfigFileContent(cfg.config ?? {}, ts.sys, root).fileNames.filter((f) => !f.includes("/node_modules/"));
+  const before = makeProgram(root, [...new Set([file, ...project.map((f) => f.slice(root.length + 1))])]);
   const host = ts.createCompilerHost(before.getCompilerOptions());
   const get = host.getSourceFile.bind(host);
   host.getSourceFile = (f, lang, ...rest) => (resolve(f) === abs ? ts.createSourceFile(f, after, lang) : get(f, lang, ...rest));
-  const next = ts.createProgram([abs], before.getCompilerOptions(), host, before);
-  const diags = (p: ts.Program) => { const sf = p.getSourceFile(abs); return sf ? [...p.getSyntacticDiagnostics(sf), ...(isTs(file) ? p.getSemanticDiagnostics(sf) : [])] : []; };
-  const text = (d: ts.Diagnostic) => `TS${d.code} ${ts.flattenDiagnosticMessageText(d.messageText, " ")}`;
-  const had = new Map<string, number>();
-  for (const d of diags(before)) had.set(text(d), (had.get(text(d)) ?? 0) + 1);
-  return diags(next).flatMap((d) => {
-    const n = had.get(text(d)) ?? 0;
-    if (n) return had.set(text(d), n - 1), [];
-    const line = d.file && d.start !== undefined ? d.file.getLineAndCharacterOfPosition(d.start).line + 1 : 0;
-    return [text(d).replace(/^(TS\d+) /, `$1 line ${line}: `)];
+  const next = ts.createProgram(before.getRootFileNames(), before.getCompilerOptions(), host, before);
+  // the files that import `file`, transitively: the reverse of importsOf over the program's own files
+  const mine = new Map(before.getSourceFiles().filter((sf) => sf.fileName.startsWith(`${root}/`) && !sf.fileName.includes("/node_modules/")).map((sf) => [sf.fileName.slice(root.length + 1), sf.text]));
+  const edges = importsOf(mine).filter((e) => !e.external);
+  const deps = new Set([file]);
+  for (let grew = true; grew;) { grew = false; for (const e of edges) if (deps.has(e.to) && !deps.has(e.from)) deps.add(e.from), grew = true; }
+  const diags = (p: ts.Program) => [...deps].flatMap((f) => {
+    const sf = p.getSourceFile(resolve(root, f));
+    if (!sf) return [];
+    return [...(f === file ? p.getSyntacticDiagnostics(sf) : []), ...(isTs(f) ? p.getSemanticDiagnostics(sf) : [])];
   });
+  const text = (d: ts.Diagnostic) => `TS${d.code} ${ts.flattenDiagnosticMessageText(d.messageText, " ")}`;
+  const where = (d: ts.Diagnostic) => (d.file ? d.file.fileName.slice(root.length + 1) : "");
+  const had = new Map<string, number>();
+  for (const d of diags(before)) had.set(`${where(d)}\0${text(d)}`, (had.get(`${where(d)}\0${text(d)}`) ?? 0) + 1);
+  const added = diags(next).flatMap((d) => {
+    const k = `${where(d)}\0${text(d)}`, n = had.get(k) ?? 0;
+    if (n) return had.set(k, n - 1), [];
+    const line = d.file && d.start !== undefined ? d.file.getLineAndCharacterOfPosition(d.start).line + 1 : 0;
+    return [text(d).replace(/^(TS\d+) /, `$1 ${where(d) && where(d) !== file ? `${where(d)} ` : ""}line ${line}: `)];
+  });
+  return added.length > 6 ? [...added.slice(0, 6), `and ${added.length - 6} more`] : added;
 }
 
 /** The top-level statement holding `n`: the whole `export const f = (a) => ...;`, not only the arrow. */
@@ -370,7 +458,7 @@ export const tsLang: Lang = {
   code: CODE,
   isTest,
   label: (file) => (isTs(file) ? "TypeScript" : "JavaScript"),
-  forms: "function f, const f = <fn>, export default <fn> or exports.f = <fn>",
+  forms: "function f, const f = <fn>, export default <fn>, exports.f = <fn>, module.exports = { f() {} } or a class method C.m",
   indent: "  ",
   read: async (ctx: DecompileCtx, sources: string[], tests: string[]): Promise<Read> => {
     const program = makeProgram(ctx.root, [...sources, ...tests]);
@@ -410,16 +498,29 @@ export const tsLang: Lang = {
       close: async () => { if (init) await engine.closeSandbox(ctx.ports, (await init).p); },
     };
   },
-  runTest: async (ctx, file, env) => (await ctx.ports.proc.run([...ctx.testCmd!, file], 300_000, { cwd: ctx.root, ...(env ? { env } : {}) })).code === 0,
+  runTest: async (ctx, file, env) => ({ ok: (await ctx.ports.proc.run([...ctx.testCmd!, file], 300_000, { cwd: ctx.root, ...(env ? { env } : {}) })).code === 0 }),
   locate: async (_ctx, file, text, name): Promise<Located | undefined> => {
     const sf = parse(file, text), node = locate(sf, name);
     if (!node) return undefined;
-    const indent = /^[ \t]*/.exec(text.slice(text.lastIndexOf("\n", node.getStart(sf)) + 1))![0];
-    return { start: node.body!.getStart(sf), end: node.body!.getEnd(), indent, code: top(node).getText(sf) };
+    const lineOf = (n: ts.Node) => text.lastIndexOf("\n", n.getStart(sf)) + 1;
+    const indent = /^[ \t]*/.exec(text.slice(lineOf(node)))![0];
+    let code = top(node).getText(sf);
+    const box = node.parent;
+    if (ts.isClassLike(box) || ts.isObjectLiteralExpression(box)) {
+      // a method or an object's property: the class (or object) header, the function, the closing brace; `...` for the rest
+      const items: ts.NodeArray<ts.Node> = ts.isClassLike(box) ? box.members : box.properties, i = items.indexOf(node);
+      const more = `${indent}...`;
+      code = [text.slice(top(box).getStart(sf), items.pos).trimEnd(), ...(i > 0 ? [more] : []), text.slice(lineOf(node), node.getEnd()), ...(i < items.length - 1 ? [more] : []), "}"].join("\n");
+    }
+    return { start: node.body!.getStart(sf), end: node.body!.getEnd(), indent, code };
   },
   notBody: (file, body, name) => {
     const sf = parse(file, body);
-    return sf.statements.some((s) => ts.canHaveModifiers(s) && ts.getModifiers(s)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) || !!locate(sf, name);
+    if (sf.statements.some((s) => ts.canHaveModifiers(s) && ts.getModifiers(s)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) || !!locate(sf, name)) return true;
+    // a method's (or an object property's) declaration: read inside a class, the reply opens with that method
+    const first = parse(file, `class C {\n${body}\n}`).statements[0];
+    const m = first && ts.isClassDeclaration(first) ? first.members[0] : undefined;
+    return !!m && ts.isMethodDeclaration(m) && !!m.body && !!m.name && !ts.isComputedPropertyName(m.name) && m.name.text === name.split(".").at(-1);
   },
   problems: async (ctx, file, after) => tsProblems(ctx.root, file, after),
   imports: async (_ports: Ports, files) => importsOf(files),

@@ -11,6 +11,7 @@ run.
 | Files | `.ts .tsx .mts .cts .js .jsx .mjs .cjs` (not `.d.ts`) | `.go`, per module (the nearest `go.mod` above the file) |
 | Tests | `tests/`, `test/`, `__tests__/`, `*.test.*`, `*.spec.*` | `*_test.go` |
 | `openarc decompile` | yes | yes |
+| Runs code (examples, observations) in | every sandbox tier: Linux, macOS, Windows | `bwrap` (Linux), `sandbox-exec` (macOS); on Windows only `unsafe-none` (see [Isolation](#go)) |
 | `decompile --check`, `rule` lines | yes | yes |
 | `--run-tests` | each mapped test file with `node --test` (or your command) | `go test -json ./...` once per module; `--run-tests=<cmd>` is ignored |
 | Recorded arguments (`--run-tests`) | yes | no |
@@ -80,27 +81,51 @@ as the JavaScript harness. Each call has the same 5 s limit; since a goroutine c
 it ends its process and the remaining inputs run in a fresh one. A process that dies on an input (`os.Exit`, a fatal
 runtime error) reports that input as a throw and the rest still run.
 
-Isolation: the bwrap tier, with the same namespaces as for JavaScript (no network, own PID and IPC namespaces), a clean
-environment (`GOPROXY=off`, `GOFLAGS=-mod=readonly`, `GOTOOLCHAIN=local`, `CGO_ENABLED=0`), and `prlimit` on every
-process (CPU seconds and address space from the sandbox config). The sandbox sees the stage read-only, `/usr`, the Go
-root and the module cache read-only, a private `/tmp`, and one writable directory: the project's own build cache,
-`.openarc/go-build`, so what runs there never writes the user's cache. The first run in a project fills that cache
-(tens of seconds); later runs reuse it. Other tiers: `unsafe-none` runs `go test` unsandboxed when configured by that
-name; `node`, `sandbox-exec` and `container` refuse Go code with `OARC-E092`.
+Isolation, per platform:
+
+| Platform | Tier | Go code |
+|---|---|---|
+| Linux | `bwrap` | runs: no network, own PID and IPC namespaces, `prlimit` CPU seconds and address space on every process, only the stage, `/usr`, the Go root and module cache (read-only), a private `/tmp` and the build cache visible |
+| macOS | `sandbox-exec` | runs: no network, no writes but the build cache, a per-run temp dir and `/dev`, no file contents under your home directory but the stage, the Go root, the module cache, the build cache and that temp dir; `ulimit -t` CPU seconds on every process |
+| Windows, or any OS on the `node` or `container` tier | | refused with `OARC-E092`, printed once per run and kept as each function's reason; nothing runs |
+| any, configured | `unsafe-none` | runs `go test` as you, unsandboxed |
+
+Both sandboxes get a clean environment (`GOPROXY=off`, `GOFLAGS=-mod=readonly`, `GOTOOLCHAIN=local`,
+`CGO_ENABLED=0`), see the stage read-only, and write one directory: the project's own build cache, `.openarc/go-build`,
+so what runs there never writes the user's cache. The first run in a project fills that cache (tens of seconds); later
+runs reuse it.
+
+What `sandbox-exec` does not give that `bwrap` does: no address-space limit (macOS does not enforce `RLIMIT_AS`); no
+PID or IPC namespace (the code sees and can signal your other processes, and a process it leaves behind after a
+timeout keeps running until its CPU limit); files outside your home directory stay readable (`/etc`, `/opt`, other
+volumes), as in the JavaScript profile; the temp directory is `.openarc/go-tmp/<n>` on disk, removed after each run,
+not a private tmpfs.
+
+The node tier cannot confine a Go binary, so Go code needs `bwrap` or `sandbox-exec`. The refusal says how to proceed:
+`"sandbox": { "isolation": "unsafe-none" }` in `openarc.config.json` runs it with no sandbox at all, as you, with your
+files and your network. The next `openarc decompile` runs the module again without `--fresh`: a module where no
+sandbox could run a function is never reused. The message is printed once per run, and each function keeps a short
+form of it as its reason.
 
 ### `arc accept`
 
-The helper gives the function's body by byte offsets; the new body replaces exactly those bytes, indented with a tab,
+The helper gives the function's (or method's: `fn Counter.Inc` is `func (c *Counter) Inc` or `func (c Counter) Inc`) body by byte offsets; the new body replaces exactly those bytes, indented with a tab,
 and everything outside it stays byte for byte. Then `go build` and `go vet` run on the function's package in a staged
 copy of the module holding the new text (they compile, they run nothing), and only errors the new text adds count,
 printed as the compiler prints them: `src/calc.go:12:13: undefined: missing`. Then the examples and rules run as for
 every language. `arc prompt` names the language (`(Go)`) and shows the current Go function.
+Packages that import the edited one are not built: a Go signature is declared, never inferred from the body, so a
+new body cannot change what a caller compiles against. (TypeScript infers return types, so its accept also type checks
+the files that import the edited one.)
 
 ### Limits
 
 - Recording arguments from test runs (`--run-tests`) is not supported: Go inputs come from literal calls and types only.
 - `--run-tests` maps by test file, as JavaScript does: a file fails when one of its tests fails, and every test file of
   a package that does not build fails.
+  A run that times out (after 300 s), or exits non-zero with no test or package failing, fails every test file of its
+  module, and each function's `why` gives the reason: `<test file> fails: <first plain-text line of the output>`, or
+  `<test file> fails: timed out after 300 s`.
 - A receiver is built from a composite literal with literal fields or the zero value only; a type whose methods need a
   constructor (`NewT(...)`) to set unexported state gets observations on the zero value, which may say little.
 - Embedded struct fields (which encoding/json flattens into the parent) are not in the `type` line.

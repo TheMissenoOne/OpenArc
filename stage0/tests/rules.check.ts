@@ -141,12 +141,30 @@ const tree = (e: RuleExpr): string => {
   assert.deepStrictEqual(got[5], { rule: "eval", held: 0, broken: { args: [[1], 2], result: 2, after: [[1, 2], 2] }, error: "cannot evaluate: 2 has no field n" });
 }
 
+// ── a parameter named like a keyword: the keyword wins, the parameter is old.<name> / after.<name>, an error says so
+{
+  const fn: ArcFn = { name: "f", params: [{ name: "threw", type: "{ n: Num }" }, { name: "old", type: "Num" }], returns: "Num", intent: [], examples: [], rules: [
+    { name: "bare", text: "threw.n > 0" },
+    { name: "spelled", text: "old.threw.n > 0 and after.threw.n > 0 and old.old == 1" },
+    { name: "parse", text: "threw.n >" },
+    { name: "fine", text: "result > 0" },
+    { name: "other", text: "result.x > 0" },
+  ] };
+  const got = checkRules(fn, [], [{ args: [{ n: 1 }, 1], result: 2, threw: false }]);
+  const hint = "; the parameter threw is shadowed by the keyword threw: write old.threw for its value before the call, after.threw for after it";
+  assert.strictEqual(got[0]!.error, `cannot evaluate: false has no field n${hint}`);
+  assert.deepStrictEqual(got[1], { rule: "spelled", held: 1 });
+  assert.strictEqual(got[2]!.error, `cannot parse: expected a value, found the end at column 10${hint}`);
+  assert.deepStrictEqual(got[3], { rule: "fine", held: 1 });
+  assert.strictEqual(got[4]!.error, "cannot evaluate: 2 has no field x"); // names no shadowed parameter: no hint
+}
+
 // ── end to end: `openarc decompile --check` on a plain JavaScript project
 {
   const MAIN = resolve("src/main.ts");
   const dir = mkdtempSync(join(resolve(".."), ".rules-check-"));
   const write = (f: string, t: string) => (mkdirSync(dirname(join(dir, f)), { recursive: true }), writeFileSync(join(dir, f), t));
-  const oa = (...args: string[]) => { const r = spawnSync(process.execPath, ["--no-warnings", MAIN, ...args], { cwd: dir, encoding: "utf8" }); return { code: r.status, out: r.stdout + r.stderr }; };
+  const oa = (...args: string[]) => { const r = spawnSync(process.execPath, ["--no-warnings", MAIN, ...args], { cwd: dir, encoding: "utf8" }); return { code: r.status, out: r.stdout + r.stderr, json: r.stdout }; }; // json: stdout alone, since an isolation notice goes to stderr
   try {
     write("package.json", '{"name":"plain","version":"1.0.0","private":true}');
     // forgets the lower bound: no written example passes a negative number
@@ -168,7 +186,7 @@ fn clampPct(n: Num): Num
     assert.ok(held > 2 && held <= 52, r.out); // the two examples and at most 50 generated inputs
     assert.ok(!/proved|verified/.test(r.out));
     r = oa("decompile", "--check", "--rule-inputs", "3", "--json");
-    const report = JSON.parse(r.out) as { ok: boolean; summary: { held: number; broken: number }; items: { kind: string; rule?: string; inputs?: number }[] };
+    const report = JSON.parse(r.json) as { ok: boolean; summary: { held: number; broken: number }; items: { kind: string; rule?: string; inputs?: number }[] };
     assert.strictEqual(report.ok, false);
     assert.deepStrictEqual([report.summary.held, report.summary.broken], [1, 1]);
     assert.ok(report.items.find((i) => i.rule === "capped")!.inputs! <= 5);

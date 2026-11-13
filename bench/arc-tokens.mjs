@@ -38,24 +38,30 @@ function verdict(rows) {
   const excluded = steps.filter((s) => s.A?.arcError).map((s) => ({ step: s.A.step, why: s.A.arcError }));
   const kept = steps.filter((s) => s.A && s.B && !s.A.arcError);
   const t = (arm) => kept.reduce((n, s) => n + s[arm].prompt + s[arm].eval, 0);
-  const c = (arm) => kept.filter((s) => s[arm].correct).length;
-  const tokensA = t("A"), tokensB = t("B"), correctA = c("A"), correctB = c("B");
+  const c = (arm) => kept.filter((s) => s[arm].correct).length; // secondary, outside the rule
+  // a function-step: one exercise present after a step (row.heldOut has one entry per exercise added so far); correct if it passes all its held-out tests
+  const fsOk = (r) => Object.values(r.heldOut).filter((h) => h.allPass).length;
+  const f = (arm) => kept.reduce((n, s) => n + fsOk(s[arm]), 0);
+  // tolerance from the scenario: every step's function-steps, excluded ones included, 10% rounded down, at least 1
+  const fnSteps = steps.reduce((n, s) => n + Object.keys((s.B ?? s.A).heldOut).length, 0), tolerance = Math.max(1, Math.floor(fnSteps / 10));
+  const tokensA = t("A"), tokensB = t("B"), correctA = c("A"), correctB = c("B"), fnA = f("A"), fnB = f("B");
   const computable = !missing.length && kept.length > 0 && tokensB > 0;
-  const tokenOk = 10 * tokensA <= 7 * tokensB, correctOk = correctA >= correctB - 1; // integers: A <= 0.7 B
-  return { steps, kept, missing, excluded, tokensA, tokensB, correctA, correctB, ratio: tokensB ? tokensA / tokensB : null, tokenOk, correctOk,
+  const tokenOk = 10 * tokensA <= 7 * tokensB, correctOk = fnA >= fnB - tolerance; // integers: A <= 0.7 B
+  return { steps, kept, missing, excluded, tokensA, tokensB, correctA, correctB, fnA, fnB, fnSteps, tolerance, ratio: tokensB ? tokensA / tokensB : null, tokenOk, correctOk,
     result: !computable ? "not computable" : tokenOk && correctOk ? "supported" : "not supported" };
 }
 
 if (a.report) {
   const rows = readFileSync(a.report, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
   const v = verdict(rows);
-  const cell = (r) => r ? `${r.prompt} | ${r.eval} | ${r.calls} | ${r.correct ? "yes" : "no"} | ${(r.wallMs / 1000).toFixed(1)}` : "- | - | - | - | -";
-  console.log("| # | step | B in | B out | B calls | B correct | B s | A in | A out | A calls | A correct | A s |\n|---|---|---|---|---|---|---|---|---|---|---|---|");
+  const cell = (r) => r ? `${r.prompt} | ${r.eval} | ${r.calls} | ${Object.values(r.heldOut).filter((h) => h.allPass).length}/${Object.keys(r.heldOut).length} | ${r.correct ? "yes" : "no"} | ${(r.wallMs / 1000).toFixed(1)}` : "- | - | - | - | - | -";
+  console.log("| # | step | B in | B out | B calls | B fns correct | B step correct | B s | A in | A out | A calls | A fns correct | A step correct | A s |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const s of v.steps) console.log(`| ${(s.A ?? s.B).i} | ${(s.A ?? s.B).step}${s.A?.arcError ? " (excluded)" : ""} | ${cell(s.B)} | ${cell(s.A)} |`);
   console.log(`\nsteps counted ${v.kept.length}; missing ${v.missing.length ? v.missing.join(", ") : "none"}; excluded ${v.excluded.length ? v.excluded.map((e) => `${e.step}: ${e.why}`).join("; ") : "none"}`);
   console.log(`tokens (input + output): B ${v.tokensB}, A ${v.tokensA}, A/B ${v.ratio === null ? "-" : v.ratio.toFixed(3)}`);
-  console.log(`correct steps: B ${v.correctB}, A ${v.correctA}`);
-  console.log(`rule: A/B <= 0.70 ${v.tokenOk ? "yes" : "no"}; A correct >= B correct - 1 ${v.correctOk ? "yes" : "no"}`);
+  console.log(`correct function-steps: B ${v.fnB}, A ${v.fnA} (tolerance ${v.tolerance}: 10% of ${v.fnSteps} function-steps, rounded down, at least 1)`);
+  console.log(`correct steps (cumulative, secondary, not in the rule): B ${v.correctB}, A ${v.correctA}`);
+  console.log(`rule: A/B <= 0.70 ${v.tokenOk ? "yes" : "no"}; A function-steps >= B function-steps - ${v.tolerance} ${v.correctOk ? "yes" : "no"}`);
   console.log(`verdict: ${v.result}`);
   process.exit(v.result === "not computable" ? 1 : 0);
 }

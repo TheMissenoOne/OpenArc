@@ -16,7 +16,8 @@ export interface Call { args: Json[]; at: string }
  *  files that use it, sorted. cls: an instance method's receiver: `calls` build one (constructor arguments), `bare`
  *  when one can be built from nothing. */
 export interface FoundFn { fn: ArcFn; inputs: Json[][] | null; tests: string[]; calls: Call[]; cls?: { name: string; bare: boolean; calls: Call[] } }
-export interface ReadModule { types: ArcType[]; found: FoundFn[]; skipped: Record<string, string> }
+/** error: why the module could not be read (it then has nothing else); decompile records it as the module's skip reason. */
+export interface ReadModule { types: ArcType[]; found: FoundFn[]; skipped: Record<string, string>; error?: string }
 /** modules: per source file. instrumented: per source file, the text that records arguments while tests run (--run-tests). */
 export interface Read { modules: Map<string, ReadModule>; instrumented: Map<string, string> }
 /** Runs one function on inputs, a sandbox kept open across calls until close. */
@@ -42,8 +43,8 @@ export interface Lang {
   read(ctx: DecompileCtx, sources: string[], tests: string[]): Promise<Read>;
   /** A sandbox staging `texts` (the source tree as ports.fs reads it). */
   open(ctx: DecompileCtx, texts: Map<string, string>): Runner;
-  /** Runs one test file (--run-tests); env: added to its environment. */
-  runTest(ctx: DecompileCtx, file: string, env?: Record<string, string>): Promise<boolean>;
+  /** Runs one test file (--run-tests); env: added to its environment. why: a reason for a failure beyond "it fails". */
+  runTest(ctx: DecompileCtx, file: string, env?: Record<string, string>): Promise<{ ok: boolean; why?: string }>;
   locate(ctx: Omit<DecompileCtx, "dirs">, file: string, text: string, name: string): Promise<Located | undefined>;
   /** The reply is not a body: it repeats the declaration. */
   notBody(file: string, body: string, name: string): boolean;

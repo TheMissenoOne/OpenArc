@@ -9,7 +9,7 @@ openarc arc accept <module.fn> [--file <path>] [--json]     # body on stdin
 openarc arc compile <module.fn>|<module>|--stale [--json]
 ```
 
-All four take `--out=<dir>` when the `.arc` files are not under `arc/spec`. A function is named `<module>.<fn>`, where the module is the name on the `.arc` file's `module` line (`deep.screen` for `arc/spec/deep/screen.arc`).
+All four take `--out=<dir>` when the `.arc` files are not under `arc/spec`. A function is named `<module>.<fn>`, where the module is the name on the `.arc` file's `module` line (`deep.screen` for `arc/spec/deep/screen.arc`, `lib.index.dec` for a module whose name decompile lengthened: see [[Decompile]]).
 
 ## Worked example
 
@@ -67,12 +67,12 @@ Prints what a writer needs: the instruction line, the `.arc` signature, the `typ
 
 ## `arc accept`
 
-Reads a body (statements, no signature; a code fence is dropped) from stdin or `--file`, and replaces the body of the function in its source file. The function is found the way decompile finds exports: `function f`, `const f = <fn>`, `export default <fn>`, `exports.f = <fn>`; in Go, `func F` or `func (r T) M` ([[Languages]]). An arrow with an expression body gets a block body. The new body is indented one step past the line the function starts on. Everything outside the body stays byte for byte.
+Reads a body (statements, no signature; a code fence is dropped) from stdin or `--file`, and replaces the body of the function in its source file. The function is found the way decompile finds exports: `function f`, `const f = <fn>`, `export default <fn>`, `exports.f = <fn>`, a property of `module.exports = { f() {} }`, and a method listed as `fn Class.m` or `fn static Class.m` (a class declaration, or a class expression bound to that name; `export default class` is `default.m`); in Go, `func F` or `func (r T) M` / `func (r *T) M` ([[Languages]]). For a method, `arc prompt` shows the class header, the method and the closing brace, with `...` for the other members. An arrow with an expression body gets a block body. The new body is indented one step past the line the function starts on. Everything outside the body stays byte for byte.
 
 Then it checks, without writing anything yet:
 
-1. The file still parses, and for a TypeScript file the type check adds no error to it (the program decompile builds: the project's `tsconfig.json`, or its defaults). For a Go file, `go build` and `go vet` on its package add no error ([[Languages]]).
-2. Every `example` line holds in the sandbox, `after (...)` and `throws` included.
+1. The file still parses, and the type check adds no error to it or to any TypeScript file that imports it, directly or through other files (the project's `tsconfig.json` files, or its defaults). An error in another file is printed with its path: `TS2322 src/use.ts line 4: ...`; at most 6 lines. For a Go file, `go build` and `go vet` on its package add no error ([[Languages]]).
+2. Every `example` line holds in the sandbox, `after (...)` and `throws` included, and every rule holds on those calls and on generated inputs ([[Rules]]).
 
 When both pass, the file and the function's entry in `.openarc/decompile.json` are written in one transaction. The entry becomes `specified`, as decompile records a function whose examples all hold. On a failure the file is not touched, the problems are printed one per line (`example (3) => 9: the code returns 12`, `TS2322 line 5: ...`), and the exit code is 1. No model is called.
 
@@ -81,7 +81,10 @@ It refuses, on stderr with exit 1:
 - a function that is in no `.arc` file;
 - a function with no `example` lines: nothing would verify the body. Promote an `observed` line (change the word to `example`) or write an example;
 - a body that repeats the signature, or that changes code outside the body (unbalanced braces);
-- a body with `import` lines: add the import to the file first.
+- a body with `import` lines: add the import to the file first;
+- an invalid `openarc.config.json`, or a configured isolation tier that is not available here (`OARC-E092`).
+
+`arc status`, `arc accept` and `arc compile` print the sandbox notice (`OARC-W046`, `OARC-W047`) once, on stderr. Every `arc` command stops on an invalid `openarc.config.json`; when the configured tier is unavailable, `arc status` goes on and reports the checks it cannot run as `unrunnable`.
 
 ## `arc compile`
 
@@ -93,7 +96,6 @@ The same loop with the configured model writing the body: the prompt from `arc p
 
 ## Limits
 
-- Only the edited file is type checked, and a new error counts only when its message was not already there. A caller elsewhere that a new body breaks is not reported.
-- Rules are not evaluated yet.
+- A new type error counts only when the same message was not already in that file. The files checked besides the edited one are those that import it (followed through relative import specifiers); a file affected only through a global declaration or a tsconfig `paths` alias is not checked. Cost, measured: about 0.9 s for a two-file fixture (unchanged), 2.2 to 3.1 s instead of 1.0 to 1.4 s (and about 0.8 GB of memory instead of 0.5) for a module of a 105-file TypeScript project imported, directly or not, by many of its files.
+- When a class has an instance and a static method with the same name, the first one in the class is edited.
 - A body's lines are re-indented, including the inside of a multi-line template literal.
-- A source file at the project root (not in a directory) is not reached.

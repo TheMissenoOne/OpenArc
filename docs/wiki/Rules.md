@@ -37,6 +37,8 @@ names    = each parameter (its value before the call), result, threw,
            after.<param> (the argument as the call left it), old.<param> (the value before, said explicitly)
 ```
 
+`result`, `threw`, `after` and `old` always mean what the list above says, also when a parameter has one of these names. Such a parameter is reached as `old.<name>` (its value before the call) and `after.<name>` (as the call left it): for `fn f(result: Num): Num`, `result` is the return value and `old.result` the argument. When a rule writes such a name bare and cannot be parsed or evaluated, its error ends with a hint saying this.
+
 Loosest to tightest: `implies`, `or`, `and`, `not`, comparisons and `in`, `+ -`, `* / %`, unary `-`, `.` and `[]`. Comparisons do not chain. There are no list or object literals, no definitions, no assignment and no calls into the program.
 
 ## How it is checked
@@ -45,7 +47,8 @@ Loosest to tightest: `implies`, `or`, `and`, `not`, comparisons and `in`, `+ -`,
 - A rule must give `true` or `false`. A rule that reads `result` skips the calls that threw, unless it also reads `threw`; on a call that threw, `result` is undefined.
 - `after.<param>` is the argument as the call left it; for a call that changed nothing it equals the parameter.
 - A rule that cannot be evaluated on a call (a field of `null`, a string compared with a number) counts as broken by that call, and the line says why. A rule that does not parse, or names something unknown, is `unparsable`: `rule x: cannot parse: expected a value, found the end at column 14`.
-- A broken or unparsable rule makes `--check` exit 1. `openarc status` does not see rules yet: it reads the last `openarc decompile` run, which does not evaluate them.
+- A broken or unparsable rule makes `--check` exit 1.
+- A plain `openarc decompile` run evaluates the rules too, on the calls it makes anyway (the `example` and `observed` lines' arguments and the inputs it derives), with no generated inputs: `--check` is the thorough pass. A broken or unparsable rule makes the function `failing` in `.openarc/decompile.json`, with `why` in the words `--check` prints (`rule bounded: broken by (-50) -> -50`), so `openarc status` counts it. Adding or editing a rule re-runs its module on the next `openarc decompile`, also when the code is unchanged. `arc accept` keeps a body only when its rules hold ([[Arc Sync]]).
 
 ## Examples
 

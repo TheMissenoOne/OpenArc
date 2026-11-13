@@ -239,6 +239,11 @@ export async function setupCommand(cwd: string, argv: string[], config: string, 
     } else if (f === "--agent-root" && v && agentRoot === null) (agentRoot = resolve(cwd, v)), k++;
     else return bad("bad-flag");
   }
+  // ponytail: the wrapper, the guard hook and the MCP entry are sh scripts; on Windows they need Git for Windows' sh,
+  // and there is no .cmd variant of them
+  if (process.platform === "win32" && !remove && !onPath("sh.exe")) {
+    return console.error("openarc: setup on Windows writes sh scripts (the .openarc/bin/openarc wrapper, the guard hook, the MCP server entry) and no sh.exe is on PATH: install Git for Windows and put its bin folder (C:\\Program Files\\Git\\bin) on PATH, then run setup again. Nothing was written. Without setup, run openarc directly (openarc.cmd in the standalone download, npx openarc with npm)"), 1;
+  }
   const project = resolve(cwd);
   let root = agentRoot;
   if (root === null) for (let d = project; ; d = dirname(d)) {

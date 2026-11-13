@@ -325,18 +325,22 @@ export function checkRules(fn: ArcFn, types: ArcType[], runs: { args: Json[]; re
   const named = Object.fromEntries(types.map((t) => [t.name, t.type]));
   const known = new Set([...fn.params.map((p) => p.name), "result", "threw", "after", "old"]);
   return fn.rules.map((r) => {
+    // a parameter named like a keyword is reached as old.<name> / after.<name>: the bare name is the keyword. When the
+    // rule writes it bare, its errors say so (the text is scanned, so a parse error gets the hint too)
+    const hint = fn.params.map((p) => p.name).filter((n) => ["old", "after", "threw", "result"].includes(n) && new RegExp(`(?<![\\w$.])${n}(?![\\w$])`).test(r.text))
+      .map((n) => `; the parameter ${n} is shadowed by the keyword ${n}: write old.${n} for its value before the call, after.${n} for after it`).join("");
     const ast = parseRule(r.text);
-    if ("error" in ast) return { rule: r.name, held: 0, error: `cannot parse: ${ast.error} at column ${ast.column}` };
+    if ("error" in ast) return { rule: r.name, held: 0, error: `cannot parse: ${ast.error} at column ${ast.column}${hint}` };
     const free = names(ast);
     const unknown = [...free].filter((n) => !known.has(n));
-    if (unknown.length) return { rule: r.name, held: 0, error: `unknown name ${unknown.join(", ")} (known: ${[...known].join(", ")})` };
+    if (unknown.length) return { rule: r.name, held: 0, error: `unknown name ${unknown.join(", ")} (known: ${[...known].join(", ")})${hint}` };
     let held = 0;
     for (const run of runs) {
       if (run.threw && free.has("result") && !free.has("threw")) continue;
       const got = checkRule(ast, { params: bind(fn, run.args), ...(run.after ? { after: bind(fn, run.after) } : {}), ...(run.threw ? {} : { result: run.result ?? "$undefined" }), threw: run.threw, types: named });
       if (got === true) { held++; continue; }
       const broken = { args: run.args, ...(run.threw ? {} : { result: run.result ?? "$undefined" }), ...(run.after ? { after: run.after } : {}) };
-      return { rule: r.name, held, broken, ...(got === false ? {} : { error: `cannot evaluate: ${got.error}` }) };
+      return { rule: r.name, held, broken, ...(got === false ? {} : { error: `cannot evaluate: ${got.error}${hint}` }) };
     }
     return { rule: r.name, held };
   });

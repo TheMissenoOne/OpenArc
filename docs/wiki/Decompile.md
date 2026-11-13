@@ -9,7 +9,7 @@ openarc decompile --todo [--json]
 openarc decompile --check [dirs...] [--out=<dir>] [--rule-inputs <n>] [--json]
 ```
 
-`dirs` are the source directories (default `src`). Run it from the folder that holds `package.json`. To have Claude Code, Codex or OpenCode do the decompile workflow and fill in intents, run `openarc setup` first: its `openarc-specs` skill teaches the agent the levels and the steps. See [[Setup]]. The project does not need to install `open-arc`: without it, the sandbox runs the example runner of the `openarc` you called (not on the `container` isolation tier).
+`dirs` are the source directories (default `src`). `.` is the project root, and `./src`, `src/` and `src` name the same directory: the paths in `.arc` files and the state file never start with `./`. No directory walk enters `node_modules` or a folder whose name starts with `.` (`.git`, `.openarc`), and walking the root skips `arc`, `dist` and `build`. The `openarc arc` commands reach a module at the root the same way. Run it from the folder that holds `package.json`. To have Claude Code, Codex or OpenCode do the decompile workflow and fill in intents, run `openarc setup` first: its `openarc-specs` skill teaches the agent the levels and the steps. See [[Setup]]. The project does not need to install `open-arc`: without it, the sandbox runs the example runner of the `openarc` you called (not on the `container` isolation tier). Nor does it need an `openarc.config.json` (without one the defaults apply), but an invalid one stops `decompile` and `decompile --check` with the error and exit 1. Both print the sandbox notice (`OARC-W046`, `OARC-W047`, `OARC-E092`, see [[Safety Model]]) once, on stderr, so `--json` output stays parseable.
 
 ## What it recovers
 
@@ -50,6 +50,8 @@ The state file records where each observation's input came from (`origins`, keye
 
 One file per module, under `arc/spec/` by default (`--out=<dir>` changes it), mirroring the source tree. The levels above it live next to that folder: see [[Levels]].
 
+The module's name is its path inside its source dir without the extension, with `/` as `.`: `src/deep/screen.js` is `deep.screen` in `arc/spec/deep/screen.arc`. When two source files would get the same name (`src/index.ts` and `lib/index.ts` with `decompile src lib`, or `src/a.ts` beside `src/a.js`), or a name whose file another module's `.arc` file already holds, each of them gets a longer one: the source dir in front (`lib.index` in `arc/spec/lib/index.arc`), and if that still collides, the extension kept (`a.js` in `arc/spec/a.js.arc`). Decompile prints one line per lengthened name: `lib/index.js: its .arc file is arc/spec/lib/index.arc: arc/spec/index.arc would be another module's too`. The result depends only on the files, not on the order of the dirs. An `.arc` file belongs to the source its `module ... from "<file>"` line names: a later run keeps a module in the file that names it, and never writes or reads another module's file as its own.
+
 ```
 module survival from "src/survival.js"
 
@@ -81,7 +83,11 @@ fn label(rain: Any): "heavy rain" | "clear"
 
 Types: `Int`, `Float`, `Num`, `Bool`, `Str`, `Any`, `Void`, `Null`, `[T]`, `{ k: T, k?: T }`, `A | B`, `T?`, literals, names of `type` lines, and a backticked native type such as `` `Map<string, number>` `` for anything else.
 
+A named type from outside the project (a package, a `.d.ts` file) is written out in full where it is used, except a recursive one (`type Json = null | ... | Json[] | { [k: string]: Json }`): that one is printed by its name and gets one `type` line in the module. An anonymous recursive type, or one nested deeper than 6 levels, is a backticked native type.
+
 What you write in an `.arc` file stays. A later run keeps a function's intent, rules and `example` lines, re-records its `observed` lines, and puts the lines in this order: intent, `hold`, `example`, `observed`, rules.
+
+That holds also when the code stops exporting a function (renamed, made private, or skipped). Its block stays in the `.arc` file, after the functions the code has, when it holds anything written by hand: an `example` line, a rule, `hold`, or an intent that is not the code's own comment (an intent whose origin the state file does not record counts as written by hand). A block with only `observed` lines (and the code's comment as intent) is dropped. Either way decompile prints one line: `src/r.js: b is not in the code; its block stays in the .arc file: it has lines written by hand`. `--check` and `arc status` report a kept function as `removed` and `unrunnable` until the code has it again or you delete the block.
 
 ## Status
 
@@ -89,7 +95,7 @@ Each function gets one status, stored in `.openarc/decompile.json`:
 
 | Status | Meaning |
 |---|---|
-| `failing` | a test file that uses it fails, or one of its `example` lines does not hold. `why` names the first: `example (3) => 6: the code returns 4` |
+| `failing` | a test file that uses it fails, one of its `example` lines does not hold, or a rule is broken or unparsable on the calls the run made ([[Rules]]). `why` names the first: `example (3) => 6: the code returns 4`, `rule bounded: broken by (-50) -> -50` |
 | `tested` | `--run-tests` ran every test file that uses it, and they passed |
 | `specified` | it has `example` lines and the code satisfies all of them |
 | `observed` | it has only observations |
@@ -97,6 +103,8 @@ Each function gets one status, stored in `.openarc/decompile.json`:
 | `bare` | a signature only. `why` says what stopped it, for example `every input throws: document is not defined` for code that needs a browser |
 
 When several apply, the first in the table wins. A state file from an older version that says `examples` is read as `observed`.
+
+A module that cannot be read (the language's reader throws on it, for example a file the TypeScript parser overflows on) or whose run throws is skipped as a whole: decompile prints `<file>: skipped: <first line of the error>` once, records it as the module's `error` in the state file, leaves its `.arc` file as it is, and goes on with the other modules. The run exits 0; the summary line ends with `modules skipped N`, `--report` prints the reason, and `--check` and `arc status` report its functions as `unrunnable: the module cannot be read: <reason>`. The next run tries it again. When a reading throws, every module of that language is read again on its own to find the one at fault, so only it is skipped. A missing toolchain (Go) still stops the run.
 
 `--run-tests` runs the mapped files with `node --test`, or with the command you give (`--run-tests="npx vitest run"`). This is the project's own test run and is not sandboxed. Without the flag, the test files are listed and not run.
 
@@ -143,9 +151,9 @@ To accept a `changed` observation, run `openarc decompile` (it re-records the li
 
 ## Resuming
 
-A module whose source and test mapping are unchanged is not run again, and the state file is written after every module, so an interrupted run continues where it stopped. `--fresh` runs everything again.
+A module is not run again when nothing it depends on changed: its source text, its test mapping and the `--run-tests` command, the `example` and `rule` lines of its `.arc` file (an intent or `observed` edit does not count), the isolation tier the sandbox uses (changing `sandbox.isolation`, or `auto` picking another tier, runs it again), and the text of the project files it imports, directly or through other files. A module where no sandbox could run a function (`OARC-E092`) is never reused. The state file is written after every module, so an interrupted run continues where it stopped. It holds every module decompiled so far: `openarc decompile lib` after `openarc decompile src` keeps the modules of `src` while their source files exist, and a module whose source file is gone is dropped, in a scanned dir or not. `--fresh` runs everything again. Imports are followed as the language reads them: a dynamic `import()`, a tsconfig `paths` alias or a file outside the scanned dirs is not followed, and in Go an import names one file of the imported package, so a change to another file of a Go package does not re-run the modules that import it (`--fresh` does).
 
-A run that executes a module checks every `example` line and re-records the `observed` ones: on the arguments of the existing observed lines plus the inputs derived now. Each observation whose result differs from the line that was in the file prints `<file>: <fn>(<args>) changed: was <old>, now <new>`, and the summary counts them. A reused module runs nothing and keeps its status.
+A run that executes a module checks every `example` line and re-records the `observed` ones: on the arguments of the existing observed lines plus the inputs derived now. The `example` lines run in one sandbox batch with the other inputs. When that batch fails as a whole (an input that calls `process.exit` or runs into the CPU limit), the `example` lines run again on their own and their result decides the status; then each other input runs alone, and one that still brings the sandbox down is left out with a line (`src/x.js: guard(42) left out: OARC-E090 harness crashed (exit 3): no output`), not recorded as a throw: no caller would see one. Each observation whose result differs from the line that was in the file prints `<file>: <fn>(<args>) changed: was <old>, now <new>`, and the summary counts them. A reused module runs nothing and keeps its status.
 
 ## Limits
 - Only exported functions and the public methods of exported classes. Getters, setters, methods assigned to a prototype (`X.prototype.f = ...`) and function-valued class fields are not listed.

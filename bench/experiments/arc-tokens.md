@@ -31,28 +31,34 @@ From `bench/matrix-evolve-multi.json`: provider `openai` (llama-server at `http:
 
 Total tokens: the sum over all dev steps, every attempt included, of the backend's reported `usage.prompt_tokens + usage.completion_tokens`, per arm, counted by the same metering proxy evolve-multi uses.
 
-## Correct step
+## Correct function-step
 
-evolve-multi's `correct`: after the step, every function added so far passes all its held-out tests. It is cumulative, so one function that stays wrong makes every later step incorrect.
+A function-step is one exercise present after a step: one unit per exercise added so far (its function, or both functions for `variable-length-quantity`, as the held-out tests are per exercise; each results row records them in `heldOut`). It is correct if that exercise passes all its held-out tests after that step. An arm's count is the sum over all steps. It is not cumulative: one exercise that stays wrong costs one unit per later step, not every later step.
+
+The default scenario has 4, 5, 6, 6, 7, 8, 9, 9, 9 exercises after steps 0 to 8: 63 function-steps.
 
 ## Decision rule (fixed in advance)
 
 Arm A wins if both hold:
 
 1. A's total tokens are at least 30% below B's: `A <= 0.70 * B`;
-2. A has at most one fewer correct step than B: `correct(A) >= correct(B) - 1`.
+2. A's correct function-steps are at least B's minus the tolerance: `fnsteps(A) >= fnsteps(B) - T`.
+
+The tolerance `T` is 10% of the scenario's total function-steps, rounded down, at least 1. For the default scenario: `T = max(1, floor(63 / 10)) = 6`. `T` counts every step of the scenario, excluded steps included.
 
 Otherwise the claim is not supported. `node bench/arc-tokens.mjs --report <file>` applies the rule mechanically.
 
 Exclusions: a step where decompile gives arm A no `.arc` for a target (decompile fails, or lists no `fn` for it) is left out of both arms' totals and correct counts, and listed. If any step lacks a row for either arm, the verdict is "not computable".
 
+Secondary, not part of the rule: evolve-multi's cumulative `correct` step (after the step, every function added so far passes all its held-out tests), counted per arm and reported.
+
 ## Reported whatever the outcome
 
-The per-step table (input and output tokens, calls, correct, wall time per arm), both arms' correct-step counts, both totals and their ratio, the verdict, the excluded steps and why. Also, as description only (not part of the rule): held-out tests passed per function, public-example gates, regressions, whether the hand edit survived, decompile time.
+The per-step table (input and output tokens, calls, correct function-steps, cumulative correct, wall time per arm), both arms' correct function-step counts and the tolerance, both arms' cumulative correct-step counts, both totals and their ratio, the verdict, the excluded steps and why. Also, as description only (not part of the rule): held-out tests passed per function, public-example gates, regressions, whether the hand edit survived, decompile time.
 
 ## Sample size and what it can show
 
-9 steps, 8 of which call the model, one seed, one model. The correctness comparison is a guard against a large drop. It is not a test of equivalence, and with this few steps a difference of one or two correct steps can be noise. The token comparison holds for this scenario, model and prompt wording only.
+9 steps, 8 of which call the model, one seed, one model. The correctness comparison is a guard against a large drop. It is not a test of equivalence, and with this few steps a difference of a few correct function-steps can be noise. The token comparison holds for this scenario, model and prompt wording only.
 
 ## Not used
 
@@ -68,5 +74,9 @@ node arc-tokens.mjs --dataset /path/to/ts-bench --dry-run   # optional: every fi
 node arc-tokens.mjs --dataset /path/to/ts-bench          # resumable; results in results/arc-tokens/qwen2.5-coder-7b-s1/arc-tokens.jsonl
 node arc-tokens.mjs --report results/arc-tokens/qwen2.5-coder-7b-s1/arc-tokens.jsonl
 ```
+
+## Amendments before any run
+
+2026-11-13: the correctness guard changed from cumulative correct steps (`correct(A) >= correct(B) - 1`) to correct function-steps with a tolerance of 10% of the scenario's function-steps, rounded down, at least 1 (6 for the default scenario). Why: a step is correct only if every function added so far passes all its held-out tests; in earlier runs of this benchmark the baseline ended with 3 of 9 functions passing, so both arms could score near zero correct steps and the old guard would catch almost nothing. The cumulative count is still reported, outside the rule. No model run of this experiment had happened when this was changed.
 
 ## Results (to be filled after the run)
