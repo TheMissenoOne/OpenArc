@@ -294,6 +294,13 @@ try {
   assert.strictEqual(r.code, 0, r.out);
   assert.match(m.read("arc/architecture.arc"), /^external go:strings$/m);
   assert.match(m.read("arc/architecture.arc"), /^part svc\n  module svc\/greet\.go\n  uses go:strings$/m);
+
+  // ── `.`: a module at the project root, read like any dir (no `./` prefix on its paths)
+  const flat = project({ "go.mod": "module example.com/flat\n\ngo 1.22\n", "add.go": "package flat\n\n// Add adds.\nfunc Add(a, b int) int {\n\treturn a + b\n}\n", "add_test.go": 'package flat\n\nimport "testing"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(2, 3) != 5 {\n\t\tt.Fatal("2 + 3")\n\t}\n}\n' });
+  r = flat.oa(["decompile", "."]);
+  assert.strictEqual(r.code, 0, r.out);
+  assert.ok(flat.read("arc/spec/add.arc").startsWith('module add from "add.go"\n\nfn Add(a: Int, b: Int): Int\n  "Add adds."\n  observed (2, 3) => 5\n'), flat.read("arc/spec/add.arc"));
+  assert.deepStrictEqual((JSON.parse(flat.read(".openarc/decompile.json")) as typeof state).modules["add.go"]!.fns.Add!.tests, ["add_test.go"]);
   console.log("go.check ok");
 } finally {
   for (const d of roots) rmSync(d, { recursive: true, force: true });

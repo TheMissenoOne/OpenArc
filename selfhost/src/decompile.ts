@@ -53,12 +53,14 @@ export const STATE_FILE = ".openarc/decompile.json";
 /** The files some language reads (lang/lang.ts LANGS), and whether one is a test, by its language. */
 export const CODE = new RegExp(LANGS.map((l) => l.code.source).join("|"));
 export const isTest = (rel: string) => !!langOf(rel)?.isTest(rel);
+const inDir = (dir: string, file: string) => dir === "." || file.startsWith(`${dir}/`);
 const sha = (t: string) => createHash("sha256").update(t).digest("hex").slice(0, 16);
 
 const codeOrJson = (name: string) => CODE.test(name) || name.endsWith(".json");
+/** The files under `dir` (relative to the root; `.` is the root itself) that `keep` accepts, as root-relative paths. */
 export async function walk(ports: Ports, dir: string, out: string[] = [], keep = codeOrJson): Promise<string[]> {
   for (const name of (await ports.fs.list(dir)).sort()) {
-    const rel = `${dir}/${name}`;
+    const rel = dir === "." ? name : `${dir}/${name}`;
     if (name === "node_modules" || name.startsWith(".")) continue;
     if (keep(name)) { if (!name.endsWith(".d.ts")) out.push(rel); }
     else if (!name.includes(".")) await walk(ports, rel, out, keep);
@@ -135,7 +137,7 @@ function unmet(e: ArcExample, r: Ran): string | undefined {
  *  file read by its language (lang/lang.ts), in the order the directories list them. */
 async function scan(ctx: DecompileCtx) {
   const { ports } = ctx;
-  const all = (await Promise.all(ctx.dirs.map((d) => walk(ports, d)))).flat();
+  const all = [...new Set((await Promise.all(ctx.dirs.map((d) => walk(ports, d)))).flat())]; // `.` and `src` overlap
   const code = all.filter((f) => CODE.test(f));
   const sources = code.filter((f) => !isTest(f));
   // tests may live outside the source directories
@@ -221,8 +223,8 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
     if (ctx.testCmd && ctx.record) rec = await recorder(ctx, instrumented, new Set([...read].flatMap(([f, m]) => m.found.flatMap((x) => [`${f}\0${x.fn.name}`, ...(x.cls ? [`${f}\0new ${x.cls.name}`] : [])]))));
     for (const [file, m] of read) {
       const text = texts.get(file) ?? "";
-      const dir = ctx.dirs.find((d) => file.startsWith(`${d}/`))!;
-      const stem = file.slice(dir.length + 1).replace(CODE, "");
+      const dir = ctx.dirs.find((d) => inDir(d, file))!;
+      const stem = (dir === "." ? file : file.slice(dir.length + 1)).replace(CODE, "");
       const arcFile = `${ctx.out}/${stem}.arc`;
       const before = await ports.fs.read(arcFile);
       let old: ArcModule | null = null;

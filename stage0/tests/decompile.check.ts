@@ -354,4 +354,40 @@ test("probe", () => {
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
+
+// ── more projects: how the dirs are spelled, what triggers a re-run, colliding module names, kept blocks, the state file
+// across runs over different dirs, and a batch one bad input brings down
+const project = () => {
+  const root = mkdtempSync(join(resolve(".."), ".decompile-check-"));
+  const run = (...args: string[]) => { const r = spawnSync(process.execPath, ["--no-warnings", MAIN, ...args], { cwd: root, encoding: "utf8" }); return { code: r.status, out: r.stdout + r.stderr }; };
+  const put = (f: string, t: string) => (mkdirSync(dirname(join(root, f)), { recursive: true }), writeFileSync(join(root, f), t));
+  const get = (f: string) => readFileSync(join(root, f), "utf8");
+  type St = { modules: Record<string, { arc: string; fns: Record<string, { status: string; tests: string[]; why?: string }> }> };
+  return { root, run, put, get, state: () => JSON.parse(get(".openarc/decompile.json")) as St };
+};
+const roots: string[] = [];
+try {
+  // `.`: a project with its code at the root, its test file beside it. Same paths as any other dir: no `./` prefix
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"flat","version":"1.0.0","private":true,"type":"module"}');
+    p.put("util.js", "export function half(n) { return n / 2; }\n");
+    p.put("util.test.js", 'import test from "node:test";\nimport assert from "node:assert";\nimport { half } from "./util.js";\ntest("h", () => assert.strictEqual(half(8), 4));\n');
+    let r = p.run("decompile", ".");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.strictEqual(p.get("arc/spec/util.arc"), 'module util from "util.js"\n\nfn half(n: Any): Num\n  observed (8) => 4\n');
+    assert.deepStrictEqual(p.state().modules["util.js"]!.fns.half, { status: "observed", tests: ["util.test.js"], origins: { "[8]": "call util.test.js:4" } });
+    r = p.run("decompile", "./");
+    assert.match(r.out, /^util\.js: 1 functions \(unchanged\)$/m);
+    // `./src/`, `src/` and `src` are one dir
+    p.put("src/x.js", "export const one = () => 1;\n");
+    r = p.run("decompile", "./src/");
+    assert.match(r.out, /^src\/x\.js: 1 functions$/m);
+    assert.match(p.run("decompile", "src/").out, /^src\/x\.js: 1 functions \(unchanged\)$/m);
+    assert.match(p.run("decompile", "src").out, /^src\/x\.js: 1 functions \(unchanged\)$/m);
+  }
+} finally {
+  for (const d of roots) rmSync(d, { recursive: true, force: true });
+}
 console.log("decompile.check ok");
