@@ -519,10 +519,10 @@ async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise
     console.log(has("--json") ? JSON.stringify(list) : list.join("\n") || "every function has an intent");
     return 0;
   }
-  const r = report(state);
+  const r = report(state), unread = Object.values(state.modules).filter((m) => m.error).length;
   if (has("--json")) return console.log(JSON.stringify({ totals: r.totals, modules: state.modules })), 0;
   if (has("--report")) for (const l of r.lines) console.log(l);
-  console.log(`decompiled ${Object.keys(state.modules).length} modules: tested ${r.totals.tested}, failing ${r.totals.failing}, specified ${r.totals.specified}, observed ${r.totals.observed}, described ${r.totals.described}, bare ${r.totals.bare}, skipped ${r.totals.skipped}${state.changed ? `, changed ${state.changed}` : ""}`);
+  console.log(`decompiled ${Object.keys(state.modules).length} modules: tested ${r.totals.tested}, failing ${r.totals.failing}, specified ${r.totals.specified}, observed ${r.totals.observed}, described ${r.totals.described}, bare ${r.totals.bare}, skipped ${r.totals.skipped}${state.changed ? `, changed ${state.changed}` : ""}${unread ? `, modules skipped ${unread} (\`openarc decompile --report\` says why)` : ""}`);
   return 0;
 }
 

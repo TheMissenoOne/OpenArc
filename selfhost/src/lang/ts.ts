@@ -28,7 +28,15 @@ export function makeProgram(root: string, files: string[]): ts.Program {
 // ── types, as `.arc` text ──
 const opaque = (text: string) => (text.length > 100 ? "Any" : `\`${text.replaceAll("`", "'")}\``);
 
-export function arcType(checker: ts.TypeChecker, t: ts.Type, inProject: (s: ts.Symbol) => boolean, depth = 0, top = false): string {
+/** open: the types being expanded now. lines: per recursive named type met inside its own expansion, its name and its
+ *  `type` line's text ("" while it is still being expanded); the module gets the lines. */
+export interface Rec { open: Set<ts.Type>; lines: Map<ts.Type, { name: string; text: string }> }
+const newRec = (): Rec => ({ open: new Set(), lines: new Map() });
+
+/** A type as `.arc` text. A named type of the project is printed by its name; any other type is expanded. One met again
+ *  inside its own expansion is recursive: when named, it is printed by its name and gets a `type` line in rec.lines,
+ *  else it is a backticked native type, as is anything nested deeper than 6. */
+export function arcType(checker: ts.TypeChecker, t: ts.Type, inProject: (s: ts.Symbol) => boolean, depth = 0, top = false, rec: Rec = newRec()): string {
   const f = t.flags;
   if (f & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) return "Any"; // a generic's type parameters are erased
   if (f & ts.TypeFlags.BooleanLiteral) return checker.typeToString(t);
@@ -40,21 +48,45 @@ export function arcType(checker: ts.TypeChecker, t: ts.Type, inProject: (s: ts.S
   if (f & (ts.TypeFlags.Void | ts.TypeFlags.Undefined)) return "Void";
   if (f & ts.TypeFlags.Null) return "Null";
   const named = t.aliasSymbol ?? (t.symbol && !(t.symbol.flags & (ts.SymbolFlags.TypeLiteral | ts.SymbolFlags.ObjectLiteral)) ? t.symbol : undefined);
-  if (!top && named && inProject(named) && /^[A-Za-z_$][\w$]*$/.test(named.name) && !(t as ts.TypeReference).typeArguments?.length && !t.aliasTypeArguments?.length) return named.name;
+  const plain = !!named && /^[A-Za-z_$][\w$]*$/.test(named.name) && !(t as ts.TypeReference).typeArguments?.length && !t.aliasTypeArguments?.length;
+  if (!top && plain && inProject(named!)) return named!.name;
+  // a type inside its own expansion (a recursive alias from outside the project, `type Json = ... | Json[]`), or one
+  // nested too deep: without this a union and an array recurse with no end
+  if (rec.lines.has(t)) return rec.lines.get(t)!.name;
+  if (rec.open.has(t)) {
+    if (!plain) return opaque(checker.typeToString(t));
+    rec.lines.set(t, { name: named!.name, text: "" });
+    return named!.name;
+  }
+  if (depth > 6) return opaque(checker.typeToString(t));
+  rec.open.add(t);
+  const text = expand(checker, t, inProject, depth, top, rec, named);
+  rec.open.delete(t);
+  const line = rec.lines.get(t);
+  if (!line) return text;
+  line.text = text;
+  return line.name;
+}
+
+function expand(checker: ts.TypeChecker, t: ts.Type, inProject: (s: ts.Symbol) => boolean, depth: number, top: boolean, rec: Rec, named: ts.Symbol | undefined): string {
+  const f = t.flags;
   if (t.isUnion()) {
     const parts = t.types.filter((x) => !(x.flags & ts.TypeFlags.Undefined));
     // boolean is the union true | false: print it as one type
-    const names = [...new Set(parts.map((x) => arcType(checker, x, inProject, depth)))];
+    let names = [...new Set(parts.map((x) => arcType(checker, x, inProject, depth, false, rec)))];
+    // `Json | undefined` is a new union of Json's members: a recursive type with exactly those keeps its name
+    const same = [...rec.lines].find(([r]) => r !== t && r.isUnion() && r.types.length === parts.length && r.types.every((x) => parts.includes(x)));
+    if (same) names = [same[1].name];
     const bools = names.includes("true") && names.includes("false") ? ["Bool", ...names.filter((n) => n !== "true" && n !== "false")] : names;
     const text = bools.join(" | ");
     return parts.length < t.types.length ? (bools.length === 1 ? `${text}?` : `(${text})?`) : text;
   }
-  if (checker.isArrayType(t)) return `[${arcType(checker, checker.getTypeArguments(t as ts.TypeReference)[0]!, inProject, depth + 1)}]`;
+  if (checker.isArrayType(t)) return `[${arcType(checker, checker.getTypeArguments(t as ts.TypeReference)[0]!, inProject, depth + 1, false, rec)}]`;
   const props = t.getProperties();
   if (f & ts.TypeFlags.Object && !t.getCallSignatures().length && !t.getConstructSignatures().length && !(t.symbol?.flags & ts.SymbolFlags.Class) && (top || !named) && depth < 3 && props.length && props.length <= 12) {
     const fields = props.map((s) => {
       const decl = s.valueDeclaration ?? s.declarations?.[0];
-      const type = decl ? arcType(checker, checker.getTypeOfSymbolAtLocation(s, decl), inProject, depth + 1) : "Any";
+      const type = decl ? arcType(checker, checker.getTypeOfSymbolAtLocation(s, decl), inProject, depth + 1, false, rec) : "Any";
       const optional = !!(s.flags & ts.SymbolFlags.Optional);
       return `${/^[A-Za-z_$][\w$]*$/.test(s.name) ? s.name : JSON.stringify(s.name)}${optional ? "?" : ""}: ${optional ? type.replace(/\?$/, "") : type}`;
     });
@@ -159,7 +191,7 @@ export function instrument(sf: ts.SourceFile, file: string, targets: { name: str
 }
 
 /** A function's `.arc` entry from its call signature, and the inputs its required parameter types allow. */
-function fromSignature(checker: ts.TypeChecker, inProject: (s: ts.Symbol) => boolean, sig: ts.Signature, name: string, decl: ts.Node, sf: ts.SourceFile): { fn: ArcFn; inputs: Json[][] | null } {
+function fromSignature(checker: ts.TypeChecker, inProject: (s: ts.Symbol) => boolean, sig: ts.Signature, name: string, decl: ts.Node, sf: ts.SourceFile, rec: Rec): { fn: ArcFn; inputs: Json[][] | null } {
   const paramTypes = sig.parameters.map((p) => checker.getTypeOfSymbolAtLocation(p, p.valueDeclaration ?? decl));
   const decls = sig.parameters.map((p) => p.valueDeclaration as ts.ParameterDeclaration | undefined);
   let ret = sig.getReturnType(), isAsync = false;
@@ -169,10 +201,10 @@ function fromSignature(checker: ts.TypeChecker, inProject: (s: ts.Symbol) => boo
     params: sig.parameters.map((p, i) => {
       const d = decls[i];
       const optional = !!d && checker.isOptionalParameter(d);
-      const type = arcType(checker, paramTypes[i]!, inProject);
+      const type = arcType(checker, paramTypes[i]!, inProject, 0, false, rec);
       return { name: d && ts.isIdentifier(d.name) ? p.name : `arg${i + 1}`, type: optional ? type.replace(/\?$/, "") : type, ...(optional && !d.dotDotDotToken ? { optional: true } : {}), ...(d?.dotDotDotToken ? { rest: true } : {}) };
     }),
-    returns: arcType(checker, ret, inProject),
+    returns: arcType(checker, ret, inProject, 0, false, rec),
     ...(isAsync ? { async: true } : {}),
     intent: commentOf(decl, sf), examples: [], rules: [],
   };
@@ -186,7 +218,7 @@ const hidden = (name: string, d: ts.Node | undefined) => /^(_|#)/.test(name) || 
 
 /** An exported class: a `type` line of its public data fields (when the checker knows any) and its public methods, each
  *  named `<Class>.<method>`. Inherited methods belong to the class that declares them. */
-function readClass(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: ts.Symbol) => boolean, name: string, sym: ts.Symbol, decl: ts.Node, out: { types: ArcType[]; found: Found[]; skipped: Record<string, string> }): void {
+function readClass(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: ts.Symbol) => boolean, name: string, sym: ts.Symbol, decl: ts.Node, out: { types: ArcType[]; found: Found[]; skipped: Record<string, string> }, rec: Rec): void {
   const cd = (sym.declarations ?? []).find((d): d is ts.ClassLikeDeclaration => ts.isClassLike(d));
   if (!cd) return;
   const fields = checker.getDeclaredTypeOfSymbol(sym).getProperties().flatMap((p) => {
@@ -194,7 +226,7 @@ function readClass(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: ts
     if (!d || p.flags & (ts.SymbolFlags.Method | ts.SymbolFlags.Accessor) || hidden(p.name, d)) return []; // a `#x` field's symbol is named `__#...`
     const t = checker.getTypeOfSymbolAtLocation(p, d);
     if (t.getCallSignatures().length) return []; // a function-valued field is behaviour, not data
-    const optional = !!(p.flags & ts.SymbolFlags.Optional), type = arcType(checker, t, inProject);
+    const optional = !!(p.flags & ts.SymbolFlags.Optional), type = arcType(checker, t, inProject, 0, false, rec);
     return [`${/^[A-Za-z_$][\w$]*$/.test(p.name) ? p.name : JSON.stringify(p.name)}${optional ? "?" : ""}: ${optional ? type.replace(/\?$/, "") : type}`];
   });
   if (fields.length) out.types.push({ name, type: `{ ${fields.join(", ")} }` });
@@ -214,14 +246,14 @@ function readClass(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: ts
     const sig = msym && checker.getTypeOfSymbolAtLocation(msym, m).getCallSignatures().at(-1);
     if (!msym || !sig) continue;
     const isStatic = !!(ts.getCombinedModifierFlags(m) & ts.ModifierFlags.Static);
-    const { fn, inputs } = fromSignature(checker, inProject, sig, full, m, sf);
+    const { fn, inputs } = fromSignature(checker, inProject, sig, full, m, sf, rec);
     out.found.push({ fn: isStatic ? { ...fn, static: true } : fn, symbol: msym, inputs, pos: m.getStart(sf), node: m, ...(isStatic ? {} : { cls }) });
   }
 }
 
 function readModule(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: ts.Symbol) => boolean): { types: ArcType[]; found: Found[]; skipped: Record<string, string> } {
   const out = { types: [] as ArcType[], found: [] as Found[], skipped: {} as Record<string, string> };
-  const { types, found, skipped } = out;
+  const { types, found, skipped } = out, rec = newRec();
   const mod = checker.getSymbolAtLocation(sf);
   // with `module.exports = { a() {} }` the exports are the object's properties; `module.exports = <function or class>`
   // is what Node's `import` calls `default`
@@ -237,17 +269,20 @@ function readModule(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: t
     const decl = sym.valueDeclaration ?? sym.declarations?.[0];
     if (!decl || decl.getSourceFile() !== sf) continue; // a re-export belongs to the module that declares it
     if (sym.flags & (ts.SymbolFlags.Interface | ts.SymbolFlags.TypeAlias) && !(sym.flags & ts.SymbolFlags.Value)) {
-      types.push({ name: expName, type: arcType(checker, checker.getDeclaredTypeOfSymbol(sym), inProject, 0, true) });
+      types.push({ name: expName, type: arcType(checker, checker.getDeclaredTypeOfSymbol(sym), inProject, 0, true, rec) });
       continue;
     }
-    if (sym.flags & ts.SymbolFlags.Class) { readClass(checker, sf, inProject, expName, sym, decl, out); continue; }
+    if (sym.flags & ts.SymbolFlags.Class) { readClass(checker, sf, inProject, expName, sym, decl, out, rec); continue; }
     const sigs = checker.getTypeOfSymbolAtLocation(sym, decl).getCallSignatures();
     if (!sigs.length) continue; // a constant
     if (!/^[A-Za-z_$][\w$]*$/.test(expName)) { skipped[expName] = "not a plain name"; continue; }
-    const { fn, inputs } = fromSignature(checker, inProject, sigs.at(-1)!, expName, decl, sf);
+    const { fn, inputs } = fromSignature(checker, inProject, sigs.at(-1)!, expName, decl, sf, rec);
     const node = (sym.declarations ?? [decl]).filter((d) => d.getSourceFile() === sf).map(fnOf).find(Boolean); // an overloaded function: the one with a body
     found.push({ fn, symbol: sym, inputs, pos: decl.getStart(sf), ...(node ? { node } : {}) });
   }
+  // the recursive types from outside the project the signatures name, one line each. ponytail: a name the module's own
+  // types already have keeps the module's line
+  for (const { name, text } of rec.lines.values()) if (!types.some((x) => x.name === name)) types.push({ name, type: text });
   return { types, found: found.sort((a, b) => a.pos - b.pos), skipped }; // source order: the file reads like the code
 }
 

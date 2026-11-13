@@ -369,11 +369,12 @@ test("probe", () => {
 // across runs over different dirs, and a batch one bad input brings down
 const project = () => {
   const root = mkdtempSync(join(resolve(".."), ".decompile-check-"));
-  const run = (...args: string[]) => { const r = spawnSync(process.execPath, ["--no-warnings", MAIN, ...args], { cwd: root, encoding: "utf8" }); return { code: r.status, out: r.stdout + r.stderr }; };
+  const pipe = (input: string | undefined, ...args: string[]) => { const r = spawnSync(process.execPath, ["--no-warnings", MAIN, ...args], { cwd: root, encoding: "utf8", input }); return { code: r.status, out: r.stdout + r.stderr }; };
+  const run = (...args: string[]) => pipe(undefined, ...args);
   const put = (f: string, t: string) => (mkdirSync(dirname(join(root, f)), { recursive: true }), writeFileSync(join(root, f), t));
   const get = (f: string) => readFileSync(join(root, f), "utf8");
   type St = { modules: Record<string, { arc: string; fns: Record<string, { status: string; tests: string[]; why?: string }> }> };
-  return { root, run, put, get, state: () => JSON.parse(get(".openarc/decompile.json")) as St };
+  return { root, run, pipe, put, get, state: () => JSON.parse(get(".openarc/decompile.json")) as St };
 };
 const roots: string[] = [];
 try {
@@ -396,6 +397,66 @@ try {
     assert.match(r.out, /^src\/x\.js: 1 functions$/m);
     assert.match(p.run("decompile", "src/").out, /^src\/x\.js: 1 functions \(unchanged\)$/m);
     assert.match(p.run("decompile", "src").out, /^src\/x\.js: 1 functions \(unchanged\)$/m);
+    // walking the root, build output, arc/ and node_modules are not read
+    p.put("dist/util.js", "export function half(n) { return 0; }\n");
+    p.put("node_modules/dep/index.js", "export const dep = () => 1;\n");
+    r = p.run("decompile", ".");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.deepStrictEqual(Object.keys(p.state().modules).sort(), ["src/x.js", "util.js"]);
+    // the arc commands reach a module at the root: status, a stale example, accept (a wrong body leaves the file as it
+    // was), and view
+    p.put("arc/spec/util.arc", p.get("arc/spec/util.arc").replace("  observed (8) => 4\n", "  example (8) => 4\n  example (3) => 1\n"));
+    r = p.run("arc", "status");
+    assert.strictEqual(r.code, 1, r.out);
+    assert.match(r.out, /^util\.half: stale: example \(3\) => 1: the code returns 1\.5$/m);
+    const util = p.get("util.js");
+    r = p.pipe("return n;", "arc", "accept", "util.half");
+    assert.strictEqual(r.code, 1, r.out);
+    assert.match(r.out, /^example \(8\) => 4: the code returns 8$/m);
+    assert.strictEqual(p.get("util.js"), util);
+    r = p.pipe("return Math.floor(n / 2);", "arc", "accept", "util.half");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.strictEqual(p.get("util.js"), "export function half(n) {\n  return Math.floor(n / 2);\n}\n");
+    r = p.run("arc", "status", "util");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /^util\.half: ok$/m);
+    r = p.run("view", "--once");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /^ok 1 {2}stale 0 {2}unrunnable 0 {2}no examples \d+$/m);
+  }
+
+  // the module boundary: a file the TypeScript parser itself cannot take (it overflows the stack) is skipped with the
+  // reason; the other modules are still read, the run exits 0, `--report` and `--check` say why
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"deep","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/deep.js", `export const f = (x) => x;\nf(${"[".repeat(3000)}${"]".repeat(3000)});\n`);
+    p.put("src/ok.js", "/** @param {number} n */\nexport const inc = (n) => n + 1;\n");
+    let r = p.run("decompile");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /^src\/deep\.js: skipped: Maximum call stack size exceeded$/m);
+    assert.match(r.out, /^src\/ok\.js: 1 functions$/m);
+    assert.match(r.out, /, modules skipped 1 \(`openarc decompile --report` says why\)$/m);
+    assert.match(p.run("decompile", "--report").out, /^src\/deep\.js: skipped: Maximum call stack size exceeded$/m);
+    p.put("arc/spec/deep.arc", 'module deep from "src/deep.js"\n\nfn f(x: Any): Any\n  observed (1) => 1\n');
+    r = p.run("decompile", "--check");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /^src\/deep\.js: f unrunnable: the module cannot be read: Maximum call stack size exceeded$/m);
+  }
+
+  // a recursive type alias from outside the project (a `.d.ts` file): printed by its name, with one `type` line
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"rec","version":"1.0.0","private":true,"type":"module"}');
+    p.put("tsconfig.json", '{"compilerOptions":{"strict":true,"allowImportingTsExtensions":true}}');
+    p.put("src/json.d.ts", "export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };\n");
+    p.put("src/j.ts", 'import type { Json } from "./json.d.ts";\nexport function wrap(x: Json): Json[] { return [x]; }\nexport function maybe(x?: Json): Json | undefined { return x; }\n');
+    const r = p.run("decompile");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.strictEqual(p.get("arc/spec/j.arc").split("\n\n").slice(0, 3).join("\n\n"), 'module j from "src/j.ts"\n\ntype Json = Bool | Null | Str | Num | [Json] | `{ [k: string]: Json; }`\n\nfn wrap(x: Json): [Json]');
+    assert.match(p.get("arc/spec/j.arc"), /^fn maybe\(x\?: Json\): Json\?$/m);
   }
 
   // the reuse key: an `example` or `rule` line written in the .arc file, and a file the module imports, re-run it
