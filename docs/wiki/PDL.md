@@ -161,6 +161,8 @@ Rules of thumb:
 - move what every block would otherwise repeat into `assume`;
 - pin a result with an `example`, explain a reason with a note.
 
+`example` lines and notes are left out of the size: examples are what gets checked, as tests are for code, and notes say what code cannot.
+
 ## Tolerant
 
 Nothing in a design is rejected for being unfamiliar. An unknown block is kept as it is; a statement that fits no form is a sentence. The parser never fails: it always returns a tree, and the only problems it reports are structural, each with its line:

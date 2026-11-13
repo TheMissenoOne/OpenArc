@@ -144,7 +144,8 @@ async function row(ports: Ports, e: Entry, state: State, memo: Map<string, strin
   const hashes = { design: sha(designKey(ownText(info.node)) + (ns ? `\0notes\0${ns}` : "")), code: linked ? codeHash(c.files) : null };
   const ex = exactOf(info, source, c.missing).lines, runnable = ex.filter((x) => !x.why).length;
   const whole = info.kind === "feature" ? await code(ports, [...new Set(stmtsDeep(info.node.items).flatMap((s) => s.paths ?? []))], memo) : c;
-  const design = designSize(printNode(info.node)), size = codeSize(whole.files);
+  // `example` lines are left out of the size, as the code's tests are left out of the code: they are what gets checked
+  const design = designSize(printNode(info.node)) - stmtsDeep(info.node.items).filter((x) => x.kind === "example").reduce((n, x) => n + designSize(x.raw), 0), size = codeSize(whole.files);
   const was = state.blocks[info.id];
   const dAhead = was && was.design !== hashes.design, cAhead = was && was.code !== hashes.code;
   const status: PdlStatus = !was ? "new" : dAhead && cAhead ? "both changed" : dAhead ? "design ahead" : cAhead ? "code ahead" : "in step";
