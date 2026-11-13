@@ -135,6 +135,10 @@ Why does OpenArc trail the plain prompt? `matrix-ablations.json` holds one arm p
 
 Every request body is logged to `results/<dir>/prompts/s<seed>/<config>/<exercise>.jsonl` so prompts can be audited. Each task row records `failCounts` per attempt: compile (type/syntax error or unparseable output; for the baseline, the file did not load), public (a public example failed) and constraint (an OpenArc static rule).
 
+## `.arc` token experiment: `arc-tokens.mjs`
+
+Pre-registered in `experiments/arc-tokens.md` (hypothesis, arms, fixed parameters, decision rule, command): on the evolve-multi scenario (dev split only), arm B gets the whole current file as evolve-multi's D does, arm A gets the module's `.arc` from `openarc decompile` plus the code of the functions it changes, and returns their bodies. Same model, sampling and 3 attempts per file. `--dry-run` builds every first-attempt prompt of both arms without a model and prints their sizes; `--report <jsonl>` prints the per-step table and the verdict. Resumable, results in `results/arc-tokens/<model>-s<seed>/`. `node --no-warnings lib/arc-tokens.check.mjs` runs it against a stub server.
+
 ## Dependency suggestions (issue #50): `deps/`
 
 `deps/run.mjs` measures `openarc deps suggest` on 9 small tasks (`deps/tasks/<task>.ts`: a `defineRegion` spec with 3 public examples; `<task>.heldout.mjs`: held-out cases and `meta.expectLib`). Six have a library that clearly helps (semver precedence, RFC 4180 CSV, calendar days across DST, UUID v4, slugify with transliteration, deep equality with Map/Set/Date/RegExp); three should get none (clamp, capitalize words, sum of evens). The held-out cases were checked against semver, csv-parse, uuid, slugify, dequal and an Intl reference.
