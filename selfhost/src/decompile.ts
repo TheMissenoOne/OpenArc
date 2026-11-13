@@ -135,14 +135,15 @@ function unmet(e: ArcExample, r: Ran): string | undefined {
 }
 
 /** The project as decompile and check read it: source modules with their exported functions and their uses, each
- *  file read by its language (lang/lang.ts), in the order the directories list them. */
-async function scan(ctx: DecompileCtx) {
+ *  file read by its language (lang/lang.ts), in the order the directories list them. `just`: read only these source
+ *  files, and no tests (their uses are not needed); the texts are still every file's, for the sandbox. */
+async function scan(ctx: DecompileCtx, just?: Set<string>) {
   const { ports } = ctx;
   const all = [...new Set((await Promise.all(ctx.dirs.map((d) => walk(ports, d)))).flat())]; // `.` and `src` overlap
   const code = all.filter((f) => CODE.test(f));
-  const sources = code.filter((f) => !isTest(f));
+  const sources = code.filter((f) => !isTest(f) && (!just || just.has(f)));
   // tests may live outside the source directories
-  const tests = [...new Set([...code.filter(isTest), ...(await Promise.all(["tests", "test", "__tests__"].map((d) => walk(ports, d)))).flat().filter((f) => CODE.test(f))])];
+  const tests = just ? [] : [...new Set([...code.filter(isTest), ...(await Promise.all(["tests", "test", "__tests__"].map((d) => walk(ports, d)))).flat().filter((f) => CODE.test(f))])];
   const byFile = new Map<string, ReadModule>(), instrumented = new Map<string, string>();
   for (const lang of LANGS) {
     const src = sources.filter((f) => lang.code.test(f));
@@ -412,13 +413,18 @@ export interface CheckSummary { functions: number; preserved: number; changed: n
 
 /** `decompile --check`: every `example` and `observed` line in the `.arc` files under `ctx.out` against the code as it is
  *  now. Reads only the `.arc` files and the code (not the state file) and writes nothing. ok: nothing changed, failed or
- *  was removed. `only`: check just the functions it accepts. ponytail: finite inputs; agreeing on them does not prove two versions equal. */
-export async function checkSpecs(ctx: DecompileCtx, only?: (file: string, fn: string) => boolean): Promise<{ ok: boolean; summary: CheckSummary; items: CheckItem[] }> {
-  const { read, texts } = await scan(ctx);
-  const arcs: ArcModule[] = [];
-  for (const f of await walk(ctx.ports, ctx.out, [], (n) => n.endsWith(".arc"))) {
-    try { arcs.push(parseArc((await ctx.ports.fs.read(f)) ?? "")); } catch (e) { ctx.log(`${f}: ${(e as Error).message}; not checked`); }
+ *  was removed. `only`: check just the functions of the `.arc` files it accepts, reading only their source files (so no
+ *  function is `new`). `parsed`: the `.arc` files, already parsed by the caller. ponytail: finite inputs; agreeing on
+ *  them does not prove two versions equal. */
+export async function checkSpecs(ctx: DecompileCtx, only?: (file: string, fn: string) => boolean, parsed?: ArcModule[]): Promise<{ ok: boolean; summary: CheckSummary; items: CheckItem[] }> {
+  let arcs = parsed;
+  if (!arcs) {
+    arcs = [];
+    for (const f of await walk(ctx.ports, ctx.out, [], (n) => n.endsWith(".arc"))) {
+      try { arcs.push(parseArc((await ctx.ports.fs.read(f)) ?? "")); } catch (e) { ctx.log(`${f}: ${(e as Error).message}; not checked`); }
+    }
   }
+  const { read, texts } = await scan(ctx, only && new Set(arcs.filter((m) => m.fns.some((f) => only(m.file, f.name))).map((m) => m.file)));
   const items: CheckItem[] = [], summary: CheckSummary = { functions: 0, preserved: 0, changed: 0, failing: 0, unrunnable: 0, removed: 0, new: 0, held: 0, broken: 0, unparsable: 0 };
   const add = (i: CheckItem) => { items.push(i); summary[i.kind]++; };
   const box = sandbox(ctx, texts);

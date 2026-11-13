@@ -33,14 +33,16 @@ async function entries(ctx: ArcCtx): Promise<Entry[]> {
   return out;
 }
 
-/** checkSpecs over the source directories the `.arc` files name. ponytail: a module's directory is the first segment
- *  of its path, as decompile's `dirs` are; a source file at the project root is not reached. */
+/** checkSpecs over the source directories the `.arc` files name, on the modules `all` already parsed. ponytail: a
+ *  module's directory is the first segment of its path, as decompile's `dirs` are; a source file at the project root is
+ *  not reached. */
 const check = (ctx: ArcCtx, all: Entry[], only: (file: string, fn: string) => boolean, ports = ctx.ports) =>
-  checkSpecs({ ...ctx, ports, dirs: [...new Set(all.map((e) => e.mod.file.split("/")[0]!))] }, only);
+  checkSpecs({ ...ctx, ports, dirs: [...new Set(all.map((e) => e.mod.file.split("/")[0]!))] }, only, [...new Set(all.map((e) => e.mod))]);
 
-/** `arc status`: each function's examples against the code as it is. `filter`: a module name or `<module>.<fn>`. */
-export async function arcStatus(ctx: ArcCtx, filter?: string): Promise<ArcRow[]> {
-  const all = await entries(ctx);
+/** `arc status`: each function's examples against the code as it is. `filter`: a module name or `<module>.<fn>`. `all`:
+ *  the entries, when the caller has them. */
+export async function arcStatus(ctx: ArcCtx, filter?: string, all?: Entry[]): Promise<ArcRow[]> {
+  all ??= await entries(ctx);
   const picked = all.filter((e) => !filter || e.id === filter || e.mod.name === filter);
   if (!picked.length) return [];
   const want = new Set(picked.map((e) => `${e.mod.file}\0${e.fn.name}`));
@@ -115,11 +117,11 @@ function typesOf(m: ArcModule, f: ArcFn): string[] {
 const SYSTEM = "You write one function body. You output exactly one fenced code block holding the body's statements only: no signature, no outer braces, no imports.";
 
 /** What a writer (the host agent, or compile's model) needs for a new body of `id`: the shape of host.hostPrompt. */
-export async function arcPrompt(ctx: ArcCtx, id: string): Promise<{ id: string; file: string; signature: string; outputFormat: "code"; system: string; prompt: string; instruction: string } | { refused: string }> {
-  const got = await find(ctx, id);
+export async function arcPrompt(ctx: ArcCtx, id: string, found?: Found): Promise<{ id: string; file: string; signature: string; outputFormat: "code"; system: string; prompt: string; instruction: string } | { refused: string }> {
+  const got = found ?? await find(ctx, id);
   if ("refused" in got) return got;
   const { entry: { mod, fn }, lang, loc } = got;
-  const row = (await arcStatus(ctx, id))[0];
+  const row = (await arcStatus(ctx, id, got.all))[0];
   const signature = `${fn.async ? "async " : ""}fn ${printSignature(fn)}`;
   const types = typesOf(mod, fn);
   const failing = row?.status === "stale" ? row.failing!.map(failLine) : row?.status === "unrunnable" ? [`unrunnable: ${row.why}`] : [];
@@ -140,8 +142,8 @@ export async function arcPrompt(ctx: ArcCtx, id: string): Promise<{ id: string; 
 /** `arc accept`: `raw` (a body, maybe fenced) becomes the body of `id`, kept only when the file still parses (and type
  *  checks, for TypeScript) and every `example` line holds. The file is written only then, so a rejected body leaves it
  *  byte-identical. No model. refused: the input can't be tried; problems: it was tried and failed. */
-export async function arcAccept(ctx: ArcCtx, id: string, raw: string): Promise<{ ok: true; file: string } | { ok: false; problems: string[] } | { refused: string }> {
-  const got = await find(ctx, id);
+export async function arcAccept(ctx: ArcCtx, id: string, raw: string, found?: Found): Promise<{ ok: true; file: string } | { ok: false; problems: string[] } | { refused: string }> {
+  const got = found ?? await find(ctx, id);
   if ("refused" in got) return got;
   const { entry, text, lang, loc, all } = got;
   const file = entry.mod.file, name = entry.fn.name;
@@ -194,7 +196,10 @@ export async function arcAccept(ctx: ArcCtx, id: string, raw: string): Promise<{
 export async function arcCompile(ctx: ArcCtx, ids: string[], ask: (system: string, user: string) => Promise<string>, attempts: number): Promise<{ id: string; ok: boolean; attempts: number; problems: string[] }[]> {
   const out: { id: string; ok: boolean; attempts: number; problems: string[] }[] = [];
   for (const id of ids) {
-    const p = await arcPrompt(ctx, id);
+    // the .arc files and the source are read once per function: a rejected body writes nothing, an accepted one ends it
+    const got = await find(ctx, id);
+    if ("refused" in got) { out.push({ id, ok: false, attempts: 0, problems: [got.refused] }); continue; }
+    const p = await arcPrompt(ctx, id, got);
     if ("refused" in p) { out.push({ id, ok: false, attempts: 0, problems: [p.refused] }); continue; }
     let previous: { body: string; problems: string[] } | null = null, n = 0;
     while (n < attempts) {
@@ -203,7 +208,7 @@ export async function arcCompile(ctx: ArcCtx, ids: string[], ask: (system: strin
       let reply: string;
       try { reply = await ask(p.system, repair ? `${p.prompt}\n\n${repair}` : p.prompt); }
       catch (e) { previous = { body: "", problems: [`the model request failed: ${(e as Error).message}`] }; break; }
-      const res = await arcAccept(ctx, id, reply);
+      const res = await arcAccept(ctx, id, reply, got);
       if ("ok" in res && res.ok) { previous = null; break; }
       const body = readReply(reply);
       previous = { body: body.ok ? body.body : reply, problems: "refused" in res ? [res.refused] : res.problems };
