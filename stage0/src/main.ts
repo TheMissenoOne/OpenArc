@@ -26,6 +26,7 @@ import { adopt, brief, syncOnce, type SyncCtx, type SyncStatus } from "./sync.ts
 import { SHEET_FILE } from "./sheet.ts";
 import { STATE_FILE, decompile, report, todo, type DecompileState } from "./decompile.ts";
 import { parseArc, type ArcModule } from "./arc.ts";
+import { missingLine, rollUp, formatStatus, statusDetail } from "./levels.ts";
 import { ARCH_FILE, CONCEPT_FILE, checkArch, checkConcept, deriveArch, formatReport, importsOf, parseArch, parseConcept, printArch, printConcept, projectName, sources, updateArch, type Arch, type Concept } from "./levels.ts";
 import { LINT_USAGE, lintCommand } from "./lint.ts";
 import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools, type TierChoice } from "./isolation.ts";
@@ -309,6 +310,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc adopt [--brief] [--json] [--no-model] | sync [--watch] [--brief] [--json] [--no-model]
        openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>]] [--fresh] [--json] | decompile --report|--todo [--json]
        openarc arch [dirs...] [--check] [--json] | concept [--check] [--json]
+       openarc status [--json] [--part <name>] [--goal <name>]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
        openarc prompt <id> [--json] | accept <id> [--file <path>] [--json] | guard [files...] [--json] | guard --hook
        ${LINT_USAGE}`;
@@ -482,6 +484,30 @@ async function conceptCmd(root: string, ports: Ports, argv: string[]): Promise<n
   console.log(`${CONCEPT_FILE}: ${c.goals.length} goals, ${c.nongoals.length} nongoals, ${c.terms.length} terms`);
   console.log(archText === null ? `no ${ARCH_FILE} yet; run \`openarc arch\` for the parts goals trace to` : `parts goals can trace to: ${parts.join(", ")}`);
   return 0;
+}
+
+/** `openarc status [--json] [--part <name>] [--goal <name>]`: what backs each goal and part, read from the level files
+ *  and the last decompile (src/levels.ts). Runs nothing, writes nothing. */
+async function statusCmd(ports: Ports, argv: string[]): Promise<number> {
+  const only: { part?: string; goal?: string } = {};
+  let json = false;
+  for (let i = 0; i < argv.length; i++) {
+    const f = argv[i]!, v = argv[i + 1];
+    if (f === "--json") json = true;
+    else if ((f === "--part" || f === "--goal") && v && !v.startsWith("--") && !only.part && !only.goal) (only[f === "--part" ? "part" : "goal"] = v), i++;
+    else return console.error(`openarc: bad-flag\n\n${USAGE}`), 2;
+  }
+  const [st, at, ct] = await Promise.all([STATE_FILE, ARCH_FILE, CONCEPT_FILE].map((f) => ports.fs.read(f)));
+  let a: Arch | null, c: Concept | null, s: DecompileState;
+  try { a = at === null ? null : parseArch(at); } catch (e) { return console.error(`${ARCH_FILE}: ${(e as Error).message}`), 1; }
+  try { c = ct === null ? null : parseConcept(ct); } catch (e) { return console.error(`${CONCEPT_FILE}: ${(e as Error).message}`), 1; }
+  if (st === null) return console.error([STATE_FILE, ...(c ? [] : [CONCEPT_FILE]), ...(a ? [] : [ARCH_FILE])].map(missingLine).join("\n")), 1;
+  try { s = JSON.parse(st) as DecompileState; } catch (e) { return console.error(`${STATE_FILE}: ${(e as Error).message}`), 1; }
+  const r = rollUp(s, a, c);
+  if (!only.part && !only.goal) return console.log(json ? JSON.stringify(r) : formatStatus(r)), 0;
+  const x = only.part ? r.parts.find((p) => p.name === only.part) : r.goals.find((g) => g.name === only.goal);
+  if (!x) return console.error(only.part ? `openarc: no part ${only.part} in ${ARCH_FILE}` : `openarc: no goal ${only.goal} in ${CONCEPT_FILE}`), 1;
+  return console.log(json ? JSON.stringify(x) : statusDetail(x, s)), 0;
 }
 
 /** `openarc adopt` and `openarc sync [--watch] [--brief] [--json] [--no-model]` (src/sync.ts). */
@@ -830,6 +856,7 @@ async function main(argv: string[]): Promise<number> {
   if (argv[0] === "arch" || argv[0] === "concept") return (argv[0] === "arch" ? archCmd : conceptCmd)(root, ports, argv.slice(1));
   if (argv[0] === "prompt" || argv[0] === "accept") return hostCmd(root, ports, argv);
   if (argv[0] === "guard") return guardCmd(root, ports, argv.slice(1));
+  if (argv[0] === "status") return statusCmd(ports, argv.slice(1));
   if (argv[0] === "lint") { // spec rules, offline: no model, no sandbox (src/lint.ts)
     const args = argv.slice(1).map((a, i, all) => (/[/\\]|\.tsx?$/.test(a) && all[i - 1] !== "--profile" && all[i - 1] !== "--format" ? relative(root, resolve(process.cwd(), a)).split(sep).join("/") : a));
     return lintCommand(ports, request(root, null, []), args, { out: (l) => console.log(l), err: (l) => console.error(l), message: (c) => MESSAGES[c] ?? "" });

@@ -1,11 +1,13 @@
 // The architecture and concept files round trip, then `openarc arch` and `openarc concept` end to end on a plain
-// JavaScript project: derive, hand edits that survive, new files placed, every violation and warning, --json.
+// JavaScript project: derive, hand edits that survive, new files placed, every violation and warning, --json. Then the
+// `openarc status` roll-up, pure and after a real decompile of the same project.
 // Run: node --no-warnings tests/levels.check.ts
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { importsOf, parseArch, parseConcept, printArch, printConcept, type Arch, type Concept } from "../src/levels.ts";
+import { formatStatus, importsOf, parseArch, parseConcept, printArch, printConcept, rollUp, statusDetail, type Arch, type Concept } from "../src/levels.ts";
+import type { DecompileState } from "../src/decompile.ts";
 
 // ── pure: print and parse are inverses, errors name the line
 {
@@ -44,6 +46,45 @@ import { importsOf, parseArch, parseConcept, printArch, printConcept, type Arch,
     ["src/b.ts", 'export * from "./a.js";'], ["src/c/index.js", ""],
   ]));
   assert.deepStrictEqual(edges.map((e) => `${e.from} ${e.to} ${e.external}`), ["src/a.js src/b.ts false", "src/a.js src/c/index.js false", "src/a.js three true", "src/a.js @s/p true", "src/a.js node:fs true", "src/a.js node:path true", "src/b.ts src/a.js false"]);
+
+  // status: parts over the decompiled files (a glob, a module not decompiled), the unassigned file, goals over parts
+  const fn = (status: string, why?: string) => ({ status, tests: [], ...(why ? { why } : {}) }) as DecompileState["modules"][string]["fns"][string];
+  const mod = (fns: Record<string, ReturnType<typeof fn>>, skipped: Record<string, string> = {}) => ({ hash: "", arc: "", fns, skipped });
+  const st: DecompileState = { version: 1, modules: {
+    "src/sim/a.js": mod({ f: fn("tested"), g: fn("bare", "no inputs") }, { K: "a class" }),
+    "src/sim/deep/b.js": mod({ h: fn("guessed"), i: fn("examples") }),
+    "src/ui.js": mod({ j: fn("failing", "t.test.js fails"), k: fn("described") }),
+    "src/loose.js": mod({ l: fn("observed") }),
+  } };
+  const arch: Arch = { name: "x", intent: [], externals: [], parts: [{ name: "sim", intent: [], modules: ["src/sim/**"], uses: [] }, { name: "ui", intent: [], modules: ["src/ui.js", "src/gone.js"], uses: [] }] };
+  const con: Concept = { name: "x", intent: [], nongoals: [], terms: [], goals: [{ name: "play", intent: [], parts: ["sim", "ui"] }, { name: "talk", intent: [], parts: ["sim", "audio"] }] };
+  const r = rollUp(st, arch, con);
+  const [sim, ui] = r.parts;
+  assert.deepStrictEqual(sim, { name: "sim", modules: ["src/sim/a.js", "src/sim/deep/b.js"], functions: 4, counts: { tested: 1, examples: 1, guessed: 1, bare: 1 }, skipped: 1, weakest: "bare", notDecompiled: [] });
+  assert.deepStrictEqual([ui!.modules, ui!.notDecompiled, ui!.weakest, Object.keys(ui!.counts)], [["src/ui.js"], ["src/gone.js"], "failing", ["described", "failing"]]);
+  assert.deepStrictEqual(r.unassigned, { modules: ["src/loose.js"], functions: 1, counts: { observed: 1 }, skipped: 0, weakest: "observed" });
+  assert.deepStrictEqual([r.goals[0]!.functions, r.goals[0]!.weakest, r.goals[0]!.unknownParts, r.goals[1]!.unknownParts, r.goals[1]!.weakest], [6, "failing", [], ["audio"], "bare"]);
+  assert.deepStrictEqual([r.totals.functions, r.totals.modules.length, r.missing], [7, 4, []]);
+  assert.strictEqual(formatStatus(r), [
+    "goal play: parts sim, ui: 6 functions (tested 1, examples 1, described 1, guessed 1, bare 1, failing 1); weakest failing; 1 skipped; not decompiled: src/gone.js",
+    "goal talk: parts sim, audio: 4 functions (tested 1, examples 1, guessed 1, bare 1); weakest bare; 1 skipped; part audio is not in arc/architecture.arc",
+    "part sim: 2 modules, 4 functions (tested 1, examples 1, guessed 1, bare 1); weakest bare; 1 skipped",
+    "part ui: 1 modules, 2 functions (described 1, failing 1); weakest failing; not decompiled: src/gone.js",
+    "unassigned: 1 modules, 1 functions (observed 1); weakest observed",
+    "total: 4 modules, 7 functions (tested 1, examples 1, observed 1, described 1, guessed 1, bare 1, failing 1); weakest failing; 1 skipped",
+  ].join("\n"));
+  assert.strictEqual(statusDetail(r.goals[0]!, st), [
+    "goal play: parts sim, ui: 6 functions (tested 1, examples 1, described 1, guessed 1, bare 1, failing 1); weakest failing; 1 skipped; not decompiled: src/gone.js",
+    "  src/sim/a.js: 2 functions (tested 1, bare 1); weakest bare; 1 skipped", "  src/sim/deep/b.js: 2 functions (examples 1, guessed 1); weakest guessed", "  src/ui.js: 2 functions (described 1, failing 1); weakest failing",
+    "  src/gone.js: not decompiled", "  failing src/ui.js j: t.test.js fails", "  bare src/sim/a.js g: no inputs",
+  ].join("\n"));
+  // no architecture and no concept: every file is unassigned, the missing levels are named
+  const bare = rollUp(st, null, null);
+  assert.deepStrictEqual([bare.parts, bare.goals, bare.unassigned!.functions, bare.missing], [[], [], 7, ["arc/concept.arc", "arc/architecture.arc"]]);
+  assert.ok(formatStatus(bare).startsWith("no arc/concept.arc; run `openarc concept` to write it\nno arc/architecture.arc; run `openarc arch` to write it\nunassigned: 4 modules"));
+  // more than 20 weak functions: the first 20 and a count
+  const many = rollUp({ version: 1, modules: { "m.js": mod(Object.fromEntries(Array.from({ length: 23 }, (_, i) => [`f${i}`, fn("bare")]))) } }, { ...arch, parts: [{ name: "m", intent: [], modules: ["m.js"], uses: [] }] }, null);
+  assert.deepStrictEqual(statusDetail(many.parts[0]!, { version: 1, modules: { "m.js": mod(Object.fromEntries(Array.from({ length: 23 }, (_, i) => [`f${i}`, fn("bare")]))) } }).split("\n").slice(-2), ["  bare m.js f19", "  and 3 more"]);
 }
 
 if (process.platform === "win32") {
@@ -180,6 +221,46 @@ part src.sim
   r = oa("concept", "--check");
   assert.deepStrictEqual([r.code, lines(r.out)], [1, ["violation: goal play names no part", "violation: goal look names part audio, which arc/architecture.arc does not have", "warning: part src.sim: no goal names it", "failed: 2 violations, 1 warnings"]]);
   assert.strictEqual(oa("concept", "x").code, 2);
+
+  // status: nothing to roll up before a decompile, then what backs each goal and part; never runs or writes anything
+  r = oa("status");
+  assert.deepStrictEqual([r.code, r.out], [1, "no .openarc/decompile.json; run `openarc decompile` to write it\n"]);
+  write("src/sim/math.js", "/** Doubles a number.\n * @param {number} n */\nexport const double = (n) => n * 2;\n");
+  write("src/extra.js", "// Says hi.\nexport function hi(name) { return name; }\n"); // in no part: arc/architecture.arc names src/main.js only
+  r = oa("decompile");
+  assert.strictEqual(r.code, 0, r.out);
+  const before = [".openarc/decompile.json", "arc/architecture.arc", "arc/concept.arc"].map(read);
+  r = oa("status");
+  assert.deepStrictEqual([r.code, lines(r.out)], [0, [
+    "goal play: parts none: 0 functions",
+    "goal look: parts src.ui, src, src.dsl, audio: 3 functions (bare 3); weakest bare; part audio is not in arc/architecture.arc; not decompiled: src/ui/hud.js",
+    "part src: 1 modules, 1 functions (bare 1); weakest bare",
+    "part src.dsl: 2 modules, 2 functions (bare 2); weakest bare",
+    "part src.sim: 3 modules, 3 functions (examples 1, bare 2); weakest bare",
+    "part src.ui: 0 modules, 0 functions; not decompiled: src/ui/hud.js", // hud.js exports no function, so decompile records nothing for it
+    "unassigned: 1 modules, 1 functions (described 1); weakest described",
+    "total: 7 modules, 7 functions (examples 1, described 1, bare 5); weakest bare",
+  ]]);
+  assert.ok(!/verified|proved/i.test(r.out), r.out);
+  const sj = JSON.parse(oa("status", "--json").out) as { goals: { name: string; unknownParts: string[] }[]; parts: { name: string; counts: Record<string, number> }[]; unassigned: { modules: string[] }; totals: { functions: number }; missing: string[] };
+  assert.deepStrictEqual(Object.keys(sj), ["goals", "parts", "unassigned", "totals", "missing"]);
+  assert.deepStrictEqual([sj.goals[1]!.unknownParts, sj.parts[2]!.counts, sj.unassigned.modules, sj.totals.functions, sj.missing], [["audio"], { examples: 1, bare: 2 }, ["src/extra.js"], 7, []]);
+  r = oa("status", "--part", "src.sim");
+  assert.ok(lines(r.out).pop()!.startsWith("  bare src/sim/world.js step: OARC-E090 harness crashed"), r.out); // the rest names the sandbox's path
+  assert.deepStrictEqual([r.code, lines(r.out).slice(0, -1)], [0, [
+    "part src.sim: 3 modules, 3 functions (examples 1, bare 2); weakest bare",
+    "  src/sim/math.js: 1 functions (examples 1); weakest examples", "  src/sim/rules.js: 1 functions (bare 1); weakest bare", "  src/sim/world.js: 1 functions (bare 1); weakest bare",
+    "  bare src/sim/rules.js rule: no inputs: the parameter types say too little and no call passes literals",
+  ]]);
+  assert.strictEqual((JSON.parse(oa("status", "--goal", "look", "--json").out) as { functions: number }).functions, 3);
+  assert.deepStrictEqual([before, [".openarc/decompile.json", "arc/architecture.arc", "arc/concept.arc"].map(read)], [before, before]);
+  assert.deepStrictEqual(Object.values(oa("status", "--part", "nope")), [1, "openarc: no part nope in arc/architecture.arc\n"]);
+  assert.strictEqual(oa("status", "--goal", "nope").code, 1);
+  for (const bad of [["--bogus"], ["--part"], ["--part", "src", "--goal", "look"], ["src"]]) assert.strictEqual(oa("status", ...bad).code, 2, bad.join(" "));
+  // without the concept: named as missing, the parts still reported
+  rmSync(join(dir, "arc/concept.arc"));
+  r = oa("status");
+  assert.deepStrictEqual([r.code, lines(r.out)[0], lines(r.out).length], [0, "no arc/concept.arc; run `openarc concept` to write it", 7]);
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

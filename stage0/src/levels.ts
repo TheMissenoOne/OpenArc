@@ -16,7 +16,7 @@
 import ts from "typescript";
 import { builtinModules } from "node:module";
 import type { Ports } from "./types.ts";
-import { CODE, isTest, walk } from "./decompile.ts";
+import { CODE, STATE_FILE, isTest, walk, type DecompileState } from "./decompile.ts";
 
 export const ARCH_FILE = "arc/architecture.arc";
 export const CONCEPT_FILE = "arc/concept.arc";
@@ -287,6 +287,63 @@ export function checkConcept(c: Concept, parts: string[]): Report {
 
 export const formatReport = (r: Report, json: boolean): string =>
   json ? JSON.stringify(r) : [...r.violations.map((l) => `violation: ${l}`), ...r.warnings.map((l) => `warning: ${l}`), `${r.ok ? "ok" : "failed"}: ${r.violations.length} violations, ${r.warnings.length} warnings`].join("\n");
+
+// ── status: what backs each goal and part, read across the levels ──
+// A goal is prose: no machine proves it. The roll-up only says what was checked below it, never "verified".
+/** Function statuses, weakest first. A name not listed (a newer or older decompile's) ranks just before `described`. */
+export const STRENGTH = ["failing", "bare", "described", "observed", "examples", "specified", "tested"];
+const rank = (s: string) => (STRENGTH.includes(s) ? STRENGTH.indexOf(s) : STRENGTH.indexOf("described") - 0.5);
+
+/** `counts`: functions per status, strongest first. `weakest`: the weakest status present, null with no functions. */
+export interface Backing { modules: string[]; functions: number; counts: Record<string, number>; skipped: number; weakest: string | null }
+export interface PartStatus extends Backing { name: string; notDecompiled: string[] }
+export interface GoalStatus extends Backing { name: string; parts: string[]; unknownParts: string[]; notDecompiled: string[] }
+export interface Status { goals: GoalStatus[]; parts: PartStatus[]; unassigned: Backing | null; totals: Backing; missing: string[] }
+
+/** What the decompile state records for these source files. */
+export function backing(s: DecompileState, files: string[]): Backing {
+  const counts: Record<string, number> = {};
+  let skipped = 0;
+  for (const f of files) {
+    for (const fn of Object.values(s.modules[f]?.fns ?? {})) counts[fn.status] = (counts[fn.status] ?? 0) + 1;
+    skipped += Object.keys(s.modules[f]?.skipped ?? {}).length;
+  }
+  const names = Object.keys(counts).sort((a, b) => rank(b) - rank(a) || (a < b ? -1 : 1));
+  return { modules: files, functions: names.reduce((n, k) => n + counts[k]!, 0), counts: Object.fromEntries(names.map((k) => [k, counts[k]!])), skipped, weakest: names.at(-1) ?? null };
+}
+
+/** The roll-up: each part over the decompiled files its module lines match (the matching `arch --check` uses), the files
+ *  in no part, each goal over the files of the parts it names (each file once), and the total. A missing level is null. */
+export function rollUp(s: DecompileState, a: Arch | null, c: Concept | null): Status {
+  const files = Object.keys(s.modules).sort(), owner = owners(a ?? { name: "", intent: [], externals: [], parts: [] }, files);
+  const parts = (a?.parts ?? []).map((p) => ({ name: p.name, ...backing(s, files.filter((f) => owner.get(f)!.includes(p))), notDecompiled: p.modules.filter((m) => !files.some((f) => matches(m, f))) }));
+  const goals = (c?.goals ?? []).map((g) => {
+    const mine = parts.filter((p) => g.parts.includes(p.name));
+    return { name: g.name, parts: g.parts, unknownParts: g.parts.filter((n) => !mine.some((p) => p.name === n)), ...backing(s, [...new Set(mine.flatMap((p) => p.modules))].sort()), notDecompiled: [...new Set(mine.flatMap((p) => p.notDecompiled))] };
+  });
+  const loose = files.filter((f) => !owner.get(f)!.length);
+  return { goals, parts, unassigned: loose.length ? backing(s, loose) : null, totals: backing(s, files), missing: [...(c ? [] : [CONCEPT_FILE]), ...(a ? [] : [ARCH_FILE])] };
+}
+
+const MAKES: Record<string, string> = { [CONCEPT_FILE]: "concept", [ARCH_FILE]: "arch", [STATE_FILE]: "decompile" };
+export const missingLine = (file: string) => `no ${file}; run \`openarc ${MAKES[file]}\` to write it`;
+const counted = (b: Backing) => `${b.functions} functions${b.functions ? ` (${Object.entries(b.counts).map(([k, n]) => `${k} ${n}`).join(", ")}); weakest ${b.weakest}` : ""}${b.skipped ? `; ${b.skipped} skipped` : ""}`;
+const notYet = (l: string[]) => (l.length ? `; not decompiled: ${l.join(", ")}` : "");
+const itemLine = (x: PartStatus | GoalStatus) => "parts" in x
+  ? `goal ${x.name}: parts ${x.parts.join(", ") || "none"}: ${counted(x)}${x.unknownParts.map((p) => `; part ${p} is not in ${ARCH_FILE}`).join("")}${notYet(x.notDecompiled)}`
+  : `part ${x.name}: ${x.modules.length} modules, ${counted(x)}${notYet(x.notDecompiled)}`;
+
+/** One line per missing level, goal, part, then the unassigned files and the total. */
+export const formatStatus = (r: Status): string =>
+  [...r.missing.map(missingLine), ...r.goals.map(itemLine), ...r.parts.map(itemLine), ...(r.unassigned ? [`unassigned: ${r.unassigned.modules.length} modules, ${counted(r.unassigned)}`] : []), `total: ${r.totals.modules.length} modules, ${counted(r.totals)}`].join("\n");
+
+/** One part or goal: its line, a line per module, then its failing and bare functions with why (the first 20). */
+export function statusDetail(x: PartStatus | GoalStatus, s: DecompileState): string {
+  const weak = x.modules.flatMap((f) => Object.entries(s.modules[f]!.fns).filter(([, fn]) => rank(fn.status) <= rank("bare")).map(([name, fn]) => ({ f, name, ...fn })))
+    .sort((a, b) => rank(a.status) - rank(b.status)) // stable: failing first, then source order
+    .map((w) => `  ${w.status} ${w.f} ${w.name}${w.why ? `: ${w.why}` : ""}`);
+  return [itemLine(x), ...x.modules.map((f) => `  ${f}: ${counted(backing(s, [f]))}`), ...x.notDecompiled.map((m) => `  ${m}: not decompiled`), ...weak.slice(0, 20), ...(weak.length > 20 ? [`  and ${weak.length - 20} more`] : [])].join("\n");
+}
 
 /** package.json's name, else the folder's. */
 export async function projectName(ports: Ports, root: string): Promise<string> {
