@@ -164,7 +164,7 @@ const tree = (e: RuleExpr): string => {
   const MAIN = resolve("src/main.ts");
   const dir = mkdtempSync(join(resolve(".."), ".rules-check-"));
   const write = (f: string, t: string) => (mkdirSync(dirname(join(dir, f)), { recursive: true }), writeFileSync(join(dir, f), t));
-  const oa = (...args: string[]) => { const r = spawnSync(process.execPath, ["--no-warnings", MAIN, ...args], { cwd: dir, encoding: "utf8" }); return { code: r.status, out: r.stdout + r.stderr }; };
+  const oa = (...args: string[]) => { const r = spawnSync(process.execPath, ["--no-warnings", MAIN, ...args], { cwd: dir, encoding: "utf8" }); return { code: r.status, out: r.stdout + r.stderr, json: r.stdout }; }; // json: stdout alone, since an isolation notice goes to stderr
   try {
     write("package.json", '{"name":"plain","version":"1.0.0","private":true}');
     // forgets the lower bound: no written example passes a negative number
@@ -186,7 +186,7 @@ fn clampPct(n: Num): Num
     assert.ok(held > 2 && held <= 52, r.out); // the two examples and at most 50 generated inputs
     assert.ok(!/proved|verified/.test(r.out));
     r = oa("decompile", "--check", "--rule-inputs", "3", "--json");
-    const report = JSON.parse(r.out) as { ok: boolean; summary: { held: number; broken: number }; items: { kind: string; rule?: string; inputs?: number }[] };
+    const report = JSON.parse(r.json) as { ok: boolean; summary: { held: number; broken: number }; items: { kind: string; rule?: string; inputs?: number }[] };
     assert.strictEqual(report.ok, false);
     assert.deepStrictEqual([report.summary.held, report.summary.broken], [1, 1]);
     assert.ok(report.items.find((i) => i.rule === "capped")!.inputs! <= 5);
