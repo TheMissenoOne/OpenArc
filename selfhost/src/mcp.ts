@@ -49,6 +49,9 @@ export const TOOLS: Tool[] = [
   },
   { name: "prompt", description: "Host-agent mode: the prompt for a pending or stale region. Write the body yourself, then call accept.", inputSchema: ID, argv: (i) => ["prompt", pos(i.id), "--json"] },
   { name: "accept", description: "Host-agent mode: verify the body you wrote for a region; commits it if it passes, else lists the problems.", inputSchema: obj({ id: str("region id"), body: str("the function body, as prompt asks") }, ["id", "body"]), argv: (i) => ["accept", pos(i.id), "--json"], stdin: (i) => String(i.body) },
+  { name: "arc_status", description: "Which functions the code does not meet their .arc spec (stale), with the failing example or rule.", inputSchema: obj({ name: str("module or module.fn") }), argv: (i) => ["arc", "status", ...(i.name === undefined ? [] : [pos(i.name)]), "--json"] },
+  { name: "arc_prompt", description: "To change a function from its .arc spec: its spec, current code and failing examples. Write the body, then call arc_accept.", inputSchema: obj({ name: str("module.fn") }, ["name"]), argv: (i) => ["arc", "prompt", pos(i.name), "--json"] },
+  { name: "arc_accept", description: "Verify your body against the function's examples and rules; replaces the body if all pass, else changes nothing.", inputSchema: obj({ name: str("module.fn"), body: str("the function body: statements only, no signature") }, ["name", "body"]), argv: (i) => ["arc", "accept", pos(i.name), "--json"], stdin: (i) => String(i.body) },
 ];
 
 const MODERN = "2026-07-28";

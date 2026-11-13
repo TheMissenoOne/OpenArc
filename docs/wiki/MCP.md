@@ -22,6 +22,9 @@ Every tool also takes `root`, the project folder.
 | `guard` | `guard --hook` with the edit on stdin: refused (`isError`, the reason) or `ok` | `file`, and `old_string` (an edit) or `content` (a whole-file write) |
 | `prompt` | `prompt <id> --json` | `id` |
 | `accept` | `accept <id> --json`, `body` on stdin | `id`, `body` |
+| `arc_status` | `arc status [name] --json` | `name` (a module or `module.fn`, optional) |
+| `arc_prompt` | `arc prompt <name> --json` | `name` |
+| `arc_accept` | `arc accept <name> --json`, `body` on stdin | `name`, `body` |
 
 Not exposed: `setup`, `decompile` without a flag (it writes many files and can run long), and anything that calls a model. A value that would land as a positional argument may not start with `-`.
 
