@@ -190,6 +190,7 @@ export interface TierArgs {
   cpuSeconds: number;
   regionId: string;
   containerImage?: string;
+  extraReads?: string[]; // more directories the harness may read (the compiler's own harness, for a project without open-arc)
 }
 
 /** argv for every tier but bwrap (sandbox.buildArgv). The node flags are bwrap's minus bwrap and prlimit: no
@@ -210,7 +211,7 @@ export function tierArgv(tier: Exclude<SandboxTier, "bwrap">, a: TierArgs): stri
       "node", "--permission", "--allow-fs-read=/work", heap, "/work/.openarc/harness.mjs", a.regionId,
     ];
   }
-  const reads = readPaths(a.root, stage);
+  const reads = [...readPaths(a.root, stage), ...(a.extraReads ?? []).map(real)];
   const node = [a.nodeBin, "--permission", ...reads.map((p) => `--allow-fs-read=${p}`), heap, ...harness];
   return tier === "sandbox-exec" ? ["sandbox-exec", "-p", sbplProfile(reads, a.nodePrefix), ...node] : node;
 }

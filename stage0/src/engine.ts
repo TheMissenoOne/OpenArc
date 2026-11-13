@@ -17,11 +17,12 @@ import { OUTPUT_SCHEMA, STRICT_OUTPUT_SCHEMA, addTokens, baseUrlOf, completeWith
 import { BATCH_CODE_PROMPT_TEMPLATE, BATCH_CODE_SYSTEM, CODE_PROMPT_TEMPLATE, CODE_PROMPT_TEMPLATE_VERSION, CODE_SYSTEM, codeRules, liftImports, parseCodeOutput, splitCodeSections } from "./output-format.ts";
 const liftJson = (o: ModelOutput): ModelOutput => (o.ok && /^\s*import[\s{*]/.test(o.body) ? liftImports(o.body, o.imports) : o);
 import { buildArgv, readHarnessOutput } from "./sandbox.ts";
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join, posix, sep } from "node:path";
+import { dirname, join, posix, sep } from "node:path";
 import { HARNESS_ENTRY, bwrapReadPaths, tierArgv } from "./isolation.ts";
 // palette (structured specs, SPEC §2.5, §2.6, §3.7): concepts, UI specs and sketches; hooks below are marked `palette:`
 import * as sketch from "./sketch.ts";
@@ -2189,17 +2190,21 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
   const tier = req.sandbox.isolation ?? "bwrap";
   const dir = p.sandboxDir ?? (p.sandboxDir = `.openarc/sandbox/${Date.now().toString(36)}`);
   const tg0 = performance.now();
+  // A project that doesn't install open-arc (decompile reads code as it is) runs this compiler's own harness: the entry
+  // imports it by path, and the sandbox may read that one directory. Only for a project on disk.
+  // ponytail: not the container tier, which mounts fixed paths; install open-arc in the project there
+  const own = existsSync(p.root) && !existsSync(join(p.root, "node_modules", "open-arc")) ? dirname(fileURLToPath(import.meta.resolve("open-arc/harness"))) : null;
   if ((await ports.fs.read(`${dir}/package.json`)) === null) {
     for (const f of ["package.json", "tsconfig.json", ...SOURCE_DIRS.map((d) => `${d}/package.json`)]) {
       const t = await ports.fs.read(f);
       if (t !== null) await ports.fs.write(`${dir}/${f}`, t);
     }
-    await ports.fs.write(`${dir}/.openarc/harness.mjs`, HARNESS_ENTRY); // the project's copy may predate argv[3]
+    await ports.fs.write(`${dir}/.openarc/harness.mjs`, own ? HARNESS_ENTRY.replace('"open-arc/harness"', JSON.stringify(import.meta.resolve("open-arc/harness"))) : HARNESS_ENTRY); // the project's copy may predate argv[3]
     // bwrap sees only the stage, so node_modules is hard-linked into it (Linux: cp -al always exists); links in it that
     // leave the project are bound at their real paths (isolation.bwrapReadPaths). The other tiers
     // read the project's node_modules in place: module resolution walks up from the stage, which lives inside the
     // project, and isolation.readPaths grants exactly that directory. The container tier mounts it at /work/node_modules.
-    if (tier === "bwrap") {
+    if (tier === "bwrap" && (!own || existsSync(join(p.root, "node_modules")))) {
       const cp = await ports.proc.run(["cp", "-al", `${p.root}/node_modules`, `${p.root}/${dir}/node_modules`], 60_000);
       if (cp.code !== 0) return lap(p, "sandboxStage", tg0), { complete: false, passed: 0, failed: [], hits: none, error: `OARC-E092 could not stage node_modules: ${cp.stdout}` };
     } else if (tier === "container") await ports.fs.write(`${dir}/node_modules/.mountpoint`, "");
@@ -2218,8 +2223,8 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
     cpuSeconds: sb.cpuSeconds ?? req.sandbox.cpuSeconds, regionId: rootId,
   };
   const argv = tier === "bwrap"
-    ? buildArgv({ ...limits, stageDir: `${p.root}/${dir}`, addressSpaceBytes: sb.addressSpaceBytes ?? req.sandbox.addressSpaceBytes, extraReadPaths: bwrapReadPaths(p.root, `${p.root}/${dir}`) })
-    : tierArgv(tier, { ...limits, root: p.root, stageDir: join(p.root, dir), containerImage: req.sandbox.containerImage });
+    ? buildArgv({ ...limits, stageDir: `${p.root}/${dir}`, addressSpaceBytes: sb.addressSpaceBytes ?? req.sandbox.addressSpaceBytes, extraReadPaths: [...bwrapReadPaths(p.root, `${p.root}/${dir}`), ...(own ? [own] : [])] })
+    : tierArgv(tier, { ...limits, root: p.root, stageDir: join(p.root, dir), containerImage: req.sandbox.containerImage, ...(own ? { extraReads: [own] } : {}) });
   lap(p, "sandboxStage", tg0);
   const spawned = Date.now(), tr0 = performance.now();
   const ran = await ports.proc.run(argv, ((sb.cpuSeconds ?? req.sandbox.cpuSeconds) + 20) * 1000);

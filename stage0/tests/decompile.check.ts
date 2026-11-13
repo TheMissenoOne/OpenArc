@@ -2,7 +2,7 @@
 // types, a node:test file. Nothing in the project's code may change. Run: node --no-warnings tests/decompile.check.ts
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseArc, printArc, printValue, type ArcModule } from "../src/arc.ts";
 
@@ -38,7 +38,7 @@ const oa = (...args: string[]) => {
 const write = (f: string, t: string) => (mkdirSync(dirname(join(dir, f)), { recursive: true }), writeFileSync(join(dir, f), t));
 const read = (f: string) => readFileSync(join(dir, f), "utf8");
 try {
-  symlinkSync(resolve("node_modules"), join(dir, "node_modules"));
+  // no node_modules: the project installs nothing, and the sandbox runs the compiler's own harness
   write("package.json", '{"name":"plain","version":"1.0.0","type":"module","private":true}');
   write("src/survival.js", `const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 

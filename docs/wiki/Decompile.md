@@ -8,7 +8,7 @@ openarc decompile --report [--json]
 openarc decompile --todo [--json]
 ```
 
-`dirs` are the source directories (default `src`). Run it from the folder that holds `package.json`. The project needs `open-arc` in its `node_modules`, because the sandbox loads the example runner from there.
+`dirs` are the source directories (default `src`). Run it from the folder that holds `package.json`. The project does not need to install `open-arc`: without it, the sandbox runs the example runner of the `openarc` you called (not on the `container` isolation tier).
 
 ## What it recovers
 
