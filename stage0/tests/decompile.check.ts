@@ -1,10 +1,13 @@
 // The `.arc` language round trip, and `openarc decompile` end to end on a plain JavaScript project: no tsconfig, no
-// types, a node:test file. Nothing in the project's code may change. Run: node --no-warnings tests/decompile.check.ts
+// types, a node:test file, and the arguments its tests pass recorded as inputs. Nothing in the project's code may change.
+// Run: node --no-warnings tests/decompile.check.ts
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import ts from "typescript";
 import { parseArc, printArc, printExample, printValue, type ArcExample, type ArcModule } from "../src/arc.ts";
+import { instrument } from "../src/decompile.ts";
 
 // ── pure: print and parse are inverses, values keep their shape, errors name the line
 {
@@ -29,6 +32,54 @@ import { parseArc, printArc, printExample, printValue, type ArcExample, type Arc
   assert.strictEqual(printArc(parseArc(loose)), 'module a from "a.js"\n\nfn f(x: Num): Num\n  "Doubles."\n  example (2) => 4\n  observed (1) => 2\n  rule r: result > 0\n');
 }
 
+// ── pure: the instrumenter adds one recorder call per function, on the line it starts, and changes nothing else
+{
+  const src = `"use strict";
+export function a(x, y) {
+  "use strict";
+  return x + (y ?? 2);
+}
+export default function (s) { return s; }
+export async function b(o, step = 1) { o.n += step; return o.n; }
+export function* g(n) { yield n; }
+export const c = (p, q) => ({ p, q });
+export const d = async (p) => p;
+export const e = function (z) { return z; };
+export const f = ({ k }) => k;
+export const h = (...r) => r.length;
+export const i = (m) => {
+  return m;
+};
+`;
+  const sf = ts.createSourceFile("m.js", src, ts.ScriptTarget.ESNext, true);
+  const targets = sf.statements.flatMap((st): { name: string; node: ts.FunctionLikeDeclaration }[] => ts.isFunctionDeclaration(st) ? [{ name: st.name?.text ?? "default", node: st }]
+    : ts.isVariableStatement(st) ? st.declarationList.declarations.map((v) => ({ name: (v.name as ts.Identifier).text, node: v.initializer as ts.ArrowFunction }))
+    : []);
+  const out = instrument(sf, "src/m.js", targets);
+  const rec = (name: string, args: string) => `globalThis.__openarcRecord?.("src/m.js", "${name}", ${args})`;
+  assert.strictEqual(out.split("\n").length, src.split("\n").length);
+  assert.ok(out.includes(`export function a(x, y) {\n  "use strict"; ${rec("a", "arguments")};\n`), out);
+  assert.ok(out.includes(`export default function (s) { ${rec("default", "arguments")}; return s; }\n`), out);
+  assert.ok(out.includes(`export const c = (p, q) => (${rec("c", "[p, q]")}, ({ p, q }));\n`), out);
+  assert.ok(out.includes(`export const i = (m) => { ${rec("i", "[m]")};\n  return m;\n};\n`), out);
+  // a destructured or rest parameter: not instrumented
+  assert.ok(out.includes("export const f = ({ k }) => k;\nexport const h = (...r) => r.length;\n"), out);
+  assert.strictEqual(instrument(sf, "src/m.js", []), src);
+  // the instrumented module runs as before, with or without a recorder, and hands over the arguments as they were at the call
+  const calls: [string, unknown][] = [];
+  const g = globalThis as { __openarcRecord?: (file: string, name: string, args: ArrayLike<unknown>) => void };
+  type M = Record<string, (...a: unknown[]) => unknown>;
+  for (const withRecorder of [true, false]) {
+    if (withRecorder) g.__openarcRecord = (_file, name, args) => calls.push([name, JSON.parse(JSON.stringify(Array.from(args)))]);
+    else delete g.__openarcRecord;
+    const m = (await import(`data:text/javascript,${encodeURIComponent(out + (withRecorder ? "" : "\n"))}`)) as M;
+    const o = { n: 1 };
+    assert.deepStrictEqual([m.a!(1), m.default!("s"), await m.b!(o), o, [...(m.g!(5) as Iterable<number>)], m.c!(1, 2), await m.d!(3), m.e!(4), m.f!({ k: 6 }), m.h!(1, 2), m.i!(7)],
+      [3, "s", 2, { n: 2 }, [5], { p: 1, q: 2 }, 3, 4, 6, 2, 7]);
+  }
+  assert.deepStrictEqual(calls, [["a", [1]], ["default", ["s"]], ["b", [{ n: 1 }]], ["g", [5]], ["c", [1, 2]], ["d", [3]], ["e", [4]], ["i", [7]]]);
+}
+
 if (process.platform === "win32") {
   console.log("decompile.check ok (pure checks only on Windows)");
   process.exit(0);
@@ -43,7 +94,7 @@ const write = (f: string, t: string) => (mkdirSync(dirname(join(dir, f)), { recu
 const read = (f: string) => readFileSync(join(dir, f), "utf8");
 try {
   // no node_modules: the project installs nothing, and the sandbox runs the compiler's own harness
-  write("package.json", '{"name":"plain","version":"1.0.0","type":"module","private":true}');
+  write("package.json", '{"name":"plain","version":"1.0.0","private":true}');
   write("src/survival.js", `const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 // Drains water by effort. Never leaves 0..100.
@@ -101,7 +152,49 @@ import assert from "node:assert";
 import { broken } from "../src/survival.js";
 test("broken", () => assert.strictEqual(broken(3), 6));
 `);
-  const sources = () => ["src/survival.js", "src/deep/screen.js"].map(read).join("\0");
+  // values the tests build at run time: no literal to copy, so only recording gives these functions inputs
+  write("src/runtime.js", `// Sums the prices.
+export function total(items) {
+  return items.reduce((sum, item) => sum + item.price, 0);
+}
+
+// Counts one more, in place.
+export function bump(counter) { counter.n += 1; return counter.n; }
+
+// Doubles.
+export const twice = (n) => n * 2;
+
+// Greets.
+export async function greet(name) { return "hi " + name; }
+
+// Applies f to x.
+export function apply(f, x) { return f(x); }
+`);
+  write("tests/runtime.test.mjs", `import test from "node:test";
+import assert from "node:assert";
+import { total, bump, twice, greet, apply } from "../src/runtime.js";
+
+const cart = (n) => Array.from({ length: n }, (_, i) => ({ price: i + 1 }));
+test("runtime values", async () => {
+  assert.strictEqual(total(cart(3)), 6);
+  assert.strictEqual(total(cart(1)), 1);
+  const counter = JSON.parse('{"n": 1}');
+  assert.strictEqual(bump(counter), 2);
+  assert.strictEqual(twice(cart(2).length), 4);
+  assert.strictEqual(await greet(["a", "da"].join("")), "hi ada");
+  assert.strictEqual(apply((x) => x + 1, cart(4).length), 5);
+});
+`);
+  // passes only without the recorder: recording must not decide its outcome
+  write("tests/probe.test.mjs", `import test from "node:test";
+import assert from "node:assert";
+import { twice } from "../src/runtime.js";
+test("probe", () => {
+  assert.strictEqual(twice(Number("21")), 42);
+  assert.strictEqual(globalThis.__openarcRecord, undefined);
+});
+`);
+  const sources = () => ["src/survival.js", "src/deep/screen.js", "src/runtime.js"].map(read).join("\0");
   const before = sources();
 
   let r = oa("decompile", "--run-tests");
@@ -140,7 +233,21 @@ test("broken", () => assert.strictEqual(broken(3), 6));
   assert.strictEqual(d.untouched!.why, "no inputs: the parameter types say too little and no call passes literals");
   const deep = parseArc(read("arc/spec/deep/screen.arc"));
   assert.deepStrictEqual([deep.name, deep.fns.find((f) => f.name === "later")!.async, deep.fns.find((f) => f.name === "later")!.examples], ["deep.screen", true, obs({ args: [], expected: "done" })]);
-  assert.match(r.out, /decompiled 2 modules: tested 4, failing 1, specified 0, observed 2, described 0, bare 2, skipped 0\n/);
+  assert.match(r.out, /decompiled 3 modules: tested 9, failing 1, specified 0, observed 2, described 0, bare 2, skipped 0\n/);
+  // the arguments the tests passed at run time became inputs, recorded at the call (bump changes its argument after it)
+  const rt = parseArc(read("arc/spec/runtime.arc")), rfn = (name: string) => rt.fns.find((f) => f.name === name)!;
+  const rs = (JSON.parse(read(".openarc/decompile.json")) as State).modules["src/runtime.js"]!.fns;
+  assert.deepStrictEqual(rfn("total").examples, obs({ args: [[{ price: 1 }, { price: 2 }, { price: 3 }]], expected: 6 }, { args: [[{ price: 1 }]], expected: 1 }));
+  assert.deepStrictEqual(rs.total!.origins, { '[[{"price":1},{"price":2},{"price":3}]]': "recorded tests/runtime.test.mjs", '[[{"price":1}]]': "recorded tests/runtime.test.mjs" });
+  assert.deepStrictEqual(rfn("bump").examples, obs({ args: [{ n: 1 }], expected: 2, after: [{ n: 2 }] }));
+  assert.deepStrictEqual([rfn("greet").async, rfn("greet").examples], [true, obs({ args: ["ada"], expected: "hi ada" })]);
+  // the expression-bodied arrow: recorded from runtime.test only, as probe.test fails under recording and passes without
+  assert.deepStrictEqual([rfn("twice").examples, rs.twice!.origins, rs.twice!.status, rs.twice!.tests], [obs({ args: [2], expected: 4 }), { "[2]": "recorded tests/runtime.test.mjs" }, "tested", ["tests/probe.test.mjs", "tests/runtime.test.mjs"]]);
+  assert.ok(r.out.includes("tests/probe.test.mjs: recording changed the outcome of this test file; its result without recording counts, and nothing recorded from it is used\n"), r.out);
+  // a call with a function argument is not JSON: dropped
+  assert.deepStrictEqual([rfn("apply").examples, rs.apply!.status, rs.apply!.why], [[], "tested", "no inputs: the parameter types say too little and no call passes literals"]);
+  assert.ok(!existsSync(join(dir, ".openarc/recorded")), "the recording is removed after the run");
+  assert.ok(read(".openarc/.gitignore").split("\n").includes("recorded/"));
 
   // what a person writes in the .arc file survives the next run, and an unchanged module is not run again
   write("arc/spec/survival.arc", read("arc/spec/survival.arc").replace('fn label(rain: Any): "heavy rain" | "clear"\n', 'fn label(rain: Any): "heavy rain" | "clear"\n  "Names the weather from the rain level."\n').replace('  observed (0) => "clear"\n', '  observed (0) => "clear"\n  rule known: result in ["heavy rain", "clear"]\n'));
@@ -153,7 +260,7 @@ test("broken", () => assert.strictEqual(broken(3), 6));
   r = oa("decompile", "--todo");
   assert.deepStrictEqual(r.out.trim().split("\n"), ["arc/spec/deep/screen.arc: resize", "arc/spec/deep/screen.arc: later", "arc/spec/deep/screen.arc: untouched", "arc/spec/survival.arc: broken", "arc/spec/survival.arc: reset"]);
   r = oa("decompile", "--report", "--json");
-  assert.deepStrictEqual((JSON.parse(r.out) as { totals: unknown }).totals, { tested: 4, failing: 1, specified: 0, observed: 2, described: 0, bare: 2, skipped: 0 });
+  assert.deepStrictEqual((JSON.parse(r.out) as { totals: unknown }).totals, { tested: 9, failing: 1, specified: 0, observed: 2, described: 0, bare: 2, skipped: 0 });
   assert.strictEqual(sources(), before);
 
   // promoting an observation is an edit: `observed` becomes `example`. It survives the next run and makes add `specified`
@@ -171,7 +278,7 @@ test("broken", () => assert.strictEqual(broken(3), 6));
   // --check on an unchanged project: every line preserved, exit 0
   r = oa("decompile", "--check");
   assert.strictEqual(r.code, 0, r.out);
-  assert.match(r.out, /^checked 9 functions: preserved \d+, changed 0, failing 0, unrunnable 0, removed 0, new 0\n$/);
+  assert.match(r.out, /^checked 14 functions: preserved \d+, changed 0, failing 0, unrunnable 0, removed 0, new 0\n$/);
 
   // the code changes behaviour: --check reports the changed observation and the failing example, and writes nothing
   write("src/survival.js", read("src/survival.js").replace("export const add = (a, b) => a + b;", "export const add = (a, b) => a + b + 1;"));
@@ -184,7 +291,7 @@ test("broken", () => assert.strictEqual(broken(3), 6));
   assert.strictEqual(r.code, 1, r.out);
   assert.ok(r.out.includes(`${changedLine}\n`), r.out);
   assert.ok(r.out.includes(`src/survival.js: add: ${failingWhy}\n`), r.out);
-  assert.match(r.out, /checked 9 functions: preserved \d+, changed [1-9]\d*, failing 1, unrunnable 0, removed 0, new 0\n$/);
+  assert.match(r.out, /checked 14 functions: preserved \d+, changed [1-9]\d*, failing 1, unrunnable 0, removed 0, new 0\n$/);
   r = oa("decompile", "--check", "--json");
   const report = JSON.parse(r.out) as { ok: boolean; summary: { failing: number }; items: { file: string; fn: string; kind: string; was?: string; now?: string; why?: string }[] };
   assert.strictEqual(report.ok, false);
@@ -228,8 +335,17 @@ test("broken", () => assert.strictEqual(broken(3), 6));
   r = oa("decompile", "--run-tests");
   assert.strictEqual(r.code, 0, r.out);
   assert.strictEqual(sources(), before.replace("a + b;", "a + b + 1;").replace("function reset(", "function refill("));
-  assert.deepStrictEqual(readdirSync(join(dir, "src")).sort(), ["deep", "survival.js"]);
+  assert.deepStrictEqual(readdirSync(join(dir, "src")).sort(), ["deep", "runtime.js", "survival.js"]);
   assert.strictEqual(oa("decompile", "../x").code, 2);
+
+  // --no-record: the old result, a function the tests call only with run-time values gets no inputs
+  rmSync(join(dir, "arc/spec/runtime.arc"));
+  r = oa("decompile", "--run-tests", "--no-record", "--fresh");
+  assert.strictEqual(r.code, 0, r.out);
+  assert.ok(!r.out.includes("recording changed"), r.out);
+  const plainRun = (JSON.parse(read(".openarc/decompile.json")) as State).modules["src/runtime.js"]!.fns;
+  assert.deepStrictEqual([parseArc(read("arc/spec/runtime.arc")).fns.find((f) => f.name === "total")!.examples, plainRun.total!.why], [[], "no inputs: the parameter types say too little and no call passes literals"]);
+  assert.strictEqual(sources(), before.replace("a + b;", "a + b + 1;").replace("function reset(", "function refill("));
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

@@ -5,8 +5,11 @@
 // What it records is `observed`: what the code did, not what it should do. An `example` line is a requirement a person
 // confirmed; a later run checks it and never rewrites it. `--check` (checkSpecs below) re-runs both kinds and writes nothing.
 // Resumable: a module whose source is unchanged since the last run is not run again.
+// With `--run-tests`, the arguments the exported functions receive while the mapped tests run are recorded too
+// (core/record.mjs) and become inputs: inputs only, results still come from the sandbox.
 import ts from "typescript";
 import { createHash } from "node:crypto";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import type { CompileRequest, Ports } from "./types.ts";
 import * as engine from "./engine.ts";
@@ -29,13 +32,16 @@ export interface DecompileCtx {
   testCmd?: string[];
   /** Run every module again, also unchanged ones. */
   fresh?: boolean;
+  /** With testCmd: record the arguments the exported functions receive while the tests run (core/record.mjs). */
+  record?: boolean;
 }
 
 /** tested: its test files ran and passed. failing: one of them fails, or an `example` line does not hold. specified: it has
  *  `example` lines and all hold. observed: only recorded observations. described: an intent only. bare: a signature only.
  *  A state file from before `observed` says `examples` for observed: report() reads it as such. */
 export type FnStatus = "tested" | "failing" | "specified" | "observed" | "described" | "bare";
-/** origins: per observed line (JSON of its args), where the input came from: `call <file>:<line>`, `types` or `kept`. */
+/** origins: per observed line (JSON of its args), where the input came from: `call <file>:<line>`, `recorded <test file>`,
+ *  `types` or `kept`. */
 export interface FnState { status: FnStatus; tests: string[]; why?: string; origins?: Record<string, string> }
 export interface ModuleState { hash: string; arc: string; fns: Record<string, FnState>; skipped: Record<string, string> }
 export interface DecompileState { version: 1; modules: Record<string, ModuleState> }
@@ -158,7 +164,42 @@ function staticValue(checker: ts.TypeChecker, n: ts.Expression, depth = 0): Json
 const resolved = (checker: ts.TypeChecker, s: ts.Symbol | undefined) => (s && s.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(s) : s);
 
 // ── one module ──
-interface Found { fn: ArcFn; symbol: ts.Symbol; inputs: Json[][] | null; pos: number }
+/** node: the function itself (its body is where the recorder call goes), when it is one. */
+interface Found { fn: ArcFn; symbol: ts.Symbol; inputs: Json[][] | null; pos: number; node?: ts.FunctionLikeDeclaration }
+
+/** The function a declaration binds: `function f`, `const f = <fn>`, `export default <fn>`, `exports.f = <fn>`. */
+function fnOf(d: ts.Node): ts.FunctionLikeDeclaration | undefined {
+  let n: ts.Node | undefined = ts.isVariableDeclaration(d) || ts.isPropertyAssignment(d) ? d.initializer : ts.isExportAssignment(d) ? d.expression
+    : ts.isBinaryExpression(d) ? d.right : ts.isBinaryExpression(d.parent) && d.parent.left === d ? d.parent.right : d;
+  while (n && ts.isParenthesizedExpression(n)) n = n.expression;
+  return n && (ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n)) && n.body ? n : undefined;
+}
+
+/** The module's text with one recorder call at the start of each target function's body, on the line of its opening
+ *  brace, so every line number stays the same. Function declarations and expressions hand over `arguments`; an arrow its
+ *  parameter names (an expression body `(a) => e` becomes `(a) => (<call>, e)`). `?.`: without a recorder installed the
+ *  code behaves as before. A generator's call runs at its first `next()`. */
+export function instrument(sf: ts.SourceFile, file: string, targets: { name: string; node: ts.FunctionLikeDeclaration }[]): string {
+  const at: [number, string][] = [];
+  for (const { name, node } of targets) {
+    const body = node.body!;
+    const call = (args: string) => `globalThis.__openarcRecord?.(${JSON.stringify(file)}, ${JSON.stringify(name)}, ${args})`;
+    let args = "arguments";
+    if (ts.isArrowFunction(node)) {
+      // ponytail: an arrow with a destructured or rest parameter is not recorded; its arguments have no names to hand over
+      if (!node.parameters.every((p) => ts.isIdentifier(p.name) && !p.dotDotDotToken)) continue;
+      args = `[${node.parameters.map((p) => p.name.getText(sf)).join(", ")}]`;
+    }
+    if (ts.isBlock(body)) {
+      let n = 0; // after a "use strict" prologue: it stays a directive
+      while (n < body.statements.length && ts.isExpressionStatement(body.statements[n]!) && ts.isStringLiteral((body.statements[n] as ts.ExpressionStatement).expression)) n++;
+      at.push([n ? body.statements[n - 1]!.getEnd() : body.getStart(sf) + 1, ` ${call(args)};`]);
+    } else at.push([body.getStart(sf), `(${call(args)}, `], [body.getEnd(), ")"]);
+  }
+  let text = sf.text;
+  for (const [pos, ins] of at.sort((a, b) => b[0] - a[0])) text = text.slice(0, pos) + ins + text.slice(pos);
+  return text;
+}
 
 function readModule(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: ts.Symbol) => boolean): { types: ArcType[]; found: Found[]; skipped: Record<string, string> } {
   const types: ArcType[] = [], found: Found[] = [], skipped: Record<string, string> = {};
@@ -196,7 +237,8 @@ function readModule(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: t
     // inputs the types allow: the required parameters only, so an optional one keeps its default
     const required = decls.findIndex((d) => !d || checker.isOptionalParameter(d) || !!d.dotDotDotToken);
     const typed = inputsFor(paramTypes.slice(0, required < 0 ? paramTypes.length : required).map((t) => valuesOf(checker, t)), 8);
-    found.push({ fn, symbol: sym, inputs: typed, pos: decl.getStart(sf) });
+    const node = (sym.declarations ?? [decl]).filter((d) => d.getSourceFile() === sf).map(fnOf).find(Boolean); // an overloaded function: the one with a body
+    found.push({ fn, symbol: sym, inputs: typed, pos: decl.getStart(sf), ...(node ? { node } : {}) });
   }
   return { types, found: found.sort((a, b) => a.pos - b.pos), skipped }; // source order: the file reads like the code
 }
@@ -294,23 +336,79 @@ async function scan(ctx: DecompileCtx) {
   const uses = usesOf(checker, program.getSourceFiles().filter((sf) => mine.has(rel(sf))), rel, wanted);
   const texts = new Map<string, string>();
   for (const f of all) if (!isTest(f)) texts.set(f, (await ports.fs.read(f)) ?? "");
-  return { read, uses, texts };
+  const instrumented = new Map<string, string>(); // for recording: per source file with exported functions
+  for (const [f, m] of read) {
+    const targets = m.found.flatMap((x) => (x.node ? [{ name: x.fn.name, node: x.node }] : []));
+    if (targets.length) instrumented.set(f, instrument(program.getSourceFile(`${ctx.root}/${f}`)!, f, targets));
+  }
+  return { read, uses, texts, instrumented };
+}
+
+const RECORDED = ".openarc/recorded";
+const RECORDER = fileURLToPath(new URL("../core/record.mjs", import.meta.url)); // the same relative place in the npm build
+
+/** Recording: the instrumented texts under .openarc/recorded/src/ (the sources stay as they are) and their manifest.
+ *  Returns the environment a test process gets, and how to collect what it recorded: per "<file>\0<name>", the
+ *  argument lists (plain JSON, at most 600 characters each). Recorded files are read as JSON lines only, at most 1 MB
+ *  per file; a malformed line, or one naming no exported function, is ignored. */
+async function recorder(ctx: DecompileCtx, instrumented: Map<string, string>, wanted: Set<string>) {
+  const { ports } = ctx, abs = `${ctx.root}/${RECORDED}`, manifest: Record<string, string> = {};
+  await ports.fs.remove(RECORDED); // left by an interrupted run
+  for (const [f, text] of instrumented) {
+    await ports.fs.write(`${RECORDED}/src/${f}`, text);
+    manifest[`${ctx.root}/${f}`] = `${abs}/src/${f}`;
+  }
+  await ports.fs.write(`${RECORDED}/manifest.json`, JSON.stringify(manifest));
+  const env = (test: string) => ({
+    NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(RECORDER).href}`].filter(Boolean).join(" "),
+    OPENARC_RECORD_MANIFEST: `${abs}/manifest.json`, OPENARC_RECORD_OUT: abs, OPENARC_RECORD_TEST: test,
+  });
+  const collect = async (): Promise<Map<string, Json[][]>> => {
+    const got = new Map<string, Json[][]>();
+    for (const name of (await ports.fs.list(RECORDED)).filter((n) => /^calls-\d+\.jsonl$/.test(n))) {
+      const text = (await ports.fs.read(`${RECORDED}/${name}`)) ?? "";
+      await ports.fs.remove(`${RECORDED}/${name}`);
+      if (text.length > 1_000_000) continue;
+      for (const line of text.split("\n")) {
+        try {
+          const r = JSON.parse(line) as { file: unknown; name: unknown; args: unknown };
+          const k = `${r.file}\0${r.name}`;
+          if (typeof r.file !== "string" || typeof r.name !== "string" || !wanted.has(k) || !Array.isArray(r.args)) continue;
+          const lists = got.get(k) ?? got.set(k, []).get(k)!;
+          for (const a of r.args) if (Array.isArray(a) && key(a).length <= 600) lists.push(a as Json[]);
+        } catch { /* a malformed line */ }
+      }
+    }
+    return got;
+  };
+  return { env, collect };
 }
 
 /** The state, and how many re-recorded observations differ from the line that was in the file. */
 export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { changed: number }> {
   const { ports } = ctx;
-  const { read, uses, texts } = await scan(ctx);
+  const { read, uses, texts, instrumented } = await scan(ctx);
   const prev = JSON.parse((await ports.fs.read(STATE_FILE)) ?? "null") as DecompileState | null;
   const state: DecompileState = { version: 1, modules: {} };
   const box = await sandbox(ctx, texts);
   let changed = 0;
   const testRuns = new Map<string, boolean>();
+  let rec: Awaited<ReturnType<typeof recorder>> | null = null;
+  const fromTests = new Map<string, { args: Json[]; test: string }[]>(); // per "<file>\0<name>", in the order the tests ran
+  /** Runs a test file once per decompile. With recording, a file that fails runs again without it, and that run decides:
+   *  when the two disagree, what was recorded from it is dropped. */
   const passes = async (file: string): Promise<boolean> => {
-    if (!testRuns.has(file)) testRuns.set(file, (await ports.proc.run([...ctx.testCmd!, file], 300_000, { cwd: ctx.root })).code === 0);
-    return testRuns.get(file)!;
+    if (testRuns.has(file)) return testRuns.get(file)!;
+    const run = async (env?: Record<string, string>) => (await ports.proc.run([...ctx.testCmd!, file], 300_000, { cwd: ctx.root, ...(env ? { env } : {}) })).code === 0;
+    let ok = await run(rec?.env(file));
+    const got = rec ? await rec.collect() : new Map<string, Json[][]>();
+    if (rec && !ok && (ok = await run())) ctx.log(`${file}: recording changed the outcome of this test file; its result without recording counts, and nothing recorded from it is used`);
+    else for (const [k, lists] of got) (fromTests.get(k) ?? fromTests.set(k, []).get(k)!).push(...lists.map((args) => ({ args, test: file })));
+    testRuns.set(file, ok);
+    return ok;
   };
   try {
+    if (ctx.testCmd && ctx.record) rec = await recorder(ctx, instrumented, new Set([...read].flatMap(([f, m]) => m.found.map((x) => `${f}\0${x.fn.name}`))));
     for (const [file, m] of read) {
       const text = texts.get(file) ?? "";
       const dir = ctx.dirs.find((d) => file.startsWith(`${d}/`))!;
@@ -324,6 +422,8 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
       const known = prev?.modules[file];
       const reuse = !ctx.fresh && !!old && known?.hash === hash;
       const fns: Record<string, FnState> = {};
+      // the module's test files run first: what they record feeds its inputs
+      if (ctx.testCmd) for (const t of new Set(m.found.flatMap(testsOf).sort())) await passes(t);
       for (const x of m.found) {
         const name = x.fn.name, was = old?.fns.find((f) => f.name === name), had = known?.fns[name];
         // what a person (or the host agent) wrote in the .arc file stays: intent, rules, hold, and its `example` lines
@@ -337,13 +437,16 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
           origins = had.origins;
           if (why?.startsWith("example ")) failed = why; // an `example` that failed then fails now: nothing changed
         } else {
-          // an input's origin: a literal call, else the types, else the observed line it came from
+          // inputs: recorded from the tests first (real usage), then literal calls, then the types. An input's origin: a
+          // literal call (it names the line), else the test it was recorded from, else the types, else its observed line
           const calls = (uses.calls.get(x.symbol) ?? []).slice(0, 6), from = new Map<string, string>();
+          const seen = [...new Map((fromTests.get(`${file}\0${name}`) ?? []).map((r) => [key(r.args), r])).values()].slice(0, 6);
           for (const c of calls) if (!from.has(key(c.args))) from.set(key(c.args), `call ${c.at}`);
+          for (const r of seen) if (!from.has(key(r.args))) from.set(key(r.args), `recorded ${r.test}`);
           for (const a of x.inputs ?? []) if (!from.has(key(a))) from.set(key(a), "types");
           for (const e of olds) if (!from.has(key(e.args))) from.set(key(e.args), had?.origins?.[key(e.args)] ?? "kept");
           const required = new Set(reqs.map((e) => key(e.args)));
-          const inputs = [...new Map([...olds.map((e) => e.args), ...calls.map((c) => c.args), ...(x.inputs ?? [])].map((a) => [key(a), a])).values()].filter((a) => !required.has(key(a))).slice(0, 12);
+          const inputs = [...new Map([...olds.map((e) => e.args), ...seen.map((r) => r.args), ...calls.map((c) => c.args), ...(x.inputs ?? [])].map((a) => [key(a), a])).values()].filter((a) => !required.has(key(a))).slice(0, 18);
           x.fn.examples = [...reqs, ...olds];
           if (!inputs.length && !reqs.length) why = "no inputs: the parameter types say too little and no call passes literals";
           else {
@@ -388,6 +491,7 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
     }
   } finally {
     await box.close();
+    if (ctx.testCmd && ctx.record) await ports.fs.remove(RECORDED);
   }
   await ports.fs.write(STATE_FILE, JSON.stringify(state, null, 1) + "\n");
   return { ...state, changed };

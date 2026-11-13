@@ -180,7 +180,7 @@ export function realPorts(root: string): Ports {
     proc: {
       run(argv, timeoutMs, opts) {
         return new Promise((done) => {
-          const child = spawn(argv[0]!, argv.slice(1), { stdio: [opts?.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"], ...(opts?.cwd ? { cwd: opts.cwd } : {}) });
+          const child = spawn(argv[0]!, argv.slice(1), { stdio: [opts?.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"], ...(opts?.cwd ? { cwd: opts.cwd } : {}), ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}) });
           if (opts?.stdin !== undefined) {
             child.stdin!.on("error", () => {}); // a CLI that exits early: its code says so
             child.stdin!.end(opts.stdin);
@@ -308,7 +308,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc check <id> --oracle <module>#<export> [--runs <n>] [--seed <n>] | check <ids...> --mutants [--operators trivial,boundary,comparison,constant,logical,guard,swap]
        openarc doctor
        openarc adopt [--brief] [--json] [--no-model] | sync [--watch] [--brief] [--json] [--no-model]
-       openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>]] [--fresh] [--json] | decompile --report|--todo [--json] | decompile --check [dirs...] [--out=<dir>] [--json]
+       openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>] [--no-record]] [--fresh] [--json] | decompile --report|--todo [--json] | decompile --check [dirs...] [--out=<dir>] [--json]
        openarc arch [dirs...] [--check] [--json] | concept [--check] [--json]
        openarc status [--json] [--part <name>] [--goal <name>]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
@@ -317,7 +317,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
 
 /** What git doesn't need from .openarc/: adds the lines that are missing. True when it wrote. */
 async function ensureIgnored(ports: Ports): Promise<boolean> {
-  const ignore = ["lock", "sandbox/", "txn/", "watch-history.jsonl", "attempts/", "traces.jsonl", "sheet-state.json", "sync-status.json", "sync-watch.pid", "usage.jsonl"];
+  const ignore = ["lock", "sandbox/", "txn/", "watch-history.jsonl", "attempts/", "traces.jsonl", "sheet-state.json", "sync-status.json", "sync-watch.pid", "usage.jsonl", "recorded/"];
   const had = await ports.fs.read(".openarc/.gitignore");
   const missing = ignore.filter((l) => !(had ?? "").split("\n").includes(l));
   if (!missing.length) return false;
@@ -400,7 +400,7 @@ async function guardCmd(root: string, ports: Ports, argv: string[]): Promise<num
  *  `--check` runs the `.arc` lines against the code and writes nothing: exit 1 when behaviour changed. */
 async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
   const flags = argv.filter((a) => a.startsWith("--")), dirs = argv.filter((a) => !a.startsWith("--")).map((d) => d.replace(/\/+$/, ""));
-  const known = /^--(report|todo|check|json|fresh|run-tests(=.+)?|out=.+)$/;
+  const known = /^--(report|todo|check|json|fresh|no-record|run-tests(=.+)?|out=.+)$/;
   if (flags.some((f) => !known.test(f)) || dirs.some((d) => d.startsWith("/") || d.split("/").includes(".."))) {
     console.error(`openarc: bad-flag\n\n${USAGE}`);
     return 2;
@@ -428,7 +428,7 @@ async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise
     const testCmd = flags.find((f) => f.startsWith("--run-tests"));
     state = await decompile({
       ports, root, request: (p, ids) => request(root, p, ids), log: (l) => !has("--json") && console.log(l),
-      dirs: dirs.length ? dirs : ["src"], out, fresh: has("--fresh"),
+      dirs: dirs.length ? dirs : ["src"], out, fresh: has("--fresh"), record: !has("--no-record"),
       ...(testCmd ? { testCmd: testCmd.includes("=") ? testCmd.slice(testCmd.indexOf("=") + 1).split(" ") : [process.execPath, "--test"] } : {}),
     });
   }
