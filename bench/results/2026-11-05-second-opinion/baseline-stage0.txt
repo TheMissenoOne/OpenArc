@@ -1,0 +1,7 @@
+model.parseOutput inputs 2504 hangs {"a":0,"b":0,"r":0} aWrong 408 disagree 408 real 408 falseAlarm 0 classes 3 {"parseOutput no body":"280/280","parseOutput bad import items":"77/77","parseOutput check order":"51/51"}
+p2p.onGossip inputs 3924 hangs {"a":0,"b":0,"r":0} aWrong 224 disagree 224 real 224 falseAlarm 0 classes 2 {"onGossip unsorted":"189/189","onGossip negative fanout":"26/26"}
+p2p.broadcast inputs 2000 hangs {"a":0,"b":0,"r":0} aWrong 704 disagree 704 real 704 falseAlarm 0 classes 16 {"broadcast unknown peer":"539/539","broadcast __proto__ peer":"89/89"}
+p2p.peerTable inputs 1761 hangs {"a":0,"b":0,"r":0} aWrong 0 disagree 0 real 0 falseAlarm 0 classes 0 {}
+p2p.handshake inputs 596 hangs {"a":0,"b":0,"r":0} aWrong 16 disagree 16 real 16 falseAlarm 0 classes 2 {}
+p2p.encodeVarint inputs 461 hangs {"a":0,"b":0,"r":0} aWrong 0 disagree 0 real 0 falseAlarm 0 classes 0 {}
+p2p.decodeLengthPrefixed inputs 2179 hangs {"a":562,"b":0,"r":0} aWrong 856 disagree 856 real 856 falseAlarm 0 classes 2 {"decoder hang (found here, not one of the 7)":"562/562"}
