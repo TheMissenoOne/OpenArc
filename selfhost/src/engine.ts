@@ -871,6 +871,7 @@ export function examplesHeading(text: string): string {
   if (tokens.length) notes.push(`the string${tokens.length > 1 ? "s" : ""} ${tokens.map((t) => `"${t}"`).join(", ")} stand${tokens.length > 1 ? "" : "s"} for ${tokens.length > 1 ? "those values" : "that value"}`);
   if (text.includes('"$fake"')) notes.push('{"$fake": name} is a test double for that parameter');
   if (text.includes('"throws"')) notes.push('{"throws": true} means the call must throw, and a "throws" string must appear in the error message');
+  if (text.includes('"after"')) notes.push('"after" lists every argument as the call must leave it (the body changes them in place)');
   return `Examples (${notes.join("; ")})`;
 }
 
@@ -2091,7 +2092,7 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
     if (conflict) return { ...fail([`OARC-E100 example "${conflict.detail}" fails without reaching any hole: the sketch decides it, so no fill can fix it`]), stop: conflict };
     if (real.length || (!res.complete && r.kind === "function"))
       return fail(real.map((o) => testsPlan.isTestOutcome(o.name) ? testsPlan.failureText(testOf(p, o.name, r.root), o.name, o.actual)
-        : `OARC-E090 example "${o.name}" failed: got ${showValue(o.actual)}; expected ${showValue(exampleExpected(rootSpec, o.name))}`).concat(res.complete ? [] : ["OARC-E090 harness output incomplete (process exited early?)"]));
+        : exampleFailure(rootSpec, o.name, o.actual)).concat(res.complete ? [] : ["OARC-E090 harness output incomplete (process exited early?)"]));
     if (cf || rootSpec.codeFirst) verifiedBy.push(...testsPlan.verifiedBy(rootSpec, res));
     else verifiedBy.push(`examples:${res.passed}/${rootSpec.ui ? res.passed + res.failed.length : rootSpec.examples.length}${res.failed.length ? ` (${res.failed.length} inconclusive: sibling blocks pending)` : ""}`);
     if (r.kind === "block") verifiedBy.push(`via:${r.root}`);
@@ -2144,11 +2145,15 @@ const testOf = (p: Project, name: string, id: string) => (p.tests ?? []).find((t
 const showValue = (v: Json | undefined): string =>
   v === undefined ? "undefined" : JSON.stringify(v).replace(/"\$(-0|NaN|-?Infinity|undefined)"/g, "$1");
 
-function exampleExpected(spec: SpecInfo, name: string): Json {
-  const exs = spec.examples as { name?: string; expected?: Json; throws?: Json; fakesAfter?: Json }[];
-  const i = exs.findIndex((e, k) => (e.name ?? `#${k + 1}`) === name);
-  const e = exs[i];
-  return e ? (e.expected ?? (e.throws !== undefined ? { throws: e.throws } : { fakesAfter: e.fakesAfter ?? null })) : null;
+function exampleFailure(spec: SpecInfo, name: string, actual: Json | undefined): string {
+  const exs = spec.examples as { name?: string; expected?: Json; throws?: Json; fakesAfter?: Json; after?: Json }[];
+  const e = exs.find((e, k) => (e.name ?? `#${k + 1}`) === name);
+  const a = actual as { after?: Json } | undefined;
+  // the harness reports a wrong `after` as { after: <the arguments> }; a result that only looks like it still reads as a result
+  if (e?.after !== undefined && a && typeof a === "object" && !Array.isArray(a) && Object.keys(a).length === 1 && a.after !== undefined)
+    return `OARC-E090 example "${name}" failed: arguments after the call are ${showValue(a.after)}; expected ${showValue(e.after)}`;
+  const want = e ? (e.expected ?? (e.throws !== undefined ? { throws: e.throws } : { fakesAfter: e.fakesAfter ?? null })) : null;
+  return `OARC-E090 example "${name}" failed: got ${showValue(actual)}; expected ${showValue(want)}`;
 }
 
 // ───────────────────────────── sandbox ─────────────────────────────
@@ -2976,9 +2981,19 @@ export async function oracleCheck(ports: Ports, req: CompileRequest, p: Project,
   }
 }
 
+/** One input's result; `after`: the arguments as the call left them, only when it changed them. */
+export type Observed = { args: Json[]; got: Json; after?: Json[] };
+const observed = (res: SandboxResult, inputs: Json[][]): Observed[] => {
+  const failed = new Map(res.failed.map((f) => [f.name, f.actual as { args: Json[]; got: Json; gotAfter?: Json[] }]));
+  return inputs.map((args, i) => {
+    const a = failed.get(`#${i + 1}`);
+    return a ? { args: a.args, got: a.got, ...(a.gotAfter !== undefined ? { after: a.gotAfter } : {}) } : { args, got: "__openarc_observe__" };
+  });
+};
+
 /** What a region's body returns on `inputs`, run in the sandbox: the oracle harness against a reference that never matches,
  *  so every outcome reports its `got`. No model. openarc sync uses it for characterization examples and drift. */
-export async function observe(ports: Ports, req: CompileRequest, p: Project, id: string, inputs: Json[][]): Promise<{ args: Json[]; got: Json }[] | { error: string }> {
+export async function observe(ports: Ports, req: CompileRequest, p: Project, id: string, inputs: Json[][]): Promise<Observed[] | { error: string }> {
   const module = ".openarc/observe-reference.mjs";
   const overlay = new Map(p.files).set(module, 'export const reference = () => "__openarc_observe__";\n');
   try {
@@ -2987,8 +3002,7 @@ export async function observe(ports: Ports, req: CompileRequest, p: Project, id:
     if (!res.complete) return { error: "harness output incomplete" };
     // A result equal to the sentinel passes, so the harness leaves it out of `failed`: one entry per input, by its #n name,
     // keeps results aligned with the inputs their callers index them by.
-    const failed = new Map(res.failed.map((f) => [f.name, f.actual as { args: Json[]; got: Json }]));
-    return inputs.map((args, i) => { const a = failed.get(`#${i + 1}`); return a ? { args: a.args, got: a.got } : { args, got: "__openarc_observe__" }; });
+    return observed(res, inputs);
   } finally {
     if (p.sandboxDir) await ports.fs.remove(p.sandboxDir);
     delete p.sandboxDir;
@@ -2998,15 +3012,14 @@ export async function observe(ports: Ports, req: CompileRequest, p: Project, id:
 /** observe() for an exported function that is no region (openarc decompile reads code it does not own): `files` is what
  *  the sandbox stages. The stage is kept between calls, since staging node_modules costs more than the run; the caller
  *  ends with closeSandbox. */
-export async function observeExport(ports: Ports, req: CompileRequest, p: Project, target: { file: string; symbol: string }, inputs: Json[][], files: Map<string, string>): Promise<{ args: Json[]; got: Json }[] | { error: string }> {
+export async function observeExport(ports: Ports, req: CompileRequest, p: Project, target: { file: string; symbol: string }, inputs: Json[][], files: Map<string, string>): Promise<Observed[] | { error: string }> {
   const id = "openarc.observed", module = ".openarc/observe-reference.mjs";
   p.specs.set(id, { id, kind: "function", file: target.file, symbol: target.symbol, exportName: "", literal: {}, examples: [] } as unknown as SpecInfo);
   try {
     const res = await runSandbox(ports, req, p, id, new Map(files).set(module, 'export const reference = () => "__openarc_observe__";\n'), { module, export: "reference", inputs });
     if (res.error) return { error: res.error };
     if (!res.complete) return { error: "harness output incomplete" };
-    const failed = new Map(res.failed.map((f) => [f.name, f.actual as { args: Json[]; got: Json }]));
-    return inputs.map((args, i) => { const a = failed.get(`#${i + 1}`); return a ? { args: a.args, got: a.got } : { args, got: "__openarc_observe__" }; });
+    return observed(res, inputs);
   } finally {
     p.specs.delete(id);
   }
@@ -3019,7 +3032,12 @@ export async function closeSandbox(ports: Ports, p: Project): Promise<void> {
 /** One line per disagreement, values printed faithfully. */
 export const showDisagreement = (d: { name: string; actual?: Json }): string => {
   const a = (d.actual ?? {}) as { args?: Json; got?: Json; oracle?: Json };
-  return `${d.name} args ${showValue(a.args)}: got ${showValue(a.got)}; oracle ${showValue(a.oracle)}`;
+  return `${d.name} args ${showValue(a.args)}: got ${showValue(a.got)}; oracle ${showValue(a.oracle)}${afterText(d.actual)}`;
+};
+/** A disagreement's argument changes, when either side made any: the unchanged side shows the input. */
+const afterText = (actual: Json | undefined): string => {
+  const a = (actual ?? {}) as { args?: Json; gotAfter?: Json; oracleAfter?: Json };
+  return a.gotAfter === undefined && a.oracleAfter === undefined ? "" : ` (arguments after: got ${showValue(a.gotAfter ?? a.args)}; oracle ${showValue(a.oracleAfter ?? a.args)})`;
 };
 
 // ───────────────────────────── check --mutants ─────────────────────────────
@@ -3166,7 +3184,7 @@ export async function mutantCheck(ports: Ports, req: CompileRequest, p: Project,
 function suggestion(actual: Json | undefined, examples: Json[], line: number): string {
   if (actual) {
     const a = actual as { args?: Json; got?: Json; oracle?: Json };
-    return `args ${showValue(a.args)} (original ${showValue(a.oracle)}, mutant ${showValue(a.got)})`;
+    return `args ${showValue(a.args)} (original ${showValue(a.oracle)}, mutant ${showValue(a.got)})${afterText(actual)}`;
   }
   return edgeKinds(examples).join(", ") || `an input or test that reaches line ${line}`;
 }

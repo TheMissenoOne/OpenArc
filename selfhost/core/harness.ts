@@ -174,6 +174,12 @@ export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyF
           out.push(withHits({ name, ok: false, actual: toJson(actual) }));
           continue;
         }
+        // `after`: the arguments as the call leaves them (each example has its own clone). ponytail: for examples without
+        // fakes; a resolved fake compares as the function it became
+        if (ex.after !== undefined && !valuesEqual(args, decodeTokens(ex.after), eq)) {
+          out.push(withHits({ name, ok: false, actual: { after: toJson(args) } }));
+          continue;
+        }
       }
       const after: Record<string, Json> = {};
       let fakesOk = true;
@@ -210,23 +216,29 @@ export interface HarnessPlanEntry {
   tests?: import("./test-runner.ts").TestPlan;
 }
 
-const settle = async (fn: AnyFn, args: unknown[]): Promise<{ value?: unknown; throws?: string }> => {
+/** One call on its own clone of the args; `after` (the args as left, toJson) only when the call changed them. */
+const settle = async (fn: AnyFn, args: unknown[]): Promise<{ value?: unknown; throws?: string; clone: unknown[]; after?: Json }> => {
+  const clone = structuredClone(args);
   try {
-    return { value: await timedCall(fn, structuredClone(args)) };
+    const value = await timedCall(fn, clone);
+    const after = toJson(clone);
+    return JSON.stringify(after) === JSON.stringify(toJson(args)) ? { value, clone } : { value, clone, after };
   } catch (e) {
-    return { throws: e instanceof Error ? e.message : String(e) };
+    return { throws: e instanceof Error ? e.message : String(e), clone };
   }
 };
 
-/** Differential check: one outcome per input. They agree when both return equal values (valuesEqual) or both throw. */
+/** Differential check: one outcome per input. They agree when both throw, or both return equal values (valuesEqual) and
+ *  leave equal arguments. A disagreement adds `gotAfter`/`oracleAfter` for a side that changed its arguments. */
 export async function runOracle(fn: AnyFn, oracle: AnyFn, inputs: Json[][], o: EqualOptions = {}): Promise<Outcome[]> {
   const out: Outcome[] = [];
   for (const [i, raw] of inputs.entries()) {
     const args = decodeTokens(raw) as unknown[];
     const [got, want] = [await settle(fn, args), await settle(oracle, args)];
-    const ok = got.throws !== undefined || want.throws !== undefined ? got.throws !== undefined && want.throws !== undefined : valuesEqual(got.value, want.value, o);
+    const ok = got.throws !== undefined || want.throws !== undefined ? got.throws !== undefined && want.throws !== undefined : valuesEqual(got.value, want.value, o) && valuesEqual(got.clone, want.clone, o);
     const view = (r: typeof got): Json => (r.throws !== undefined ? { throws: r.throws } : toJson(r.value));
-    out.push(ok ? { name: `#${i + 1}`, ok } : { name: `#${i + 1}`, ok, actual: { args: raw, got: view(got), oracle: view(want) } });
+    const after = { ...(got.after !== undefined ? { gotAfter: got.after } : {}), ...(want.after !== undefined ? { oracleAfter: want.after } : {}) };
+    out.push(ok ? { name: `#${i + 1}`, ok } : { name: `#${i + 1}`, ok, actual: { args: raw, got: view(got), oracle: view(want), ...after } });
   }
   return out;
 }

@@ -222,19 +222,20 @@ function usesOf(checker: ts.TypeChecker, files: readonly ts.SourceFile[], rel: (
 
 const isThrown = (v: Json): v is { throws: string } => v !== null && typeof v === "object" && !Array.isArray(v) && typeof v.throws === "string" && Object.keys(v).length === 1;
 
-/** Examples the function satisfies now: each input runs twice, and one whose results differ is dropped. */
+/** Examples the function satisfies now: each input runs twice, and one whose results (or changed arguments) differ is
+ *  dropped. An example of a function that changes its arguments states them with `after`. */
 async function examplesOf(ctx: DecompileCtx, p: engine.Project, req: CompileRequest, file: string, symbol: string, inputs: Json[][], files: Map<string, string>): Promise<ArcExample[] | { error: string }> {
   const got = await engine.observeExport(ctx.ports, req, p, { file, symbol }, [...inputs, ...inputs], files);
   if ("error" in got) return got;
   const stable = inputs.flatMap((args, i) => {
-    const a = got[i]!.got, key = JSON.stringify(a);
-    return key === JSON.stringify(got[i + inputs.length]!.got) && key.length <= 600 ? [{ args, got: a }] : []; // ponytail: a long result is no readable example
+    const a = got[i]!, key = JSON.stringify([a.got, a.after]);
+    return key === JSON.stringify([got[i + inputs.length]!.got, got[i + inputs.length]!.after]) && key.length <= 600 ? [a] : []; // ponytail: a long result is no readable example
   });
   const seen = new Set<string>();
-  const distinct = stable.filter((x) => { const k = JSON.stringify(x.got); return !seen.has(k) && !!seen.add(k); });
+  const distinct = stable.filter((x) => { const k = JSON.stringify([x.got, x.after]); return !seen.has(k) && !!seen.add(k); });
   const returned = distinct.filter((x) => !isThrown(x.got)), thrown = distinct.filter((x) => isThrown(x.got));
   if (!returned.length) return thrown.length ? { error: `every input throws: ${(thrown[0]!.got as { throws: string }).throws}` } : [];
-  return [...returned.slice(0, 4).map((x) => ({ args: x.args, expected: x.got })), ...thrown.slice(0, 1).map((x) => ({ args: x.args, throws: (x.got as { throws: string }).throws }))];
+  return [...returned.slice(0, 4).map((x) => ({ args: x.args, expected: x.got, ...(x.after ? { after: x.after } : {}) })), ...thrown.slice(0, 1).map((x) => ({ args: x.args, throws: (x.got as { throws: string }).throws }))];
 }
 
 const firstLine = (s: string) => s.split("\n")[0]!.slice(0, 200);

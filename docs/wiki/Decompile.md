@@ -18,7 +18,7 @@ For every exported function:
 |---|---|
 | Signature and types | the TypeScript checker. In JavaScript that means inference and JSDoc: an untyped parameter is `Any` |
 | Intent | the function's JSDoc, or the `//` lines directly above it |
-| Examples | running the function in the sandbox. Inputs come from literal calls found in the project (tests first, also through a `const` bound to a literal) and from the parameter types. Each input runs twice, and one whose results differ is dropped |
+| Examples | running the function in the sandbox. Inputs come from literal calls found in the project (tests first, also through a `const` bound to a literal) and from the parameter types. Each input runs twice, and one whose results or changed arguments differ is dropped |
 | Tests | the test files that use the function, found by their imports |
 
 Exported type aliases and interfaces become `type` lines. Classes and generic functions are skipped and counted.
@@ -48,6 +48,7 @@ fn label(rain: Any): "heavy rain" | "clear"
 | `fn name(p: T, q?: T, ...r: [T]): R` | a function. `async fn` when it returns a promise |
 | `"text"` | one line of intent |
 | `example (args) => value # name` | a call and its result. Values are JSON; object keys need no quotes |
+| `example (args) => value after (args) # name` | the call changes its arguments: they are as listed after it. A function that returns nothing shows `=> "$undefined" after (...)` |
 | `example (args) throws "text"` | the call throws, and the message contains the text |
 | `rule name: <predicate>` | kept and printed. Rules are not evaluated yet |
 | `hold` | reserved for sync |
@@ -79,6 +80,5 @@ A module whose source and test mapping are unchanged is not run again, and the s
 ## Limits
 - Only exported functions. Methods and classes are skipped.
 - An untyped JavaScript function that no test or other code calls with literals gets no examples.
-- Arguments a function changes in place are not recorded yet, so a function that returns nothing shows only that.
 - Results longer than 600 characters of JSON are not kept as examples.
 - Sync and compile don't read `.arc` files yet. Today they are the output of decompile and a readable map of the code.

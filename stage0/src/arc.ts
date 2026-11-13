@@ -10,6 +10,7 @@
 //     "Drains water and food by effort."
 //     example ({water: 50, food: 50}, {temperature: 20}) => {cold: 0}
 //     example (null, null) throws "stats"
+//     example ({water: 50, food: 50}, {temperature: 20}) => {cold: 0} after ({water: 49, food: 50}, {temperature: 20})
 //     rule bounded: after.stats in Stats
 //
 // Types are kept as text. Built-ins: Int Float Num Bool Str Any Void Null, `[T]`, `{ k: T, k?: T }`, `A | B`, `T?`, literals,
@@ -19,8 +20,9 @@
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
 export interface ArcParam { name: string; type: string; optional?: boolean; rest?: boolean }
-/** `throws`: true for any error, a string that must appear in the message. */
-export interface ArcExample { args: Json[]; expected?: Json; throws?: string | true; name?: string }
+/** `throws`: true for any error, a string that must appear in the message. `after`: every argument as the call leaves
+ *  it, for a function that changes its arguments in place (never on a `throws` example). */
+export interface ArcExample { args: Json[]; expected?: Json; throws?: string | true; after?: Json[]; name?: string }
 export interface ArcRule { name: string; text: string }
 export interface ArcFn { name: string; params: ArcParam[]; returns: string; async?: boolean; hold?: boolean; intent: string[]; examples: ArcExample[]; rules: ArcRule[] }
 export interface ArcType { name: string; type: string }
@@ -140,7 +142,7 @@ export function printArc(m: ArcModule): string {
     out.push("", `${f.async ? "async " : ""}fn ${printSignature(f)}`, ...f.intent.map((l) => `  ${JSON.stringify(l)}`));
     if (f.hold) out.push("  hold");
     for (const e of f.examples) {
-      const tail = e.throws !== undefined ? ` throws${e.throws === true ? "" : ` ${JSON.stringify(e.throws)}`}` : ` => ${printValue(e.expected ?? null)}`;
+      const tail = e.throws !== undefined ? ` throws${e.throws === true ? "" : ` ${JSON.stringify(e.throws)}`}` : ` => ${printValue(e.expected ?? null)}${e.after ? ` after (${e.after.map(printValue).join(", ")})` : ""}`;
       out.push(`  example (${e.args.map(printValue).join(", ")})${tail}${e.name ? ` # ${e.name}` : ""}`);
     }
     for (const r of f.rules) out.push(`  rule ${r.name}: ${r.text}`);
@@ -150,14 +152,20 @@ export function printArc(m: ArcModule): string {
 
 function parseExample(text: string): ArcExample {
   const c = new Cursor(text);
-  c.need("(");
-  const args: Json[] = [];
-  if (!c.eat(")")) {
-    do args.push(c.value()); while (c.eat(","));
-    c.need(")");
+  const list = (): Json[] => {
+    c.need("(");
+    const out: Json[] = [];
+    if (!c.eat(")")) {
+      do out.push(c.value()); while (c.eat(","));
+      c.need(")");
+    }
+    return out;
+  };
+  const ex: ArcExample = { args: list() };
+  if (c.eat("=>")) {
+    ex.expected = c.value();
+    if (c.eat("after")) ex.after = list();
   }
-  const ex: ArcExample = { args };
-  if (c.eat("=>")) ex.expected = c.value();
   else if (c.eat("throws")) { c.ws(); ex.throws = c.rest().startsWith('"') ? c.string() : true; }
   else throw new Error("expected => or throws");
   c.ws();
