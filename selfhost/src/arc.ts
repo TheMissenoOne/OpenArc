@@ -1,4 +1,4 @@
-// The `.arc` spec language, v0: one module per file, types, functions with intent, examples and rules. Language-neutral:
+// The `.arc` spec language, v0: one module per file, types, functions with intent, examples, observations and rules. Language-neutral:
 // nothing here knows TypeScript. printArc(parseArc(x)) === x for any text printArc produced.
 //
 //   module survival from "src/survival.js"
@@ -11,8 +11,12 @@
 //     example ({water: 50, food: 50}, {temperature: 20}) => {cold: 0}
 //     example (null, null) throws "stats"
 //     example ({water: 50, food: 50}, {temperature: 20}) => {cold: 0} after ({water: 49, food: 50}, {temperature: 20})
+//     observed ({water: 0, food: 0}, {temperature: 40}) => {cold: 0}
 //     rule bounded: after.stats in Stats
 //
+// `example` is a requirement: a person (or an agent on their behalf) wrote or confirmed it. `observed` is what the code did
+// when it was recorded, with no authority: promoting one is changing the word to `example`. Inside a function the order is
+// intent, hold, examples, observations, rules.
 // Types are kept as text. Built-ins: Int Float Num Bool Str Any Void Null, `[T]`, `{ k: T, k?: T }`, `A | B`, `T?`, literals,
 // names of `type` declarations, and a backticked native type (`Map<string, number>`) for what v0 has no spelling for.
 // ponytail: types and rule predicates are not parsed further here; the checker that needs their structure parses them.
@@ -21,8 +25,9 @@ type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
 export interface ArcParam { name: string; type: string; optional?: boolean; rest?: boolean }
 /** `throws`: true for any error, a string that must appear in the message. `after`: every argument as the call leaves
- *  it, for a function that changes its arguments in place (never on a `throws` example). */
-export interface ArcExample { args: Json[]; expected?: Json; throws?: string | true; after?: Json[]; name?: string }
+ *  it, for a function that changes its arguments in place (never on a `throws` example). `observed`: recorded from the
+ *  code, not required of it. */
+export interface ArcExample { args: Json[]; expected?: Json; throws?: string | true; after?: Json[]; name?: string; observed?: true }
 export interface ArcRule { name: string; text: string }
 export interface ArcFn { name: string; params: ArcParam[]; returns: string; async?: boolean; hold?: boolean; intent: string[]; examples: ArcExample[]; rules: ArcRule[] }
 export interface ArcType { name: string; type: string }
@@ -134,6 +139,14 @@ function parseSignature(text: string): Pick<ArcFn, "name" | "params" | "returns"
   return { name, params, returns: ret[1]!.trim() };
 }
 
+// ── examples ──
+/** What an example says the call does: `4`, `4 after ({water: 1})`, `throws "text"`. */
+export const printOutcome = (e: ArcExample): string =>
+  e.throws !== undefined ? `throws${e.throws === true ? "" : ` ${JSON.stringify(e.throws)}`}` : `${printValue(e.expected ?? null)}${e.after ? ` after (${e.after.map(printValue).join(", ")})` : ""}`;
+/** One example line, unindented: `example (3) => 6 # name`, `observed (null) throws "stats"`. */
+export const printExample = (e: ArcExample): string =>
+  `${e.observed ? "observed" : "example"} (${e.args.map(printValue).join(", ")})${e.throws !== undefined ? " " : " => "}${printOutcome(e)}${e.name ? ` # ${e.name}` : ""}`;
+
 // ── modules ──
 export function printArc(m: ArcModule): string {
   const out = [`module ${m.name} from ${JSON.stringify(m.file)}`, ...m.intent.map((l) => `  ${JSON.stringify(l)}`)];
@@ -141,10 +154,7 @@ export function printArc(m: ArcModule): string {
   for (const f of m.fns) {
     out.push("", `${f.async ? "async " : ""}fn ${printSignature(f)}`, ...f.intent.map((l) => `  ${JSON.stringify(l)}`));
     if (f.hold) out.push("  hold");
-    for (const e of f.examples) {
-      const tail = e.throws !== undefined ? ` throws${e.throws === true ? "" : ` ${JSON.stringify(e.throws)}`}` : ` => ${printValue(e.expected ?? null)}${e.after ? ` after (${e.after.map(printValue).join(", ")})` : ""}`;
-      out.push(`  example (${e.args.map(printValue).join(", ")})${tail}${e.name ? ` # ${e.name}` : ""}`);
-    }
+    for (const e of [...f.examples.filter((x) => !x.observed), ...f.examples.filter((x) => x.observed)]) out.push(`  ${printExample(e)}`);
     for (const r of f.rules) out.push(`  rule ${r.name}: ${r.text}`);
   }
   return out.join("\n") + "\n";
@@ -204,9 +214,10 @@ export function parseArc(text: string): ArcModule {
       } else if (!fn) throw new Error("only intent strings belong under module");
       else if (body === "hold") fn.hold = true;
       else if (body.startsWith("example")) fn.examples.push(parseExample(body.slice("example".length)));
+      else if (body.startsWith("observed")) fn.examples.push({ ...parseExample(body.slice("observed".length)), observed: true });
       else {
         const m = /^rule\s+([\w$-]+)\s*:\s*(\S.*)$/.exec(body);
-        if (!m) throw new Error("expected an intent string, example, rule or hold");
+        if (!m) throw new Error("expected an intent string, example, observed, rule or hold");
         fn.rules.push({ name: m[1]!, text: m[2]! });
       }
     } catch (e) {

@@ -4,7 +4,7 @@ import assert from "node:assert";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { parseArc, printArc, printValue, type ArcModule } from "../src/arc.ts";
+import { parseArc, printArc, printExample, printValue, type ArcExample, type ArcModule } from "../src/arc.ts";
 
 // ── pure: print and parse are inverses, values keep their shape, errors name the line
 {
@@ -13,7 +13,7 @@ import { parseArc, printArc, printValue, type ArcModule } from "../src/arc.ts";
     types: [{ name: "Stats", type: "{ water: Num, food?: Num }" }],
     fns: [
       { name: "tick", params: [{ name: "stats", type: "Stats" }, { name: "opts", type: "{ fast: Bool }", optional: true }, { name: "rest", type: "[`Map<string, number>`]", rest: true }], returns: "Stats | Null", intent: ['Says "hi".', "Second line."], hold: true,
-        examples: [{ args: [{ water: 1, "odd key": [true, null, -2.5e3] }, "a, b) => #"], expected: { ok: "x" }, name: "named # one" }, { args: [], throws: "bad" }, { args: [1], throws: true }, { args: [{ water: 1 }, 2], expected: "$undefined", after: [{ water: 3 }, 2], name: "mutates" }], rules: [{ name: "bounded", text: "result.water in 0..100" }] },
+        examples: [{ args: [{ water: 1, "odd key": [true, null, -2.5e3] }, "a, b) => #"], expected: { ok: "x" }, name: "named # one" }, { args: [], throws: "bad" }, { args: [1], throws: true }, { args: [{ water: 1 }, 2], expected: "$undefined", after: [{ water: 3 }, 2], name: "mutates" }, { args: [7], expected: 8, observed: true }, { args: [{ water: 1 }, 2], expected: 3, after: [{ water: 0 }, 2], observed: true, name: "seen" }, { args: [null], throws: "stats", observed: true }], rules: [{ name: "bounded", text: "result.water in 0..100" }] },
       { name: "load", params: [], returns: "Str", async: true, intent: [], examples: [], rules: [] },
     ],
   };
@@ -23,6 +23,10 @@ import { parseArc, printArc, printValue, type ArcModule } from "../src/arc.ts";
   assert.strictEqual(printValue({ a: 1, "b c": ["x"] }), '{a: 1, "b c": ["x"]}');
   assert.throws(() => parseArc(text.replace(") throws\n", ") gives\n")), /^Error: line \d+: expected => or throws/);
   assert.throws(() => parseArc("fn f(): Num\n"), /line 1: a file starts with/);
+  assert.ok(text.includes('  example ({water: 1}, 2) => "$undefined" after ({water: 3}, 2) # mutates\n  observed (7) => 8\n  observed ({water: 1}, 2) => 3 after ({water: 0}, 2) # seen\n  observed (null) throws "stats"\n  rule bounded'));
+  // canonical order: an observation written before an example prints after it
+  const loose = 'module a from "a.js"\n\nfn f(x: Num): Num\n  rule r: result > 0\n  observed (1) => 2\n  example (2) => 4\n  "Doubles."\n';
+  assert.strictEqual(printArc(parseArc(loose)), 'module a from "a.js"\n\nfn f(x: Num): Num\n  "Doubles."\n  example (2) => 4\n  observed (1) => 2\n  rule r: result > 0\n');
 }
 
 if (process.platform === "win32") {
@@ -105,44 +109,125 @@ test("broken", () => assert.strictEqual(broken(3), 6));
   assert.strictEqual(sources(), before, "decompile changes no source");
   const arc = parseArc(read("arc/spec/survival.arc"));
   const fn = (name: string) => arc.fns.find((f) => f.name === name)!;
+  const obs = (...es: ArcExample[]) => es.map((e) => ({ ...e, observed: true }));
+  // everything decompile records is an observation: what the code did, not what it should do
   assert.deepStrictEqual([arc.name, arc.file, arc.fns.map((f) => f.name)], ["survival", "src/survival.js", ["drain", "add", "label", "broken", "sip", "reset"]]);
   // untyped JavaScript: the intent comes from the comment, the inputs from the literal calls in the test (also through a const)
   assert.deepStrictEqual(fn("drain").intent, ["Drains water by effort. Never leaves 0..100."]);
   assert.deepStrictEqual(fn("drain").params, [{ name: "stats", type: "Any" }, { name: "effort", type: "Num", optional: true }]);
-  assert.deepStrictEqual(fn("drain").examples, [{ args: [{ water: 50 }], expected: { water: 40 } }, { args: [{ water: 5 }, 2], expected: { water: 0 } }]);
-  assert.deepStrictEqual(fn("label").examples, [{ args: [0.9], expected: "heavy rain" }, { args: [0], expected: "clear" }]);
+  assert.deepStrictEqual(fn("drain").examples, obs({ args: [{ water: 50 }], expected: { water: 40 } }, { args: [{ water: 5 }, 2], expected: { water: 0 } }));
+  assert.deepStrictEqual(fn("label").examples, obs({ args: [0.9], expected: "heavy rain" }, { args: [0], expected: "clear" }));
   // a function that changes its arguments records them as the call leaves them; one that returns nothing too
-  assert.deepStrictEqual(fn("sip").examples, [{ args: [{ water: 50 }, 5], expected: 45, after: [{ water: 45 }, 5] }]);
-  assert.deepStrictEqual(fn("reset").examples, [{ args: [{ water: 3 }], expected: "$undefined", after: [{ water: 100 }] }]);
-  assert.ok(read("arc/spec/survival.arc").includes('  example ({water: 50}, 5) => 45 after ({water: 45}, 5)\n'));
-  assert.ok(read("arc/spec/survival.arc").includes('fn reset(stats: Any): Void\n  example ({water: 3}) => "$undefined" after ({water: 100})\n'));
+  assert.deepStrictEqual(fn("sip").examples, obs({ args: [{ water: 50 }, 5], expected: 45, after: [{ water: 45 }, 5] }));
+  assert.deepStrictEqual(fn("reset").examples, obs({ args: [{ water: 3 }], expected: "$undefined", after: [{ water: 100 }] }));
+  assert.ok(read("arc/spec/survival.arc").includes('  observed ({water: 50}, 5) => 45 after ({water: 45}, 5)\n'));
+  assert.ok(read("arc/spec/survival.arc").includes('fn reset(stats: Any): Void\n  observed ({water: 3}) => "$undefined" after ({water: 100})\n'));
   // JSDoc types give inputs with no call to copy from
   assert.deepStrictEqual([fn("add").intent, fn("add").params.map((p) => p.type), fn("add").returns], [["Adds two numbers."], ["Num", "Num"], "Num"]);
   assert.ok(fn("add").examples.length >= 3 && fn("add").examples.every((e) => (e.args[0] as number) + (e.args[1] as number) === e.expected));
-  const state = JSON.parse(read(".openarc/decompile.json")) as { modules: Record<string, { fns: Record<string, { status: string; tests: string[]; why?: string }> }> };
+  type State = { modules: Record<string, { fns: Record<string, { status: string; tests: string[]; why?: string; origins?: Record<string, string> }> }> };
+  const state = JSON.parse(read(".openarc/decompile.json")) as State;
   const s = state.modules["src/survival.js"]!.fns, d = state.modules["src/deep/screen.js"]!.fns;
-  assert.deepStrictEqual([s.drain, s.label, s.add], [{ status: "tested", tests: ["tests/survival.test.mjs"] }, { status: "tested", tests: ["tests/survival.test.mjs"] }, { status: "examples", tests: [] }]);
+  assert.deepStrictEqual([s.drain, s.label, s.add].map((f) => [f!.status, f!.tests]), [["tested", ["tests/survival.test.mjs"]], ["tested", ["tests/survival.test.mjs"]], ["observed", []]]);
+  // where each observed input came from, in the state file only: a literal call (file:line) or the parameter types
+  assert.deepStrictEqual(s.drain!.origins, { '[{"water":50}]': "call tests/survival.test.mjs:7", '[{"water":5},2]': "call tests/survival.test.mjs:8" });
+  assert.ok(Object.keys(s.add!.origins!).length === fn("add").examples.length && Object.values(s.add!.origins!).every((o) => o === "types"));
+  assert.ok(!read("arc/spec/survival.arc").includes("call tests"));
   // a function its own test fails is "failing", whatever examples its current behaviour gave, and the file is named
   assert.deepStrictEqual([s.broken!.status, s.broken!.tests, s.broken!.why], ["failing", ["tests/broken.test.mjs"], "tests/broken.test.mjs fails"]);
   // code that needs a browser is kept, with the reason; an async function's result is the awaited value
   assert.deepStrictEqual(d.resize, { status: "bare", tests: [], why: "every input throws: document is not defined" });
   assert.strictEqual(d.untouched!.why, "no inputs: the parameter types say too little and no call passes literals");
   const deep = parseArc(read("arc/spec/deep/screen.arc"));
-  assert.deepStrictEqual([deep.name, deep.fns.find((f) => f.name === "later")!.async, deep.fns.find((f) => f.name === "later")!.examples], ["deep.screen", true, [{ args: [], expected: "done" }]]);
-  assert.match(r.out, /decompiled 2 modules: tested 4, failing 1, examples 2, described 0, bare 2, skipped 0/);
+  assert.deepStrictEqual([deep.name, deep.fns.find((f) => f.name === "later")!.async, deep.fns.find((f) => f.name === "later")!.examples], ["deep.screen", true, obs({ args: [], expected: "done" })]);
+  assert.match(r.out, /decompiled 2 modules: tested 4, failing 1, specified 0, observed 2, described 0, bare 2, skipped 0\n/);
 
   // what a person writes in the .arc file survives the next run, and an unchanged module is not run again
-  write("arc/spec/survival.arc", read("arc/spec/survival.arc").replace('fn label(rain: Any): "heavy rain" | "clear"\n', 'fn label(rain: Any): "heavy rain" | "clear"\n  "Names the weather from the rain level."\n').replace('  example (0) => "clear"\n', '  example (0) => "clear"\n  rule known: result in ["heavy rain", "clear"]\n'));
+  write("arc/spec/survival.arc", read("arc/spec/survival.arc").replace('fn label(rain: Any): "heavy rain" | "clear"\n', 'fn label(rain: Any): "heavy rain" | "clear"\n  "Names the weather from the rain level."\n').replace('  observed (0) => "clear"\n', '  observed (0) => "clear"\n  rule known: result in ["heavy rain", "clear"]\n'));
   const kept = read("arc/spec/survival.arc");
   assert.ok(kept.includes("rule known"));
+  assert.ok(kept.includes('  observed (0) => "clear"\n  rule known'));
   r = oa("decompile", "--run-tests");
   assert.match(r.out, /src\/survival\.js: 6 functions \(unchanged\)/);
   assert.strictEqual(read("arc/spec/survival.arc"), kept);
   r = oa("decompile", "--todo");
   assert.deepStrictEqual(r.out.trim().split("\n"), ["arc/spec/deep/screen.arc: resize", "arc/spec/deep/screen.arc: later", "arc/spec/deep/screen.arc: untouched", "arc/spec/survival.arc: broken", "arc/spec/survival.arc: reset"]);
   r = oa("decompile", "--report", "--json");
-  assert.deepStrictEqual((JSON.parse(r.out) as { totals: unknown }).totals, { tested: 4, failing: 1, examples: 2, described: 0, bare: 2, skipped: 0 });
+  assert.deepStrictEqual((JSON.parse(r.out) as { totals: unknown }).totals, { tested: 4, failing: 1, specified: 0, observed: 2, described: 0, bare: 2, skipped: 0 });
   assert.strictEqual(sources(), before);
+
+  // promoting an observation is an edit: `observed` becomes `example`. It survives the next run and makes add `specified`
+  const [req, other] = fn("add").examples as [ArcExample, ArcExample];
+  const line = (e: ArcExample) => `  ${printExample(e)}\n`;
+  write("arc/spec/survival.arc", read("arc/spec/survival.arc").replace(line(req), line({ ...req, observed: undefined })).replace(line(other), line({ ...other, name: "sum" })));
+  const promoted = read("arc/spec/survival.arc");
+  assert.ok(promoted.includes(`fn add(a: Num, b: Num): Num\n  "Adds two numbers."\n${line({ ...req, observed: undefined })}`));
+  r = oa("decompile", "--run-tests");
+  assert.strictEqual(r.code, 0, r.out);
+  assert.strictEqual(read("arc/spec/survival.arc"), promoted);
+  const status = () => (JSON.parse(read(".openarc/decompile.json")) as State).modules["src/survival.js"]!.fns.add!;
+  assert.strictEqual(status().status, "specified");
+  assert.match(r.out, /specified 1, observed 1,/);
+  // --check on an unchanged project: every line preserved, exit 0
+  r = oa("decompile", "--check");
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /^checked 9 functions: preserved \d+, changed 0, failing 0, unrunnable 0, removed 0, new 0\n$/);
+
+  // the code changes behaviour: --check reports the changed observation and the failing example, and writes nothing
+  write("src/survival.js", read("src/survival.js").replace("export const add = (a, b) => a + b;", "export const add = (a, b) => a + b + 1;"));
+  const plus1 = (e: ArcExample) => printValue((e.expected as number) + 1);
+  const changedLine = `src/survival.js: add(${other.args.map(printValue).join(", ")}) changed: was ${printValue(other.expected!)}, now ${plus1(other)}`;
+  const failingWhy = `example (${req.args.map(printValue).join(", ")}) => ${printValue(req.expected!)}: the code returns ${plus1(req)}`;
+  const snapshot = () => [read("arc/spec/survival.arc"), read("arc/spec/deep/screen.arc"), read(".openarc/decompile.json")].join("\0");
+  const held = snapshot();
+  r = oa("decompile", "--check");
+  assert.strictEqual(r.code, 1, r.out);
+  assert.ok(r.out.includes(`${changedLine}\n`), r.out);
+  assert.ok(r.out.includes(`src/survival.js: add: ${failingWhy}\n`), r.out);
+  assert.match(r.out, /checked 9 functions: preserved \d+, changed [1-9]\d*, failing 1, unrunnable 0, removed 0, new 0\n$/);
+  r = oa("decompile", "--check", "--json");
+  const report = JSON.parse(r.out) as { ok: boolean; summary: { failing: number }; items: { file: string; fn: string; kind: string; was?: string; now?: string; why?: string }[] };
+  assert.strictEqual(report.ok, false);
+  assert.ok(report.items.every((i) => i.fn === "add" && (i.kind === "changed" || i.kind === "failing")));
+  assert.deepStrictEqual(report.items.find((i) => i.kind === "failing"), { file: "src/survival.js", fn: "add", kind: "failing", args: req.args, was: printValue(req.expected!), now: plus1(req), why: failingWhy });
+  assert.strictEqual(snapshot(), held, "--check writes nothing");
+
+  // the next decompile re-records the observations (keeping a name), prints what changed, keeps the example as written,
+  // and marks add failing with the reason
+  r = oa("decompile", "--run-tests");
+  assert.strictEqual(r.code, 0, r.out);
+  assert.ok(r.out.includes(`${changedLine}\n`), r.out);
+  assert.match(r.out, /, changed [1-9]\d*\n/);
+  const add = parseArc(read("arc/spec/survival.arc")).fns.find((f) => f.name === "add")!;
+  const { observed: _, ...asWritten } = req;
+  assert.deepStrictEqual(add.examples[0], asWritten);
+  assert.strictEqual(add.examples.filter((e) => !e.observed).length, 1);
+  assert.ok(add.examples.some((e) => e.observed && e.name === "sum" && printValue(e.expected!) === plus1(other)));
+  assert.ok(read("arc/spec/survival.arc").includes(line({ ...req, observed: undefined })));
+  assert.deepStrictEqual([status().status, status().why], ["failing", failingWhy]);
+  // an unchanged rerun keeps it failing without running anything
+  r = oa("decompile", "--run-tests");
+  assert.match(r.out, /src\/survival\.js: 6 functions \(unchanged\)/);
+  assert.deepStrictEqual([status().status, status().why], ["failing", failingWhy]);
+
+  // a function the code no longer exports is `removed`, one the .arc file lacks is `new`
+  write("src/survival.js", read("src/survival.js").replace("export function reset(stats)", "export function refill(stats)"));
+  r = oa("decompile", "--check");
+  assert.strictEqual(r.code, 1, r.out);
+  assert.ok(r.out.includes("src/survival.js: reset removed: the code no longer exports it\n"), r.out);
+  assert.ok(r.out.includes("src/survival.js: refill new: no entry in the .arc file\n"), r.out);
+  assert.match(r.out, /failing 1, unrunnable 0, removed 1, new 1\n$/);
+
+  // a state file from before `observed` (status `examples`, no origins) still loads
+  const old = JSON.parse(read(".openarc/decompile.json")) as State;
+  for (const m of Object.values(old.modules)) for (const f of Object.values(m.fns)) { if (f.status === "observed") f.status = "examples"; delete f.origins; }
+  write(".openarc/decompile.json", JSON.stringify(old));
+  r = oa("decompile", "--report");
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /src\/deep\/screen\.js: tested 0, failing 0, specified 0, observed 1, described 0, bare 2\n/);
+  r = oa("decompile", "--run-tests");
+  assert.strictEqual(r.code, 0, r.out);
+  assert.strictEqual(sources(), before.replace("a + b;", "a + b + 1;").replace("function reset(", "function refill("));
   assert.deepStrictEqual(readdirSync(join(dir, "src")).sort(), ["deep", "survival.js"]);
   assert.strictEqual(oa("decompile", "../x").code, 2);
 } finally {

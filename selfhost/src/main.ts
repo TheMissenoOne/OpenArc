@@ -24,7 +24,7 @@ import { testFile } from "./tests-plan.ts";
 import { migrate } from "./migrate.ts";
 import { adopt, brief, syncOnce, type SyncCtx, type SyncStatus } from "./sync.ts";
 import { SHEET_FILE } from "./sheet.ts";
-import { STATE_FILE, decompile, report, todo, type DecompileState } from "./decompile.ts";
+import { STATE_FILE, checkLine, checkSpecs, decompile, report, todo, type DecompileState } from "./decompile.ts";
 import { parseArc, type ArcModule } from "./arc.ts";
 import { ARCH_FILE, CONCEPT_FILE, checkArch, checkConcept, deriveArch, formatReport, importsOf, parseArch, parseConcept, printArch, printConcept, projectName, sources, updateArch, type Arch, type Concept } from "./levels.ts";
 import { LINT_USAGE, lintCommand } from "./lint.ts";
@@ -305,7 +305,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc check <id> --oracle <module>#<export> [--runs <n>] [--seed <n>] | check <ids...> --mutants [--operators trivial,boundary,comparison,constant,logical,guard,swap]
        openarc doctor
        openarc adopt [--brief] [--json] [--no-model] | sync [--watch] [--brief] [--json] [--no-model]
-       openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>]] [--fresh] [--json] | decompile --report|--todo [--json]
+       openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>]] [--fresh] [--json] | decompile --report|--todo [--json] | decompile --check [dirs...] [--out=<dir>] [--json]
        openarc arch [dirs...] [--check] [--json] | concept [--check] [--json]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
        ${LINT_USAGE}`;
@@ -320,16 +320,25 @@ async function ensureIgnored(ports: Ports): Promise<boolean> {
   return true;
 }
 
-/** `openarc decompile [dirs...]`: code to `.arc` specs, nothing in the code changes. `--report` and `--todo` read the last run. */
+/** `openarc decompile [dirs...]`: code to `.arc` specs, nothing in the code changes. `--report` and `--todo` read the last run.
+ *  `--check` runs the `.arc` lines against the code and writes nothing: exit 1 when behaviour changed. */
 async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
   const flags = argv.filter((a) => a.startsWith("--")), dirs = argv.filter((a) => !a.startsWith("--")).map((d) => d.replace(/\/+$/, ""));
-  const known = /^--(report|todo|json|fresh|run-tests(=.+)?|out=.+)$/;
+  const known = /^--(report|todo|check|json|fresh|run-tests(=.+)?|out=.+)$/;
   if (flags.some((f) => !known.test(f)) || dirs.some((d) => d.startsWith("/") || d.split("/").includes(".."))) {
     console.error(`openarc: bad-flag\n\n${USAGE}`);
     return 2;
   }
   const has = (f: string) => flags.includes(f);
-  let state: DecompileState;
+  const out = flags.find((f) => f.startsWith("--out="))?.slice(6) ?? "arc/spec";
+  if (has("--check")) {
+    const c = await checkSpecs({ ports, root, request: (p, ids) => request(root, p, ids), log: (l) => !has("--json") && console.log(l), dirs: dirs.length ? dirs : ["src"], out });
+    const s = c.summary;
+    if (has("--json")) console.log(JSON.stringify(c));
+    else console.log([...c.items.map(checkLine), `checked ${s.functions} functions: preserved ${s.preserved}, changed ${s.changed}, failing ${s.failing}, unrunnable ${s.unrunnable}, removed ${s.removed}, new ${s.new}`].join("\n"));
+    return c.ok ? 0 : 1;
+  }
+  let state: DecompileState & { changed?: number };
   if (has("--report") || has("--todo")) {
     const text = await ports.fs.read(STATE_FILE);
     if (text === null) return console.error("openarc: nothing decompiled yet; run `openarc decompile` first"), 1;
@@ -339,7 +348,7 @@ async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise
     const testCmd = flags.find((f) => f.startsWith("--run-tests"));
     state = await decompile({
       ports, root, request: (p, ids) => request(root, p, ids), log: (l) => !has("--json") && console.log(l),
-      dirs: dirs.length ? dirs : ["src"], out: flags.find((f) => f.startsWith("--out="))?.slice(6) ?? "arc/spec", fresh: has("--fresh"),
+      dirs: dirs.length ? dirs : ["src"], out, fresh: has("--fresh"),
       ...(testCmd ? { testCmd: testCmd.includes("=") ? testCmd.slice(testCmd.indexOf("=") + 1).split(" ") : [process.execPath, "--test"] } : {}),
     });
   }
@@ -356,7 +365,7 @@ async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise
   const r = report(state);
   if (has("--json")) return console.log(JSON.stringify({ totals: r.totals, modules: state.modules })), 0;
   if (has("--report")) for (const l of r.lines) console.log(l);
-  console.log(`decompiled ${Object.keys(state.modules).length} modules: tested ${r.totals.tested}, failing ${r.totals.failing}, examples ${r.totals.examples}, described ${r.totals.described}, bare ${r.totals.bare}, skipped ${r.totals.skipped}`);
+  console.log(`decompiled ${Object.keys(state.modules).length} modules: tested ${r.totals.tested}, failing ${r.totals.failing}, specified ${r.totals.specified}, observed ${r.totals.observed}, described ${r.totals.described}, bare ${r.totals.bare}, skipped ${r.totals.skipped}${state.changed ? `, changed ${state.changed}` : ""}`);
   return 0;
 }
 

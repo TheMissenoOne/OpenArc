@@ -6,7 +6,7 @@ A project is described at four levels. Each one is checked against the level bel
 |---|---|---|---|
 | Concept | `arc/concept.arc` | what the project is, its goals, its non-goals, a glossary | every goal names parts the architecture has |
 | Architecture | `arc/architecture.arc` | the parts, which modules each holds, which part uses which, the third-party packages | the real import graph of the code |
-| Spec | `arc/spec/<module>.arc` | one module: types, functions, intents, examples. See [[Decompile]] | the code, by running the examples |
+| Spec | `arc/spec/<module>.arc` | one module: types, functions, intents, examples (requirements) and observations (recorded behaviour). See [[Decompile]] | the code, by running both (`openarc decompile --check`) |
 | Code | your source files | | |
 
 ```
