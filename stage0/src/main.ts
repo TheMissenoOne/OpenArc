@@ -309,7 +309,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc check <id> --oracle <module>#<export> [--runs <n>] [--seed <n>] | check <ids...> --mutants [--operators trivial,boundary,comparison,constant,logical,guard,swap]
        openarc doctor
        openarc adopt [--brief] [--json] [--no-model] | sync [--watch] [--brief] [--json] [--no-model]
-       openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>] [--no-record]] [--fresh] [--json] | decompile --report|--todo [--json] | decompile --check [dirs...] [--out=<dir>] [--json]
+       openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>] [--no-record]] [--fresh] [--json] | decompile --report|--todo [--json] | decompile --check [dirs...] [--out=<dir>] [--rule-inputs <n>] [--json]
        openarc arch [dirs...] [--check] [--json] | concept [--check] [--json]
        openarc status [--json] [--part <name>] [--goal <name>]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
@@ -401,8 +401,9 @@ async function guardCmd(root: string, ports: Ports, argv: string[]): Promise<num
 /** `openarc decompile [dirs...]`: code to `.arc` specs, nothing in the code changes. `--report` and `--todo` read the last run.
  *  `--check` runs the `.arc` lines against the code and writes nothing: exit 1 when behaviour changed. */
 async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
+  argv = argv.map((a, i) => (argv[i - 1] === "--rule-inputs" ? `--rule-inputs=${a}` : a)).filter((a) => a !== "--rule-inputs"); // `--rule-inputs <n>`
   const flags = argv.filter((a) => a.startsWith("--")), dirs = argv.filter((a) => !a.startsWith("--")).map((d) => d.replace(/\/+$/, ""));
-  const known = /^--(report|todo|check|json|fresh|no-record|run-tests(=.+)?|out=.+)$/;
+  const known = /^--(report|todo|check|json|fresh|no-record|run-tests(=.+)?|out=.+|rule-inputs=\d+)$/;
   if (flags.some((f) => !known.test(f)) || dirs.some((d) => d.startsWith("/") || d.split("/").includes(".."))) {
     console.error(`openarc: bad-flag\n\n${USAGE}`);
     return 2;
@@ -410,7 +411,7 @@ async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise
   const has = (f: string) => flags.includes(f);
   const out = flags.find((f) => f.startsWith("--out="))?.slice(6) ?? "arc/spec";
   if (has("--check")) {
-    const c = await checkSpecs({ ports, root, request: (p, ids) => request(root, p, ids), log: (l) => !has("--json") && console.log(l), dirs: dirs.length ? dirs : ["src"], out });
+    const c = await checkSpecs({ ports, root, request: (p, ids) => request(root, p, ids), log: (l) => !has("--json") && console.log(l), dirs: dirs.length ? dirs : ["src"], out, ruleInputs: Number(flags.find((f) => f.startsWith("--rule-inputs="))?.slice(14) ?? 50) });
     const s = c.summary;
     if (has("--json")) console.log(JSON.stringify(c));
     else console.log([...c.items.map(checkLine), `checked ${s.functions} functions: preserved ${s.preserved}, changed ${s.changed}, failing ${s.failing}, unrunnable ${s.unrunnable}, removed ${s.removed}, new ${s.new}`].join("\n"));

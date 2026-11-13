@@ -250,7 +250,7 @@ test("probe", () => {
   assert.ok(read(".openarc/.gitignore").split("\n").includes("recorded/"));
 
   // what a person writes in the .arc file survives the next run, and an unchanged module is not run again
-  write("arc/spec/survival.arc", read("arc/spec/survival.arc").replace('fn label(rain: Any): "heavy rain" | "clear"\n', 'fn label(rain: Any): "heavy rain" | "clear"\n  "Names the weather from the rain level."\n').replace('  observed (0) => "clear"\n', '  observed (0) => "clear"\n  rule known: result in ["heavy rain", "clear"]\n'));
+  write("arc/spec/survival.arc", read("arc/spec/survival.arc").replace('fn label(rain: Any): "heavy rain" | "clear"\n', 'fn label(rain: Any): "heavy rain" | "clear"\n  "Names the weather from the rain level."\n').replace('  observed (0) => "clear"\n', '  observed (0) => "clear"\n  rule known: result in "heavy rain" | "clear"\n'));
   const kept = read("arc/spec/survival.arc");
   assert.ok(kept.includes("rule known"));
   assert.ok(kept.includes('  observed (0) => "clear"\n  rule known'));
@@ -278,7 +278,7 @@ test("probe", () => {
   // --check on an unchanged project: every line preserved, exit 0
   r = oa("decompile", "--check");
   assert.strictEqual(r.code, 0, r.out);
-  assert.match(r.out, /^checked 14 functions: preserved \d+, changed 0, failing 0, unrunnable 0, removed 0, new 0\n$/);
+  assert.match(r.out, /^src\/survival\.js: label: rule known: held on \d+ inputs\nchecked 14 functions: preserved \d+, changed 0, failing 0, unrunnable 0, removed 0, new 0\n$/);
 
   // the code changes behaviour: --check reports the changed observation and the failing example, and writes nothing
   write("src/survival.js", read("src/survival.js").replace("export const add = (a, b) => a + b;", "export const add = (a, b) => a + b + 1;"));
@@ -295,7 +295,7 @@ test("probe", () => {
   r = oa("decompile", "--check", "--json");
   const report = JSON.parse(r.out) as { ok: boolean; summary: { failing: number }; items: { file: string; fn: string; kind: string; was?: string; now?: string; why?: string }[] };
   assert.strictEqual(report.ok, false);
-  assert.ok(report.items.every((i) => i.fn === "add" && (i.kind === "changed" || i.kind === "failing")));
+  assert.ok(report.items.every((i) => (i.fn === "add" && (i.kind === "changed" || i.kind === "failing")) || (i.fn === "label" && i.kind === "held")));
   assert.deepStrictEqual(report.items.find((i) => i.kind === "failing"), { file: "src/survival.js", fn: "add", kind: "failing", args: req.args, was: printValue(req.expected!), now: plus1(req), why: failingWhy });
   assert.strictEqual(snapshot(), held, "--check writes nothing");
 

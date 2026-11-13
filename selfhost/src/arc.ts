@@ -19,7 +19,8 @@
 // intent, hold, examples, observations, rules.
 // Types are kept as text. Built-ins: Int Float Num Bool Str Any Void Null, `[T]`, `{ k: T, k?: T }`, `A | B`, `T?`, literals,
 // names of `type` declarations, and a backticked native type (`Map<string, number>`) for what v0 has no spelling for.
-// ponytail: types and rule predicates are not parsed further here; the checker that needs their structure parses them.
+// ponytail: types and rule predicates are not parsed further here; the checker that needs their structure parses them
+// (src/rules.ts: the rule language and `.arc` type fit).
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 

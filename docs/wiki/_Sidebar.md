@@ -15,6 +15,7 @@
 - [[Agent Sync]]
 - [[Host Agent Mode]]
 - [[Decompile]]
+- [[Rules]]
 - [[Levels]]
 - [[CLI Reference]]
 - [[Bootstrap]]
