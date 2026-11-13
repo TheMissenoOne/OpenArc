@@ -178,7 +178,8 @@ try {
     const p = project({ "go.mod": "module example.com/calc\n\ngo 1.22\n", "src/calc.go": CALC });
     const r = p.oa(["decompile"], undefined, { OPENARC_GO: join(p.dir, "no-such-go") });
     assert.strictEqual(r.code, 1, r.out);
-    assert.strictEqual(r.out.trim(), "openarc: Go code needs the Go toolchain: set OPENARC_GO to the go binary (OPENARC_GO=/usr/local/go/bin/go) or put go on PATH");
+    // the last line: a platform whose default tier is weaker (Windows: node) prints its isolation notice first
+    assert.strictEqual(r.out.trim().split("\n").at(-1), "openarc: Go code needs the Go toolchain: set OPENARC_GO to the go binary (OPENARC_GO=/usr/local/go/bin/go) or put go on PATH");
   }
   if (!go) {
     console.log("go.check: SKIP: no Go toolchain (set OPENARC_GO to the go binary, or put go on PATH); checked only the message for a missing one");
