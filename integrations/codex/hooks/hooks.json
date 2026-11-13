@@ -6,8 +6,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test -f openarc.config.json && { [ -x node_modules/.bin/openarc ] && node_modules/.bin/openarc sync --brief --no-model || openarc sync --brief --no-model; } 2>/dev/null || true",
+            "command": "test -f openarc.config.json && { b=\"${OPENARC_BIN:-node_modules/.bin/openarc}\"; [ -x \"$b\" ] || b=openarc; \"$b\" sync --brief --no-model; } 2>/dev/null || true",
             "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -f openarc.config.json || exit 0; b=\"${OPENARC_BIN:-node_modules/.bin/openarc}\"; [ -x \"$b\" ] || b=openarc; command -v \"$b\" >/dev/null 2>&1 || exit 0; \"$b\" guard --hook",
+            "timeout": 15
           }
         ]
       }

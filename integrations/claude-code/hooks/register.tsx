@@ -38,9 +38,12 @@ const show = async ($: any, s: SyncStatus) => {
   $.ui.status(line(s))
 }
 
+/** The openarc binary: $OPENARC_BIN when set (a project need not install the package), else the local one, else PATH's. */
+const binary = async ($: any): Promise<string> => (await $.env.get('OPENARC_BIN')) || ((await exists($, LOCAL_BIN)) ? LOCAL_BIN : 'openarc')
+
 /** Run openarc, sending status lines to the pane's state and everything else to its log; resolves its exit code. */
 async function pump($: any, args: string[]): Promise<number> {
-  const bin = (await exists($, LOCAL_BIN)) ? LOCAL_BIN : 'openarc'
+  const bin = await binary($)
   try {
     return await stream($, [bin, ...args])
   } catch {
@@ -110,6 +113,17 @@ export const register: Register = on => {
     }
     return started
   })
+
+  // Before an edit, `openarc guard --hook` says whether it would change a compiler-owned region: exit 2 denies the call
+  // with its reason, so the model edits the spec instead. Anything else, a missing binary included, lets it through.
+  on('tool.call', { tool: /^(Edit|Write|MultiEdit)$/ }, async ($, e, next) => {
+    if (!(await exists($, 'openarc.config.json'))) return next(e)
+    const { tool, tool_use_id: _id, consent: _c, agentId: _a, ...tool_input } = e as { tool: string } & Record<string, unknown> // the tool's own arguments
+    const r = await $.process
+      .run([await binary($), 'guard', '--hook'], { stdin: JSON.stringify({ tool_name: tool, tool_input }), timeoutMs: 10_000 })
+      .catch(() => null)
+    return r?.exitCode === 2 ? { deny: r.stderr.trim() || 'openarc: this edit changes a compiler-owned region' } : next(e)
+  }).catch(($, e, next) => next(e)) // the guard failing must never block an edit
 
   on('command.run', { command: 'openarc' }, async $ => {
     await $.ui.open({ id: PANE, title: 'OpenArc' })
