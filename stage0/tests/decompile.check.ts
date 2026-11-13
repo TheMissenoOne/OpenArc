@@ -103,7 +103,7 @@ test("broken", () => assert.strictEqual(broken(3), 6));
   let r = oa("decompile", "--run-tests");
   assert.strictEqual(r.code, 0, r.out);
   assert.strictEqual(sources(), before, "decompile changes no source");
-  const arc = parseArc(read("arc/survival.arc"));
+  const arc = parseArc(read("arc/spec/survival.arc"));
   const fn = (name: string) => arc.fns.find((f) => f.name === name)!;
   assert.deepStrictEqual([arc.name, arc.file, arc.fns.map((f) => f.name)], ["survival", "src/survival.js", ["drain", "add", "label", "broken", "sip", "reset"]]);
   // untyped JavaScript: the intent comes from the comment, the inputs from the literal calls in the test (also through a const)
@@ -114,8 +114,8 @@ test("broken", () => assert.strictEqual(broken(3), 6));
   // a function that changes its arguments records them as the call leaves them; one that returns nothing too
   assert.deepStrictEqual(fn("sip").examples, [{ args: [{ water: 50 }, 5], expected: 45, after: [{ water: 45 }, 5] }]);
   assert.deepStrictEqual(fn("reset").examples, [{ args: [{ water: 3 }], expected: "$undefined", after: [{ water: 100 }] }]);
-  assert.ok(read("arc/survival.arc").includes('  example ({water: 50}, 5) => 45 after ({water: 45}, 5)\n'));
-  assert.ok(read("arc/survival.arc").includes('fn reset(stats: Any): Void\n  example ({water: 3}) => "$undefined" after ({water: 100})\n'));
+  assert.ok(read("arc/spec/survival.arc").includes('  example ({water: 50}, 5) => 45 after ({water: 45}, 5)\n'));
+  assert.ok(read("arc/spec/survival.arc").includes('fn reset(stats: Any): Void\n  example ({water: 3}) => "$undefined" after ({water: 100})\n'));
   // JSDoc types give inputs with no call to copy from
   assert.deepStrictEqual([fn("add").intent, fn("add").params.map((p) => p.type), fn("add").returns], [["Adds two numbers."], ["Num", "Num"], "Num"]);
   assert.ok(fn("add").examples.length >= 3 && fn("add").examples.every((e) => (e.args[0] as number) + (e.args[1] as number) === e.expected));
@@ -127,19 +127,19 @@ test("broken", () => assert.strictEqual(broken(3), 6));
   // code that needs a browser is kept, with the reason; an async function's result is the awaited value
   assert.deepStrictEqual(d.resize, { status: "bare", tests: [], why: "every input throws: document is not defined" });
   assert.strictEqual(d.untouched!.why, "no inputs: the parameter types say too little and no call passes literals");
-  const deep = parseArc(read("arc/deep/screen.arc"));
+  const deep = parseArc(read("arc/spec/deep/screen.arc"));
   assert.deepStrictEqual([deep.name, deep.fns.find((f) => f.name === "later")!.async, deep.fns.find((f) => f.name === "later")!.examples], ["deep.screen", true, [{ args: [], expected: "done" }]]);
   assert.match(r.out, /decompiled 2 modules: tested 4, failing 1, examples 2, described 0, bare 2, skipped 0/);
 
   // what a person writes in the .arc file survives the next run, and an unchanged module is not run again
-  write("arc/survival.arc", read("arc/survival.arc").replace('fn label(rain: Any): "heavy rain" | "clear"\n', 'fn label(rain: Any): "heavy rain" | "clear"\n  "Names the weather from the rain level."\n').replace('  example (0) => "clear"\n', '  example (0) => "clear"\n  rule known: result in ["heavy rain", "clear"]\n'));
-  const kept = read("arc/survival.arc");
+  write("arc/spec/survival.arc", read("arc/spec/survival.arc").replace('fn label(rain: Any): "heavy rain" | "clear"\n', 'fn label(rain: Any): "heavy rain" | "clear"\n  "Names the weather from the rain level."\n').replace('  example (0) => "clear"\n', '  example (0) => "clear"\n  rule known: result in ["heavy rain", "clear"]\n'));
+  const kept = read("arc/spec/survival.arc");
   assert.ok(kept.includes("rule known"));
   r = oa("decompile", "--run-tests");
   assert.match(r.out, /src\/survival\.js: 6 functions \(unchanged\)/);
-  assert.strictEqual(read("arc/survival.arc"), kept);
+  assert.strictEqual(read("arc/spec/survival.arc"), kept);
   r = oa("decompile", "--todo");
-  assert.deepStrictEqual(r.out.trim().split("\n"), ["arc/deep/screen.arc: resize", "arc/deep/screen.arc: later", "arc/deep/screen.arc: untouched", "arc/survival.arc: broken", "arc/survival.arc: reset"]);
+  assert.deepStrictEqual(r.out.trim().split("\n"), ["arc/spec/deep/screen.arc: resize", "arc/spec/deep/screen.arc: later", "arc/spec/deep/screen.arc: untouched", "arc/spec/survival.arc: broken", "arc/spec/survival.arc: reset"]);
   r = oa("decompile", "--report", "--json");
   assert.deepStrictEqual((JSON.parse(r.out) as { totals: unknown }).totals, { tested: 4, failing: 1, examples: 2, described: 0, bare: 2, skipped: 0 });
   assert.strictEqual(sources(), before);

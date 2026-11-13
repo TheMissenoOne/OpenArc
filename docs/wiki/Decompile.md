@@ -25,7 +25,7 @@ Exported type aliases and interfaces become `type` lines. Classes and generic fu
 
 ## The `.arc` file
 
-One file per module, under `arc/` by default, mirroring the source tree:
+One file per module, under `arc/spec/` by default (`--out=<dir>` changes it), mirroring the source tree. The levels above it live next to that folder: see [[Levels]].
 
 ```
 module survival from "src/survival.js"

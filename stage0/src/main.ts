@@ -339,7 +339,7 @@ async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise
     const testCmd = flags.find((f) => f.startsWith("--run-tests"));
     state = await decompile({
       ports, root, request: (p, ids) => request(root, p, ids), log: (l) => !has("--json") && console.log(l),
-      dirs: dirs.length ? dirs : ["src"], out: flags.find((f) => f.startsWith("--out="))?.slice(6) ?? "arc", fresh: has("--fresh"),
+      dirs: dirs.length ? dirs : ["src"], out: flags.find((f) => f.startsWith("--out="))?.slice(6) ?? "arc/spec", fresh: has("--fresh"),
       ...(testCmd ? { testCmd: testCmd.includes("=") ? testCmd.slice(testCmd.indexOf("=") + 1).split(" ") : [process.execPath, "--test"] } : {}),
     });
   }
