@@ -312,7 +312,6 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
   };
   try {
     for (const [file, m] of read) {
-      if (!m.found.length && !m.types.length) continue;
       const text = texts.get(file) ?? "";
       const dir = ctx.dirs.find((d) => file.startsWith(`${d}/`))!;
       const stem = file.slice(dir.length + 1).replace(CODE, "");

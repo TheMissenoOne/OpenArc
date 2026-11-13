@@ -233,23 +233,23 @@ part src.sim
   r = oa("status");
   assert.deepStrictEqual([r.code, lines(r.out)], [0, [
     "goal play: parts none: 0 functions",
-    "goal look: parts src.ui, src, src.dsl, audio: 3 functions (bare 3); weakest bare; part audio is not in arc/architecture.arc; not decompiled: src/ui/hud.js",
+    "goal look: parts src.ui, src, src.dsl, audio: 3 functions (bare 3); weakest bare; part audio is not in arc/architecture.arc",
     "part src: 1 modules, 1 functions (bare 1); weakest bare",
     "part src.dsl: 2 modules, 2 functions (bare 2); weakest bare",
-    "part src.sim: 3 modules, 3 functions (examples 1, bare 2); weakest bare",
-    "part src.ui: 0 modules, 0 functions; not decompiled: src/ui/hud.js", // hud.js exports no function, so decompile records nothing for it
+    "part src.sim: 4 modules, 3 functions (observed 1, bare 2); weakest bare",
+    "part src.ui: 1 modules, 0 functions", // hud.js exports no function: it is read, and has nothing to count
     "unassigned: 1 modules, 1 functions (described 1); weakest described",
-    "total: 7 modules, 7 functions (examples 1, described 1, bare 5); weakest bare",
+    "total: 9 modules, 7 functions (observed 1, described 1, bare 5); weakest bare",
   ]]);
   assert.ok(!/verified|proved/i.test(r.out), r.out);
   const sj = JSON.parse(oa("status", "--json").out) as { goals: { name: string; unknownParts: string[] }[]; parts: { name: string; counts: Record<string, number> }[]; unassigned: { modules: string[] }; totals: { functions: number }; missing: string[] };
   assert.deepStrictEqual(Object.keys(sj), ["goals", "parts", "unassigned", "totals", "missing"]);
-  assert.deepStrictEqual([sj.goals[1]!.unknownParts, sj.parts[2]!.counts, sj.unassigned.modules, sj.totals.functions, sj.missing], [["audio"], { examples: 1, bare: 2 }, ["src/extra.js"], 7, []]);
+  assert.deepStrictEqual([sj.goals[1]!.unknownParts, sj.parts[2]!.counts, sj.unassigned.modules, sj.totals.functions, sj.missing], [["audio"], { observed: 1, bare: 2 }, ["src/extra.js"], 7, []]);
   r = oa("status", "--part", "src.sim");
   assert.ok(lines(r.out).pop()!.startsWith("  bare src/sim/world.js step: OARC-E090 harness crashed"), r.out); // the rest names the sandbox's path
   assert.deepStrictEqual([r.code, lines(r.out).slice(0, -1)], [0, [
-    "part src.sim: 3 modules, 3 functions (examples 1, bare 2); weakest bare",
-    "  src/sim/math.js: 1 functions (examples 1); weakest examples", "  src/sim/rules.js: 1 functions (bare 1); weakest bare", "  src/sim/world.js: 1 functions (bare 1); weakest bare",
+    "part src.sim: 4 modules, 3 functions (observed 1, bare 2); weakest bare",
+    "  src/sim/math.js: 1 functions (observed 1); weakest observed", "  src/sim/physics.js: 0 functions", "  src/sim/rules.js: 1 functions (bare 1); weakest bare", "  src/sim/world.js: 1 functions (bare 1); weakest bare",
     "  bare src/sim/rules.js rule: no inputs: the parameter types say too little and no call passes literals",
   ]]);
   assert.strictEqual((JSON.parse(oa("status", "--goal", "look", "--json").out) as { functions: number }).functions, 3);

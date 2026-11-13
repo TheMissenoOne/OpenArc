@@ -418,7 +418,11 @@ async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise
   if (has("--report") || has("--todo")) {
     const text = await ports.fs.read(STATE_FILE);
     if (text === null) return console.error("openarc: nothing decompiled yet; run `openarc decompile` first"), 1;
-    state = JSON.parse(text) as DecompileState;
+    try {
+      state = JSON.parse(text) as DecompileState;
+    } catch {
+      return console.error(`openarc: ${STATE_FILE} is not valid JSON; run \`openarc decompile --fresh\` to rebuild it`), 1;
+    }
   } else {
     await ensureIgnored(ports);
     const testCmd = flags.find((f) => f.startsWith("--run-tests"));
