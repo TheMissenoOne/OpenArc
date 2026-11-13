@@ -12,6 +12,7 @@
 - [[Adopting Existing Code]]
 - [[Watch Mode]]
 - [[Agent Sync]]
+- [[Decompile]]
 - [[CLI Reference]]
 - [[Bootstrap]]
 - [[Design Log]]

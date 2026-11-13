@@ -24,6 +24,8 @@ import { testFile } from "./tests-plan.ts";
 import { migrate } from "./migrate.ts";
 import { adopt, brief, syncOnce, type SyncCtx, type SyncStatus } from "./sync.ts";
 import { SHEET_FILE } from "./sheet.ts";
+import { STATE_FILE, decompile, report, todo, type DecompileState } from "./decompile.ts";
+import { parseArc, type ArcModule } from "./arc.ts";
 import { LINT_USAGE, lintCommand } from "./lint.ts";
 import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools, type TierChoice } from "./isolation.ts";
 
@@ -302,6 +304,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc check <id> --oracle <module>#<export> [--runs <n>] [--seed <n>] | check <ids...> --mutants [--operators trivial,boundary,comparison,constant,logical,guard,swap]
        openarc doctor
        openarc adopt [--brief] [--json] [--no-model] | sync [--watch] [--brief] [--json] [--no-model]
+       openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>]] [--fresh] [--json] | decompile --report|--todo [--json]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
        ${LINT_USAGE}`;
 
@@ -313,6 +316,46 @@ async function ensureIgnored(ports: Ports): Promise<boolean> {
   if (!missing.length) return false;
   await ports.fs.write(".openarc/.gitignore", (had ?? "") + (had && !had.endsWith("\n") ? "\n" : "") + missing.join("\n") + "\n");
   return true;
+}
+
+/** `openarc decompile [dirs...]`: code to `.arc` specs, nothing in the code changes. `--report` and `--todo` read the last run. */
+async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
+  const flags = argv.filter((a) => a.startsWith("--")), dirs = argv.filter((a) => !a.startsWith("--")).map((d) => d.replace(/\/+$/, ""));
+  const known = /^--(report|todo|json|fresh|run-tests(=.+)?|out=.+)$/;
+  if (flags.some((f) => !known.test(f)) || dirs.some((d) => d.startsWith("/") || d.split("/").includes(".."))) {
+    console.error(`openarc: bad-flag\n\n${USAGE}`);
+    return 2;
+  }
+  const has = (f: string) => flags.includes(f);
+  let state: DecompileState;
+  if (has("--report") || has("--todo")) {
+    const text = await ports.fs.read(STATE_FILE);
+    if (text === null) return console.error("openarc: nothing decompiled yet; run `openarc decompile` first"), 1;
+    state = JSON.parse(text) as DecompileState;
+  } else {
+    await ensureIgnored(ports);
+    const testCmd = flags.find((f) => f.startsWith("--run-tests"));
+    state = await decompile({
+      ports, root, request: (p, ids) => request(root, p, ids), log: (l) => !has("--json") && console.log(l),
+      dirs: dirs.length ? dirs : ["src"], out: flags.find((f) => f.startsWith("--out="))?.slice(6) ?? "arc", fresh: has("--fresh"),
+      ...(testCmd ? { testCmd: testCmd.includes("=") ? testCmd.slice(testCmd.indexOf("=") + 1).split(" ") : [process.execPath, "--test"] } : {}),
+    });
+  }
+  if (has("--todo")) {
+    const arcs = new Map<string, ArcModule>();
+    for (const m of Object.values(state.modules)) {
+      const t = await ports.fs.read(m.arc);
+      try { if (t !== null) arcs.set(m.arc, parseArc(t)); } catch { /* reported by the next decompile */ }
+    }
+    const list = todo(state, arcs);
+    console.log(has("--json") ? JSON.stringify(list) : list.join("\n") || "every function has an intent");
+    return 0;
+  }
+  const r = report(state);
+  if (has("--json")) return console.log(JSON.stringify({ totals: r.totals, modules: state.modules })), 0;
+  if (has("--report")) for (const l of r.lines) console.log(l);
+  console.log(`decompiled ${Object.keys(state.modules).length} modules: tested ${r.totals.tested}, failing ${r.totals.failing}, examples ${r.totals.examples}, described ${r.totals.described}, bare ${r.totals.bare}, skipped ${r.totals.skipped}`);
+  return 0;
 }
 
 /** `openarc adopt` and `openarc sync [--watch] [--brief] [--json] [--no-model]` (src/sync.ts). */
@@ -657,6 +700,7 @@ async function main(argv: string[]): Promise<number> {
   if (argv[0] === "deps") return depsCmd(root, ports, argv.slice(1));
   if (argv[0] === "migrate") return migrateCmd(root, ports, argv.slice(1));
   if (argv[0] === "adopt" || argv[0] === "sync") return syncCmd(root, ports, argv);
+  if (argv[0] === "decompile") return decompileCmd(root, ports, argv.slice(1));
   if (argv[0] === "lint") { // spec rules, offline: no model, no sandbox (src/lint.ts)
     const args = argv.slice(1).map((a, i, all) => (/[/\\]|\.tsx?$/.test(a) && all[i - 1] !== "--profile" && all[i - 1] !== "--format" ? relative(root, resolve(process.cwd(), a)).split(sep).join("/") : a));
     return lintCommand(ports, request(root, null, []), args, { out: (l) => console.log(l), err: (l) => console.error(l), message: (c) => MESSAGES[c] ?? "" });

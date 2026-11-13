@@ -2990,6 +2990,27 @@ export async function observe(ports: Ports, req: CompileRequest, p: Project, id:
   }
 }
 
+/** observe() for an exported function that is no region (openarc decompile reads code it does not own): `files` is what
+ *  the sandbox stages. The stage is kept between calls, since staging node_modules costs more than the run; the caller
+ *  ends with closeSandbox. */
+export async function observeExport(ports: Ports, req: CompileRequest, p: Project, target: { file: string; symbol: string }, inputs: Json[][], files: Map<string, string>): Promise<{ args: Json[]; got: Json }[] | { error: string }> {
+  const id = "openarc.observed", module = ".openarc/observe-reference.mjs";
+  p.specs.set(id, { id, kind: "function", file: target.file, symbol: target.symbol, exportName: "", literal: {}, examples: [] } as unknown as SpecInfo);
+  try {
+    const res = await runSandbox(ports, req, p, id, new Map(files).set(module, 'export const reference = () => "__openarc_observe__";\n'), { module, export: "reference", inputs });
+    if (res.error) return { error: res.error };
+    if (!res.complete) return { error: "harness output incomplete" };
+    const failed = new Map(res.failed.map((f) => [f.name, f.actual as { args: Json[]; got: Json }]));
+    return inputs.map((args, i) => { const a = failed.get(`#${i + 1}`); return a ? { args: a.args, got: a.got } : { args, got: "__openarc_observe__" }; });
+  } finally {
+    p.specs.delete(id);
+  }
+}
+export async function closeSandbox(ports: Ports, p: Project): Promise<void> {
+  if (p.sandboxDir) await ports.fs.remove(p.sandboxDir);
+  delete p.sandboxDir;
+}
+
 /** One line per disagreement, values printed faithfully. */
 export const showDisagreement = (d: { name: string; actual?: Json }): string => {
   const a = (d.actual ?? {}) as { args?: Json; got?: Json; oracle?: Json };
