@@ -2741,9 +2741,9 @@ function prng(seed: number): () => number {
   };
 }
 
-/** Only numbers, strings, booleans and arrays/objects of those can be varied (no null, no fakes). */
+/** Numbers, strings, booleans, null and arrays/objects of those (no fakes): null stays as it is, the rest are varied. */
 const variable = (v: Json): boolean =>
-  v !== null && (typeof v !== "object" || (Array.isArray(v) ? v.every(variable) : !("$fake" in v) && Object.values(v).every(variable)));
+  v === null || typeof v !== "object" || (Array.isArray(v) ? v.every(variable) : !("$fake" in v) && Object.values(v).every(variable));
 
 /** The examples' argument lists (those with only supported values), each array or string parameter once empty, then
  *  seeded variations, deduplicated, at most `count`. About a third of the variations also change the length of top-level
@@ -2752,7 +2752,7 @@ const variable = (v: Json): boolean =>
  *  example's string at the same position (enum-like values), otherwise edited.
  *  ponytail: no type-directed generation, so nested arrays and object fields keep their lengths (a matrix stays regular,
  *  points stay points); a union-of-literals string still gets invalid values. */
-export function oracleInputs(examples: Json[], count = 60, seed = 1, tuples: number[] = []): Json[][] {
+export function oracleInputs(examples: Json[], count = 60, seed = 1, tuples: number[] = [], fits?: (args: Json[]) => boolean): Json[][] {
   const rand = prng(seed);
   const pick = <T>(xs: T[]): T => xs[Math.floor(rand() * xs.length)]!;
   const bases = examples.map((e) => (e as { args?: Json[] }).args ?? []).filter((a) => Array.isArray(a) && a.every(variable));
@@ -2792,11 +2792,13 @@ export function oracleInputs(examples: Json[], count = 60, seed = 1, tuples: num
   };
   const seen = new Set<string>();
   const out: Json[][] = [];
-  const add = (a: Json[]) => {
+  const add = (a: Json[], base = false) => {
     const key = canonicalJson(a);
-    if (!seen.has(key) && out.length < count) seen.add(key), out.push(a);
+    if (seen.has(key) || out.length >= count) return;
+    if (!base && (tuples.some((k) => Array.isArray(a[k]) && (a[k] as Json[]).length !== (bases[0]![k] as Json[] | undefined)?.length) || (fits && !fits(a)))) return;
+    seen.add(key), out.push(a);
   };
-  bases.forEach(add);
+  bases.forEach((b) => add(b, true));
   const emptied = new Set<number>(); // not left to the draw: one input per parameter
   for (const base of bases) {
     base.forEach((v, k) => {
@@ -2805,11 +2807,74 @@ export function oracleInputs(examples: Json[], count = 60, seed = 1, tuples: num
       add(base.map((x, j) => (j === k ? (typeof v === "string" ? "" : []) : x)));
     });
   }
+  // Structural edits, one at a time: half of what's left, taken in turn from every example's every parameter, then the
+  // seeded variations, then the rest of the edits. These are what a reviewer tries first: a key deleted or retyped inside a
+  // JSON string, items reordered, dropped or repeated, a number negated, a string swapped for another example's.
+  const singles = structuralEdits(bases, !!fits);
+  const half = out.length + Math.floor((count - out.length) / 2);
+  let next = 0;
+  for (; next < singles.length && out.length < half; next++) add(singles[next]!);
   for (let i = 0; out.length < count && i < count * 20; i++) {
     const base = bases[i % bases.length]!;
     const resize = rand() < 1 / 3;
     add(base.map((v, k) => (rand() >= 0.6 ? v : resize && sizable(v, k) ? resized(v) : mutate(v, strings(k), lengths(k).size > 1))));
   }
+  for (; next < singles.length && out.length < count; next++) add(singles[next]!);
+  return out;
+}
+
+const kindOf = (v: Json) => (v === null ? "null" : Array.isArray(v) ? "array" : typeof v);
+const SWAP_TYPES: Json[] = [null, 1, "", [], {}, true];
+/** Every single edit of one value. `json`: it came out of a JSON string parameter, so the function can't trust its types,
+ *  and a key may also be deleted, retyped or added. Otherwise the declared type holds and only values, order and lengths
+ *  change. `resize`: an array may change length (top level, inside JSON, or when the types will reject a broken shape;
+ *  otherwise a nested [x, y] stays a pair). ponytail: no hostile strings (`__proto__`): they would also become the
+ *  examples check --mutants suggests, and the one gap that needed it takes a fake port, which oracle inputs skip. */
+function edits(v: Json, json: boolean, pool: string[], resize: boolean, typed: boolean): Json[] {
+  const out: Json[] = [];
+  const inner = (x: Json) => edits(x, json, pool, json || typed, typed);
+  if (json) for (const t of SWAP_TYPES) if (kindOf(t) !== kindOf(v)) out.push(t);
+  if (Array.isArray(v)) {
+    if (v.length > 1) out.push([...v].reverse(), [...v.slice(1), v[0]!]);
+    if (resize) v.forEach((_, i) => out.push(v.filter((__, j) => j !== i)));
+    if (resize && v.length) out.push([...v, v[0]!]);
+    v.forEach((x, i) => { for (const w of inner(x)) out.push(v.map((y, j) => (j === i ? w : y))); });
+  } else if (v !== null && typeof v === "object") {
+    if ("$fake" in v) return [];
+    for (const k of Object.keys(v)) {
+      if (json) out.push(Object.fromEntries(Object.entries(v).filter(([x]) => x !== k)));
+      for (const w of inner(v[k]!)) out.push({ ...v, [k]: w });
+    }
+    if (json) out.push({}, { ...v, extra: 1 });
+  } else if (typeof v === "number") out.push(-v, 0, v + 1);
+  else if (typeof v === "string" && !v.startsWith("$")) out.push(...pool.filter((x) => x !== v), "");
+  else if (typeof v === "boolean") out.push(!v);
+  return out;
+}
+const jsonObject = (v: Json): Json | undefined => {
+  if (typeof v !== "string") return undefined;
+  try {
+    const o = JSON.parse(v) as Json;
+    return o !== null && typeof o === "object" ? o : undefined;
+  } catch {
+    return undefined;
+  }
+};
+/** Single edits of every argument of every base, interleaved so a small budget reaches each parameter. */
+function structuralEdits(bases: Json[][], typed: boolean): Json[][] {
+  const collect = (v: Json, acc: Set<string>): Set<string> => {
+    if (typeof v === "string" && jsonObject(v) === undefined && !v.startsWith("$") && v.length <= 12) acc.add(v);
+    else if (v !== null && typeof v === "object") Object.values(v).forEach((x) => collect(x, acc));
+    return acc;
+  };
+  const pool = [...collect(bases, new Set())].slice(0, 16);
+  const groups = bases.flatMap((b) => b.map((a, i) => {
+    const o = jsonObject(a);
+    const ws = o === undefined ? edits(a, false, pool, true, typed) : edits(o, true, pool, true, typed).map((x) => JSON.stringify(x));
+    return ws.map((w) => b.map((x, j) => (j === i ? w : x)));
+  }));
+  const out: Json[][] = [];
+  for (let i = 0; groups.some((g) => i < g.length); i++) for (const g of groups) if (i < g.length) out.push(g[i]!);
   return out;
 }
 
@@ -2821,11 +2886,63 @@ export interface OracleReport {
 }
 
 /** Run region `id` and `<module>#<export>` on the same inputs in the sandbox. `p` must be analyzed (offline is enough). */
+/** The region's parameter types, from its spec type or its code-first declaration; null when the checker can't say. */
+function paramTypes(p: Project, r: RegionInfo): { checker: ts.TypeChecker; types: ts.Type[]; rest: boolean } | null {
+  const checker = p.program?.getTypeChecker();
+  const at = r.spec.codeFirst?.decl ?? r.spec.typeNode;
+  if (!checker || !at) return null;
+  const sig = r.spec.codeFirst ? checker.getSignatureFromDeclaration(r.spec.codeFirst.decl) : checker.getTypeFromTypeNode(r.spec.typeNode!).getCallSignatures()[0];
+  if (!sig || sig.typeParameters?.length) return null;
+  const rest = sig.parameters.some((s) => { const d = s.valueDeclaration; return !!d && ts.isParameter(d) && !!d.dotDotDotToken; });
+  return { checker, types: sig.parameters.map((s) => checker.getTypeOfSymbolAtLocation(s, at)), rest };
+}
 /** Indexes of the region's tuple parameters: oracleInputs keeps their length. */
 function tupleParams(p: Project, r: RegionInfo): number[] {
-  const checker = p.program?.getTypeChecker();
-  const params = r.spec.typeNode && checker?.getTypeFromTypeNode(r.spec.typeNode).getCallSignatures()[0]?.parameters;
-  return (params ?? []).flatMap((s, i) => (checker!.isTupleType(checker!.getTypeOfSymbolAtLocation(s, r.spec.typeNode!)) ? [i] : []));
+  const t = paramTypes(p, r);
+  return t ? t.types.flatMap((x, i) => (t.checker.isTupleType(x) ? [i] : [])) : [];
+}
+/** Inputs that a caller could pass, as far as JSON can tell: a literal union keeps its literals, an object its required
+ *  keys. A string parameter takes any string, so edits inside a JSON string are kept: that is untrusted input. */
+function argsFit(p: Project, r: RegionInfo): ((args: Json[]) => boolean) | undefined {
+  const t = paramTypes(p, r);
+  if (!t || t.rest) return undefined;
+  return (args) => args.length <= t.types.length && t.types.every((x, i) => (i < args.length ? fitsType(t.checker, x, args[i]!) : !!(x.flags & ts.TypeFlags.Undefined) || isOptional(x)));
+}
+const isOptional = (t: ts.Type) => t.isUnion() && t.types.some((x) => !!(x.flags & ts.TypeFlags.Undefined));
+/** Does a JSON value fit a type? Anything JSON can't show (a function, a class instance, a fake, a value token) fits. */
+export function fitsType(checker: ts.TypeChecker, t: ts.Type, v: Json, depth = 0): boolean {
+  const f = t.flags;
+  if (depth > 8 || f & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) return true;
+  if (typeof v === "string" && v.startsWith("$")) return true;
+  if (v !== null && typeof v === "object" && !Array.isArray(v) && "$fake" in v) return true;
+  if (t.isUnion()) return t.types.some((x) => fitsType(checker, x, v, depth));
+  if (t.isIntersection()) return t.types.every((x) => fitsType(checker, x, v, depth));
+  if (t.isStringLiteral() || t.isNumberLiteral()) return v === t.value;
+  if (f & ts.TypeFlags.BooleanLiteral) return v === (checker.typeToString(t) === "true");
+  if (f & ts.TypeFlags.StringLike) return typeof v === "string";
+  if (f & ts.TypeFlags.NumberLike) return typeof v === "number";
+  if (f & ts.TypeFlags.BooleanLike) return typeof v === "boolean";
+  if (f & ts.TypeFlags.Null) return v === null;
+  if (f & (ts.TypeFlags.Undefined | ts.TypeFlags.Void | ts.TypeFlags.Never)) return false;
+  if (checker.isTupleType(t)) {
+    const items = checker.getTypeArguments(t as ts.TypeReference);
+    const min = (t as ts.TupleTypeReference).target.minLength;
+    return Array.isArray(v) && v.length >= min && v.length <= items.length && v.every((x, i) => fitsType(checker, items[i]!, x, depth + 1));
+  }
+  if (checker.isArrayType(t)) return Array.isArray(v) && v.every((x) => fitsType(checker, checker.getTypeArguments(t as ts.TypeReference)[0]!, x, depth + 1));
+  if (!(f & ts.TypeFlags.Object) || t.getCallSignatures().length || t.symbol?.flags & ts.SymbolFlags.Class) return true;
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+  for (const s of t.getProperties()) {
+    const decl = s.valueDeclaration ?? s.declarations?.[0];
+    if (!decl) continue;
+    if (!(s.name in v)) {
+      if (!(s.flags & ts.SymbolFlags.Optional)) return false;
+      continue;
+    }
+    if (!fitsType(checker, checker.getTypeOfSymbolAtLocation(s, decl), v[s.name]!, depth + 1)) return false;
+  }
+  const index = checker.getIndexInfosOfType(t).find((x) => x.keyType.flags & ts.TypeFlags.String)?.type;
+  return !index || Object.values(v).every((x) => fitsType(checker, index, x, depth + 1));
 }
 
 export async function oracleCheck(ports: Ports, req: CompileRequest, p: Project, id: string, oracle: string, opts: { count?: number; seed?: number } = {}): Promise<OracleReport> {
@@ -2839,7 +2956,9 @@ export async function oracleCheck(ports: Ports, req: CompileRequest, p: Project,
   if (module.startsWith("/") || module.startsWith("..")) return fail(`the oracle module must be inside the project (the sandbox only sees the project): ${m[1]}`);
   const text = await ports.fs.read(module);
   if (text === null) return fail(`cannot read ${module}`);
-  const inputs = oracleInputs(r.spec.examples, opts.count ?? 60, opts.seed ?? 1, tupleParams(p, r));
+  // 200 by default: structural edits and seeded variations together need about that many to reach a JSON parameter's
+  // keys (bench/results/2026-11-10-structural-inputs). check --mutants keeps 60, since it runs them once per mutant.
+  const inputs = oracleInputs(r.spec.examples, opts.count ?? 200, opts.seed ?? 1, tupleParams(p, r), argsFit(p, r));
   if (!inputs.length) return fail("no example has only number/string/boolean/array/object arguments to vary");
   const overlay = new Map(p.files).set(module, text);
   try {
@@ -2982,7 +3101,7 @@ export async function mutantCheck(ports: Ports, req: CompileRequest, p: Project,
   const base = p.files.get(r.file)!;
   // the original runs from a twin next to the file, so its imports resolve. Not for a UI region (the harness ignores the
   // oracle) or a spec in another file (the twin would not hold the symbol).
-  const inputs = r.spec.ui || r.spec.file !== r.file ? [] : oracleInputs(r.spec.examples, 60, 1, tupleParams(p, r));
+  const inputs = r.spec.ui || r.spec.file !== r.file ? [] : oracleInputs(r.spec.examples, 60, 1, tupleParams(p, r), argsFit(p, r));
   const twin = posix.join(posix.dirname(r.file), `__openarc_original_${posix.basename(r.file)}`);
   const run = async (text: string): Promise<string> => {
     const overlay = new Map(p.files).set(r.file, text);

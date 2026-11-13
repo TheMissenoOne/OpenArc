@@ -7,6 +7,7 @@
 // 3. A compiler-owned region whose recompile failed: OARC-W043, displayed as stale.
 // 4. Thin examples (OARC-W044) and `openarc check --oracle` (inputs, plan, report).
 // 5. Date.parse without 'clock'; scaffold without a clean tsc; COMPILER_VERSION from core/package.json.
+import ts from "typescript";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -187,6 +188,27 @@ const chats = (s: Snap) => s.requests.filter((q) => q.url.endsWith("/api/chat"))
   assert.ok(same.filter((args) => (args[0] as Json[]).length === 3).length > same.length / 2, "most inputs keep the examples' shape");
   assert.ok(engine.oracleInputs([{ args: [[1, 2], "abc"] }], 60, 1, [0]).every((args) => (args[0] as Json[]).length === 2), "a tuple parameter stays a tuple");
   assert.deepStrictEqual(engine.oracleInputs([{ args: ["$NaN"] }]), [["$NaN"]], "a value token is not a string to resize");
+  // structural edits: keys deleted and retyped inside a JSON string, null kept as an argument, numbers negated
+  const js = engine.oracleInputs([{ args: ['{"body":"x","imports":[]}'] }], 80).map((args) => args[0]);
+  assert.ok(js.includes('{"imports":[]}') && js.includes('{"body":null,"imports":[]}') && js.includes('{"body":"x","imports":[],"extra":1}'), JSON.stringify(js));
+  const withNull = engine.oracleInputs([{ args: [null, 2] }], 20);
+  assert.ok(withNull.length > 1 && withNull.some((args) => args[0] === null && args[1] === -2), "an example with null is varied, null kept");
+  assert.ok(engine.oracleInputs([{ args: ["a", 1] }, { args: ["b", 2] }], 30, 1, [], (args) => args[0] === "a" || args[0] === "b").every((args) => args[0] === "a" || args[0] === "b"), "inputs that don't fit are left out");
+  {
+    const src = 'type Phase = "idle" | "ready"; export type F = (s: { phase: Phase; peers: string[]; note?: string }, n: number | null, t: [number, number]) => void;';
+    const host = ts.createCompilerHost({});
+    const get = host.getSourceFile;
+    host.getSourceFile = (f, v) => (f === "/fits.ts" ? ts.createSourceFile(f, src, v) : get(f, v));
+    const program = ts.createProgram(["/fits.ts"], { strict: true }, host);
+    const checker = program.getTypeChecker();
+    const alias = program.getSourceFile("/fits.ts")!.statements[1] as ts.TypeAliasDeclaration;
+    const [s, n, t] = checker.getTypeFromTypeNode(alias.type).getCallSignatures()[0]!.parameters.map((x) => checker.getTypeOfSymbolAtLocation(x, alias));
+    assert.ok(engine.fitsType(checker, s!, { phase: "idle", peers: ["a"] }) && engine.fitsType(checker, s!, { phase: "ready", peers: [], note: "x" }));
+    assert.ok(!engine.fitsType(checker, s!, { phase: "bogus", peers: [] }), "a literal union keeps its literals");
+    assert.ok(!engine.fitsType(checker, s!, { phase: "idle" }), "a required key stays");
+    assert.ok(engine.fitsType(checker, n!, null) && engine.fitsType(checker, n!, -1) && !engine.fitsType(checker, n!, "1"));
+    assert.ok(engine.fitsType(checker, t!, [1, 2]) && !engine.fitsType(checker, t!, [1]), "a tuple keeps its length");
+  }
 
   // the harness side: agree on equal values (with tolerance) and on both throwing
   const sq = (n: number) => { if (n < 0) throw new Error("neg"); return Math.sqrt(n) * Math.sqrt(n); };

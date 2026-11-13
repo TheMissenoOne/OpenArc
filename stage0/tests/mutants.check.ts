@@ -213,8 +213,8 @@ try {
     "mutants m.max: killed 3/3 (100%), survived 0, equivalent 1, invalid 0, timeout 0",
     `equivalent m.max line ${listed("m.max", ["swap"])[0]!.line}: Math.max(a, b) -> Math.max(b, a)`,
   ]);
-  // ── 6. no input to vary (a null argument): W044's edge values. Nothing beyond the example: not equivalent, the line to reach
-  assert.deepEqual((await reportOf("m.nul", ["boundary"]))[1]!.split("; "), [`survived m.nul line ${listed("m.nul", ["boundary"])[0]!.line}: n >= 0 -> n > 0`, "try: 0, a negative number"]);
+  // ── 6. an example with a null argument is varied too (null kept): the input that tells the mutant apart is found
+  assert.deepEqual((await reportOf("m.nul", ["boundary"]))[1]!.split("; "), [`survived m.nul line ${listed("m.nul", ["boundary"])[0]!.line}: n >= 0 -> n > 0`, "try: args [null,0] (original true, mutant false)"]);
   const line = listed("m.noarg", ["boundary"])[0]!.line;
   assert.deepEqual(await reportOf("m.noarg", ["boundary"]), [
     "mutants m.noarg: killed 0/1 (0%), survived 1, equivalent 0, invalid 0, timeout 0",
