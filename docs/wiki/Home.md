@@ -15,6 +15,7 @@ The hypothesis behind it:
 
 ## Start here
 
+- [[Install]]: npm, or the standalone download for machines without Node
 - [[Getting Started]]: install, init, compile your first region
 - [[Code First]]: the main way since 0.9.0: pending bodies in functions and classes, JSDoc intent, `arc.test`, hidden tests, laws
 - [[Writing Specs]]: code first in brief, then `defineRegion`, examples, blocks, sketches, concepts, TSX UI specs
