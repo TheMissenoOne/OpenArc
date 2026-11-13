@@ -1,8 +1,8 @@
 // The levels above the module specs: the concept (what the project is for), the architecture (its parts, which part uses
 // which, the packages it depends on), then the `.arc` modules, then the code. Each level is checked against the one below.
 // Line-oriented like arc.ts: a heading at column 0, two-space indented children, JSON-quoted intent strings, and
-// print(parse(x)) === x for any text the printer produced. Language-neutral except importsOf, the one place that reads
-// code: another language supplies its own and the rest stays.
+// print(parse(x)) === x for any text the printer produced. Language-neutral: the imports come from each file's language
+// (lang/lang.ts imports).
 //
 //   architecture game                    concept game
 //     "intent"                             "What the project is."
@@ -13,10 +13,10 @@
 //     module src/survival.js                 "Multiplayer."
 //     module src/worldos/**                term Daemon
 //     uses three                             "The AI companion."
-import ts from "typescript";
-import { builtinModules } from "node:module";
 import type { Ports } from "./types.ts";
 import { CODE, STATE_FILE, isTest, walk, type DecompileState } from "./decompile.ts";
+import { LANGS } from "./lang/lang.ts";
+export { importsOf } from "./lang/ts.ts";
 
 export const ARCH_FILE = "arc/architecture.arc";
 export const CONCEPT_FILE = "arc/concept.arc";
@@ -118,38 +118,14 @@ export async function sources(ports: Ports, dirs: string[]): Promise<Map<string,
   return new Map(await Promise.all(files.map(async (f) => [f, (await ports.fs.read(f)) ?? ""] as const)));
 }
 
-const EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
-
-function packageOf(spec: string): string {
-  const [a, b] = spec.split("/") as [string, string?];
-  if (spec.startsWith("node:")) return a;
-  if (builtinModules.includes(a)) return `node:${a}`;
-  return a.startsWith("@") && b ? `${a}/${b}` : a;
-}
-
-/** Every import between the given files (relative specifiers resolved to a file in the set) and to packages, deduplicated.
- *  A relative import that resolves to no file in the set (JSON, a test, a missing file) is left out.
- *  ponytail: tsconfig `paths` aliases read as packages; resolve them when a project uses them. */
-export function importsOf(files: Map<string, string>): Edge[] {
-  const seen = new Map<string, Edge>();
-  for (const [from, text] of files) {
-    for (const { fileName: spec } of ts.preProcessFile(text, true, true).importedFiles) {
-      let e: Edge | undefined;
-      if (spec.startsWith("/")) continue; // an absolute path is no part of the project
-      if (spec.startsWith(".")) {
-        const parts: string[] = [];
-        for (const s of `${dirOf(from)}/${spec}`.split("/")) {
-          if (s === "..") parts.pop();
-          else if (s && s !== ".") parts.push(s);
-        }
-        const base = parts.join("/"), bare = base.replace(/\.[cm]?jsx?$/, "");
-        const to = [base, ...EXTS.map((x) => base + x), ...EXTS.map((x) => bare + x), ...EXTS.map((x) => `${base}/index${x}`)].find((c) => files.has(c));
-        if (to && to !== from) e = { from, to, external: false };
-      } else e = { from, to: packageOf(spec), external: true };
-      if (e) seen.set(`${e.from}\0${e.to}`, e);
-    }
+/** Every import of the given files, each file read by its language (lang/lang.ts). */
+export async function projectImports(ports: Ports, files: Map<string, string>): Promise<Edge[]> {
+  const out: Edge[] = [];
+  for (const lang of LANGS) {
+    const mine = new Map([...files].filter(([f]) => lang.code.test(f)));
+    if (mine.size) out.push(...(await lang.imports(ports, mine)));
   }
-  return [...seen.values()];
+  return out;
 }
 
 // ── architecture from the code ──

@@ -8,15 +8,14 @@
 // Resumable: a module whose source is unchanged since the last run is not run again.
 // With `--run-tests`, the arguments the exported functions receive while the mapped tests run are recorded too
 // (core/record.mjs) and become inputs: inputs only, results still come from the sandbox.
-import ts from "typescript";
 import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import type { CompileRequest, Ports } from "./types.ts";
 import * as engine from "./engine.ts";
-import { parseArc, printArc, printExample, printOutcome, printValue, type ArcExample, type ArcFn, type ArcModule, type ArcType } from "./arc.ts";
-import { inputsFor, valuesOf } from "./sync.ts";
+import { parseArc, printArc, printExample, printOutcome, printValue, type ArcExample, type ArcFn, type ArcModule } from "./arc.ts";
 import { argsFit, checkRules } from "./rules.ts";
+import { LANGS, langOf, type FoundFn, type Lang, type ReadModule, type Runner } from "./lang/lang.ts";
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
@@ -51,8 +50,9 @@ export interface ModuleState { hash: string; arc: string; fns: Record<string, Fn
 export interface DecompileState { version: 1; modules: Record<string, ModuleState> }
 export const STATE_FILE = ".openarc/decompile.json";
 
-export const CODE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
-export const isTest = (rel: string) => /(^|\/)(tests?|__tests__)\//.test(rel) || /\.(test|spec)\.[^/]+$/.test(rel);
+/** The files some language reads (lang/lang.ts LANGS), and whether one is a test, by its language. */
+export const CODE = new RegExp(LANGS.map((l) => l.code.source).join("|"));
+export const isTest = (rel: string) => !!langOf(rel)?.isTest(rel);
 const sha = (t: string) => createHash("sha256").update(t).digest("hex").slice(0, 16);
 
 const codeOrJson = (name: string) => CODE.test(name) || name.endsWith(".json");
@@ -66,269 +66,8 @@ export async function walk(ports: Ports, dir: string, out: string[] = [], keep =
   return out;
 }
 
-export function makeProgram(root: string, files: string[]): ts.Program {
-  const cfg = ts.readConfigFile(`${root}/tsconfig.json`, ts.sys.readFile);
-  const parsed = cfg.config ? ts.parseJsonConfigFileContent(cfg.config, ts.sys, root).options : {};
-  // a project with no tsconfig (plain JavaScript) gets modern defaults; JavaScript is read, never reported on
-  // moduleDetection Force: a CommonJS `.js` file (only `module.exports`/`exports.x`, no import or export) is otherwise not
-  // a module to the checker unless the package says `"type"` or the extension is `.cjs`, so it has no module symbol and
-  // its exports are not found
-  const options: ts.CompilerOptions = { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, ...parsed, allowJs: true, checkJs: false, noEmit: true, skipLibCheck: true, moduleDetection: ts.ModuleDetectionKind.Force };
-  return ts.createProgram(files.map((f) => `${root}/${f}`), options);
-}
-
-// ── types, as `.arc` text ──
-const opaque = (text: string) => (text.length > 100 ? "Any" : `\`${text.replaceAll("`", "'")}\``);
-
-export function arcType(checker: ts.TypeChecker, t: ts.Type, inProject: (s: ts.Symbol) => boolean, depth = 0, top = false): string {
-  const f = t.flags;
-  if (f & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) return "Any"; // a generic's type parameters are erased
-  if (f & ts.TypeFlags.BooleanLiteral) return checker.typeToString(t);
-  if (f & ts.TypeFlags.Boolean) return "Bool";
-  if (t.isStringLiteral()) return JSON.stringify(t.value);
-  if (t.isNumberLiteral()) return String(t.value);
-  if (f & ts.TypeFlags.String) return "Str";
-  if (f & ts.TypeFlags.Number) return "Num";
-  if (f & (ts.TypeFlags.Void | ts.TypeFlags.Undefined)) return "Void";
-  if (f & ts.TypeFlags.Null) return "Null";
-  const named = t.aliasSymbol ?? (t.symbol && !(t.symbol.flags & (ts.SymbolFlags.TypeLiteral | ts.SymbolFlags.ObjectLiteral)) ? t.symbol : undefined);
-  if (!top && named && inProject(named) && /^[A-Za-z_$][\w$]*$/.test(named.name) && !(t as ts.TypeReference).typeArguments?.length && !t.aliasTypeArguments?.length) return named.name;
-  if (t.isUnion()) {
-    const parts = t.types.filter((x) => !(x.flags & ts.TypeFlags.Undefined));
-    // boolean is the union true | false: print it as one type
-    const names = [...new Set(parts.map((x) => arcType(checker, x, inProject, depth)))];
-    const bools = names.includes("true") && names.includes("false") ? ["Bool", ...names.filter((n) => n !== "true" && n !== "false")] : names;
-    const text = bools.join(" | ");
-    return parts.length < t.types.length ? (bools.length === 1 ? `${text}?` : `(${text})?`) : text;
-  }
-  if (checker.isArrayType(t)) return `[${arcType(checker, checker.getTypeArguments(t as ts.TypeReference)[0]!, inProject, depth + 1)}]`;
-  const props = t.getProperties();
-  if (f & ts.TypeFlags.Object && !t.getCallSignatures().length && !t.getConstructSignatures().length && !(t.symbol?.flags & ts.SymbolFlags.Class) && (top || !named) && depth < 3 && props.length && props.length <= 12) {
-    const fields = props.map((s) => {
-      const decl = s.valueDeclaration ?? s.declarations?.[0];
-      const type = decl ? arcType(checker, checker.getTypeOfSymbolAtLocation(s, decl), inProject, depth + 1) : "Any";
-      const optional = !!(s.flags & ts.SymbolFlags.Optional);
-      return `${/^[A-Za-z_$][\w$]*$/.test(s.name) ? s.name : JSON.stringify(s.name)}${optional ? "?" : ""}: ${optional ? type.replace(/\?$/, "") : type}`;
-    });
-    return `{ ${fields.join(", ")} }`;
-  }
-  return opaque(checker.typeToString(t));
-}
-
-// ── intent from the code's own comments ──
-function statementOf(n: ts.Node): ts.Node {
-  let s = n;
-  while (s.parent && !ts.isSourceFile(s.parent) && !ts.isClassElement(s)) s = s.parent; // a method's comment is its own
-  return s;
-}
-
-/** The declaration's JSDoc, else the `//` lines directly above it. At most 6 lines. */
-export function commentOf(decl: ts.Node, sf: ts.SourceFile): string[] {
-  const st = statementOf(decl);
-  const doc = ts.getJSDocCommentsAndTags(st).find(ts.isJSDoc) ?? ts.getJSDocCommentsAndTags(decl).find(ts.isJSDoc);
-  const text = doc ? ts.getTextOfJSDocComment(doc.comment) ?? "" : (ts.getLeadingCommentRanges(sf.text, st.getFullStart()) ?? [])
-    .filter((r) => r.kind === ts.SyntaxKind.SingleLineCommentTrivia && !/\S/.test(sf.text.slice(r.end, st.getStart(sf)).replace(/\/\/.*$/gm, "")))
-    .map((r) => sf.text.slice(r.pos + 2, r.end).trim()).join("\n");
-  return text.split("\n").map((l) => l.trim()).filter((l) => l && !/^(eslint|@ts-|prettier|ponytail:)/.test(l)).slice(0, 6);
-}
-
-// ── inputs from literal calls in the project ──
-function staticValue(checker: ts.TypeChecker, n: ts.Expression, depth = 0): Json | undefined {
-  if (ts.isParenthesizedExpression(n) || ts.isAsExpression(n) || ts.isSatisfiesExpression(n)) return staticValue(checker, n.expression, depth);
-  if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) return n.text;
-  if (ts.isNumericLiteral(n)) return Number(n.text);
-  if (ts.isPrefixUnaryExpression(n) && n.operator === ts.SyntaxKind.MinusToken && ts.isNumericLiteral(n.operand)) return -Number(n.operand.text);
-  if (n.kind === ts.SyntaxKind.TrueKeyword) return true;
-  if (n.kind === ts.SyntaxKind.FalseKeyword) return false;
-  if (n.kind === ts.SyntaxKind.NullKeyword) return null;
-  if (ts.isArrayLiteralExpression(n)) {
-    const out: Json[] = [];
-    for (const e of n.elements) {
-      const v = ts.isSpreadElement(e) ? undefined : staticValue(checker, e, depth);
-      if (v === undefined) return undefined;
-      out.push(v);
-    }
-    return out;
-  }
-  if (ts.isObjectLiteralExpression(n)) {
-    const out: Record<string, Json> = {};
-    for (const p of n.properties) {
-      const key = p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name) || ts.isNumericLiteral(p.name)) ? p.name.text : undefined;
-      const v = key === undefined ? undefined : ts.isPropertyAssignment(p) ? staticValue(checker, p.initializer, depth) : ts.isShorthandPropertyAssignment(p) ? staticValue(checker, p.name, depth) : undefined;
-      if (key === undefined || key === "__proto__" || v === undefined) return undefined;
-      out[key] = v;
-    }
-    return out;
-  }
-  // a name bound once to a literal (`const stats = { water: 50 }`): its value at the declaration
-  if (ts.isIdentifier(n) && depth < 3) {
-    const d = (ts.isShorthandPropertyAssignment(n.parent) ? checker.getShorthandAssignmentValueSymbol(n.parent) : checker.getSymbolAtLocation(n))?.valueDeclaration;
-    if (d && ts.isVariableDeclaration(d) && d.initializer && ts.getCombinedNodeFlags(d) & ts.NodeFlags.Const) return staticValue(checker, d.initializer, depth + 1);
-  }
-  return undefined;
-}
-
-const resolved = (checker: ts.TypeChecker, s: ts.Symbol | undefined) => (s && s.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(s) : s);
-
-// ── one module ──
-/** node: the function itself (its body is where the recorder call goes), when it is one. cls: an instance method's class:
- *  its symbol (its `new` calls are receivers), whether it can be built with no arguments, and its constructor. */
-interface Found { fn: ArcFn; symbol: ts.Symbol; inputs: Json[][] | null; pos: number; node?: ts.FunctionLikeDeclaration; cls?: Cls }
-interface Cls { symbol: ts.Symbol; name: string; bare: boolean; ctor?: ts.ConstructorDeclaration }
-
-/** The function a declaration binds: `function f`, `const f = <fn>`, `export default <fn>`, `exports.f = <fn>`. */
-export function fnOf(d: ts.Node): ts.FunctionLikeDeclaration | undefined {
-  let n: ts.Node | undefined = ts.isVariableDeclaration(d) || ts.isPropertyAssignment(d) ? d.initializer : ts.isExportAssignment(d) ? d.expression
-    : ts.isBinaryExpression(d) ? d.right : ts.isBinaryExpression(d.parent) && d.parent.left === d ? d.parent.right : d;
-  while (n && ts.isParenthesizedExpression(n)) n = n.expression;
-  return n && (ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n) || ts.isMethodDeclaration(n)) && n.body ? n : undefined;
-}
-
-/** The module's text with one recorder call at the start of each target function's body, on the line of its opening
- *  brace, so every line number stays the same. Function declarations and expressions hand over `arguments`; an arrow its
- *  parameter names (an expression body `(a) => e` becomes `(a) => (<call>, e)`). `?.`: without a recorder installed the
- *  code behaves as before. A generator's call runs at its first `next()`. */
-export function instrument(sf: ts.SourceFile, file: string, targets: { name: string; node: ts.FunctionLikeDeclaration }[]): string {
-  const at: [number, string][] = [];
-  for (const { name, node } of targets) {
-    const body = node.body!;
-    const call = (args: string) => `globalThis.__openarcRecord?.(${JSON.stringify(file)}, ${JSON.stringify(name)}, ${args})`;
-    let args = "arguments";
-    if (ts.isArrowFunction(node)) {
-      // ponytail: an arrow with a destructured or rest parameter is not recorded; its arguments have no names to hand over
-      if (!node.parameters.every((p) => ts.isIdentifier(p.name) && !p.dotDotDotToken)) continue;
-      args = `[${node.parameters.map((p) => p.name.getText(sf)).join(", ")}]`;
-    }
-    if (ts.isBlock(body)) {
-      let n = 0; // after a "use strict" prologue: it stays a directive
-      while (n < body.statements.length && ts.isExpressionStatement(body.statements[n]!) && ts.isStringLiteral((body.statements[n] as ts.ExpressionStatement).expression)) n++;
-      at.push([n ? body.statements[n - 1]!.getEnd() : body.getStart(sf) + 1, ` ${call(args)};`]);
-    } else at.push([body.getStart(sf), `(${call(args)}, `], [body.getEnd(), ")"]);
-  }
-  let text = sf.text;
-  for (const [pos, ins] of at.sort((a, b) => b[0] - a[0])) text = text.slice(0, pos) + ins + text.slice(pos);
-  return text;
-}
-
-/** A function's `.arc` entry from its call signature, and the inputs its required parameter types allow. */
-function fromSignature(checker: ts.TypeChecker, inProject: (s: ts.Symbol) => boolean, sig: ts.Signature, name: string, decl: ts.Node, sf: ts.SourceFile): { fn: ArcFn; inputs: Json[][] | null } {
-  const paramTypes = sig.parameters.map((p) => checker.getTypeOfSymbolAtLocation(p, p.valueDeclaration ?? decl));
-  const decls = sig.parameters.map((p) => p.valueDeclaration as ts.ParameterDeclaration | undefined);
-  let ret = sig.getReturnType(), isAsync = false;
-  if (ret.symbol?.name === "Promise" && !inProject(ret.symbol)) { isAsync = true; ret = checker.getTypeArguments(ret as ts.TypeReference)[0] ?? ret; }
-  const fn: ArcFn = {
-    name,
-    params: sig.parameters.map((p, i) => {
-      const d = decls[i];
-      const optional = !!d && checker.isOptionalParameter(d);
-      const type = arcType(checker, paramTypes[i]!, inProject);
-      return { name: d && ts.isIdentifier(d.name) ? p.name : `arg${i + 1}`, type: optional ? type.replace(/\?$/, "") : type, ...(optional && !d.dotDotDotToken ? { optional: true } : {}), ...(d?.dotDotDotToken ? { rest: true } : {}) };
-    }),
-    returns: arcType(checker, ret, inProject),
-    ...(isAsync ? { async: true } : {}),
-    intent: commentOf(decl, sf), examples: [], rules: [],
-  };
-  // inputs the types allow: the required parameters only, so an optional one keeps its default
-  const required = decls.findIndex((d) => !d || checker.isOptionalParameter(d) || !!d.dotDotDotToken);
-  return { fn, inputs: inputsFor(paramTypes.slice(0, required < 0 ? paramTypes.length : required).map((t) => valuesOf(checker, t)), 8) };
-}
-
-/** Not part of a class's public face: `#x`, TypeScript `private`/`protected`, and a name starting with `_`. */
-const hidden = (name: string, d: ts.Node | undefined) => /^(_|#)/.test(name) || (!!d && !!(ts.getCombinedModifierFlags(d as ts.Declaration) & (ts.ModifierFlags.Private | ts.ModifierFlags.Protected)));
-
-/** An exported class: a `type` line of its public data fields (when the checker knows any) and its public methods, each
- *  named `<Class>.<method>`. Inherited methods belong to the class that declares them. */
-function readClass(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: ts.Symbol) => boolean, name: string, sym: ts.Symbol, decl: ts.Node, out: { types: ArcType[]; found: Found[]; skipped: Record<string, string> }): void {
-  const cd = (sym.declarations ?? []).find((d): d is ts.ClassLikeDeclaration => ts.isClassLike(d));
-  if (!cd) return;
-  const fields = checker.getDeclaredTypeOfSymbol(sym).getProperties().flatMap((p) => {
-    const d = p.valueDeclaration;
-    if (!d || p.flags & (ts.SymbolFlags.Method | ts.SymbolFlags.Accessor) || hidden(p.name, d)) return []; // a `#x` field's symbol is named `__#...`
-    const t = checker.getTypeOfSymbolAtLocation(p, d);
-    if (t.getCallSignatures().length) return []; // a function-valued field is behaviour, not data
-    const optional = !!(p.flags & ts.SymbolFlags.Optional), type = arcType(checker, t, inProject);
-    return [`${/^[A-Za-z_$][\w$]*$/.test(p.name) ? p.name : JSON.stringify(p.name)}${optional ? "?" : ""}: ${optional ? type.replace(/\?$/, "") : type}`];
-  });
-  if (fields.length) out.types.push({ name, type: `{ ${fields.join(", ")} }` });
-  const ctorSig = checker.getTypeOfSymbolAtLocation(sym, decl).getConstructSignatures().at(-1);
-  const bare = !ctorSig || ctorSig.parameters.every((p) => { const d = p.valueDeclaration as ts.ParameterDeclaration | undefined; return !d || checker.isOptionalParameter(d) || !!d.dotDotDotToken; });
-  const ctor = cd.members.find((m): m is ts.ConstructorDeclaration => ts.isConstructorDeclaration(m) && !!m.body);
-  const cls: Cls = { symbol: sym, name, bare, ...(ctor ? { ctor } : {}) };
-  for (const m of cd.members) {
-    if (!m.name || ts.isConstructorDeclaration(m)) continue;
-    const mname = ts.isPrivateIdentifier(m.name) ? m.name.text : m.name.getText(sf);
-    if (hidden(mname, m)) continue;
-    const full = `${name}.${mname}`;
-    if (ts.isGetAccessor(m) || ts.isSetAccessor(m)) { out.skipped[full] = "a getter or setter (not read yet)"; continue; }
-    if (!ts.isMethodDeclaration(m) || !m.body) continue; // a data field (the type line has it), an overload or an abstract method
-    if (!/^[A-Za-z_$][\w$]*$/.test(mname)) { out.skipped[full] = "not a plain name"; continue; }
-    const msym = checker.getSymbolAtLocation(m.name);
-    const sig = msym && checker.getTypeOfSymbolAtLocation(msym, m).getCallSignatures().at(-1);
-    if (!msym || !sig) continue;
-    const isStatic = !!(ts.getCombinedModifierFlags(m) & ts.ModifierFlags.Static);
-    const { fn, inputs } = fromSignature(checker, inProject, sig, full, m, sf);
-    out.found.push({ fn: isStatic ? { ...fn, static: true } : fn, symbol: msym, inputs, pos: m.getStart(sf), node: m, ...(isStatic ? {} : { cls }) });
-  }
-}
-
-function readModule(checker: ts.TypeChecker, sf: ts.SourceFile, inProject: (s: ts.Symbol) => boolean): { types: ArcType[]; found: Found[]; skipped: Record<string, string> } {
-  const out = { types: [] as ArcType[], found: [] as Found[], skipped: {} as Record<string, string> };
-  const { types, found, skipped } = out;
-  const mod = checker.getSymbolAtLocation(sf);
-  // with `module.exports = { a() {} }` the exports are the object's properties; `module.exports = <function or class>`
-  // is what Node's `import` calls `default`
-  const exports = new Map<string, ts.Symbol>(mod ? checker.getExportsOfModule(mod).map((e) => [e.name, e]) : []);
-  const eq = resolved(checker, mod?.exports?.get(ts.InternalSymbolName.ExportEquals));
-  const eqDecl = eq?.valueDeclaration ?? eq?.declarations?.[0];
-  const eqType = eq && eqDecl && checker.getTypeOfSymbolAtLocation(eq, eqDecl);
-  if (eqType && eqType.getConstructSignatures().length && eqType.symbol?.flags & ts.SymbolFlags.Class) exports.set("default", eqType.symbol);
-  else if (eqType?.getCallSignatures().length) exports.set("default", eq!);
-  else if (eqType) for (const p of eqType.getProperties()) if (!exports.has(p.name)) exports.set(p.name, p);
-  for (const [expName, exp] of exports) {
-    const sym = resolved(checker, exp)!;
-    const decl = sym.valueDeclaration ?? sym.declarations?.[0];
-    if (!decl || decl.getSourceFile() !== sf) continue; // a re-export belongs to the module that declares it
-    if (sym.flags & (ts.SymbolFlags.Interface | ts.SymbolFlags.TypeAlias) && !(sym.flags & ts.SymbolFlags.Value)) {
-      types.push({ name: expName, type: arcType(checker, checker.getDeclaredTypeOfSymbol(sym), inProject, 0, true) });
-      continue;
-    }
-    if (sym.flags & ts.SymbolFlags.Class) { readClass(checker, sf, inProject, expName, sym, decl, out); continue; }
-    const sigs = checker.getTypeOfSymbolAtLocation(sym, decl).getCallSignatures();
-    if (!sigs.length) continue; // a constant
-    if (!/^[A-Za-z_$][\w$]*$/.test(expName)) { skipped[expName] = "not a plain name"; continue; }
-    const { fn, inputs } = fromSignature(checker, inProject, sigs.at(-1)!, expName, decl, sf);
-    const node = (sym.declarations ?? [decl]).filter((d) => d.getSourceFile() === sf).map(fnOf).find(Boolean); // an overloaded function: the one with a body
-    found.push({ fn, symbol: sym, inputs, pos: decl.getStart(sf), ...(node ? { node } : {}) });
-  }
-  return { types, found: found.sort((a, b) => a.pos - b.pos), skipped }; // source order: the file reads like the code
-}
-
-/** Every use of the given functions across the project: which test files name them, and their literal argument lists with
- *  where they are (`<file>:<1-based line>`). For a class, its `new X(...)` expressions. */
-function usesOf(checker: ts.TypeChecker, files: readonly ts.SourceFile[], rel: (sf: ts.SourceFile) => string, wanted: Set<ts.Symbol>): { tests: Map<ts.Symbol, Set<string>>; calls: Map<ts.Symbol, { args: Json[]; at: string }[]> } {
-  const tests = new Map<ts.Symbol, Set<string>>(), calls = new Map<ts.Symbol, { args: Json[]; at: string }[]>();
-  for (const sf of files) {
-    const name = rel(sf), inTest = isTest(name);
-    const visit = (n: ts.Node): void => {
-      if (ts.isIdentifier(n) && !ts.isImportSpecifier(n.parent) && !ts.isImportClause(n.parent)) {
-        // a method through an instance (`inv.add`) is a symbol of the instantiated class type: its root is the declared one
-        const r = resolved(checker, checker.getSymbolAtLocation(n)), s = r && [r, ...checker.getRootSymbols(r)].find((x) => wanted.has(x));
-        if (s) {
-          if (inTest) (tests.get(s) ?? tests.set(s, new Set()).get(s)!).add(name);
-          const callee = ts.isPropertyAccessExpression(n.parent) && n.parent.name === n ? n.parent : n;
-          const call = callee.parent;
-          if ((ts.isCallExpression(call) || ts.isNewExpression(call)) && call.expression === callee) {
-            const args = (call.arguments ?? []).map((a) => (ts.isSpreadElement(a) ? undefined : staticValue(checker, a)));
-            if (args.every((a) => a !== undefined)) (calls.get(s) ?? calls.set(s, []).get(s)!).push({ args: args as Json[], at: `${name}:${sf.getLineAndCharacterOfPosition(call.getStart(sf)).line + 1}` });
-          }
-        }
-      }
-      ts.forEachChild(n, visit);
-    };
-    visit(sf);
-  }
-  return { tests, calls };
-}
+// The language-specific reading (signatures, intent, uses, the sandbox run) is behind the seam: src/lang/lang.ts.
+export { instrument } from "./lang/ts.ts";
 
 const isThrown = (v: Json): v is { throws: string } => v !== null && typeof v === "object" && !Array.isArray(v) && typeof v.throws === "string" && Object.keys(v).length === 1;
 const key = (args: Json[]) => JSON.stringify(args);
@@ -348,17 +87,14 @@ const callText = (name: string, args: Json[], receiver?: Json[]) => {
 /** An example's input as the sandbox takes it. */
 const flat = (e: ArcExample): Json[] => (e.receiver ? [e.receiver, ...e.args] : e.args);
 
-/** One sandbox for a whole run: the source tree is staged on the first call, later calls add only the reference module.
- *  Each input runs twice. */
-async function sandbox(ctx: DecompileCtx, texts: Map<string, string>) {
-  const p = await engine.parse(ctx.ports, ctx.request(null, []), []);
-  const req = ctx.request(p, []);
-  let staged = texts;
+/** One sandbox per language for a whole run, opened on its first call (lang/lang.ts Runner). Each input runs twice. */
+function sandbox(ctx: DecompileCtx, texts: Map<string, string>) {
+  const runners = new Map<Lang, Runner>();
   return {
     run: async (file: string, fn: Pick<ArcFn, "name" | "static">, inputs: Json[][]): Promise<Ran[] | { error: string }> => {
-      const [symbol, member] = fn.name.split(".") as [string, string | undefined];
-      const got = await engine.observeExport(ctx.ports, req, p, { file, symbol, ...(member ? { member: { name: member, ...(fn.static ? { static: true } : {}) } } : {}) }, [...inputs, ...inputs], staged);
-      staged = new Map();
+      const lang = langOf(file)!;
+      const runner = runners.get(lang) ?? runners.set(lang, lang.open(ctx, texts)).get(lang)!;
+      const got = await runner.observe(file, fn, [...inputs, ...inputs]);
       if ("error" in got) return got;
       const inst = isInstance(fn);
       return inputs.map((_, i) => {
@@ -369,7 +105,7 @@ async function sandbox(ctx: DecompileCtx, texts: Map<string, string>) {
         return { receiver: a.args[0] as Json[], args, got: a.got, ...(after && !isDeepStrictEqual(after, args) ? { after } : {}), stable };
       });
     },
-    close: () => engine.closeSandbox(ctx.ports, p),
+    close: async () => { for (const r of runners.values()) await r.close(); },
   };
 }
 
@@ -395,7 +131,8 @@ function unmet(e: ArcExample, r: Ran): string | undefined {
   return ok ? undefined : `${printExample({ ...e, name: undefined })}: the code ${now.throws !== undefined ? printOutcome(now) : `returns ${printOutcome(now)}`}`;
 }
 
-/** The project as decompile and check read it: source modules with their exported functions, and their uses. */
+/** The project as decompile and check read it: source modules with their exported functions and their uses, each
+ *  file read by its language (lang/lang.ts), in the order the directories list them. */
 async function scan(ctx: DecompileCtx) {
   const { ports } = ctx;
   const all = (await Promise.all(ctx.dirs.map((d) => walk(ports, d)))).flat();
@@ -403,24 +140,18 @@ async function scan(ctx: DecompileCtx) {
   const sources = code.filter((f) => !isTest(f));
   // tests may live outside the source directories
   const tests = [...new Set([...code.filter(isTest), ...(await Promise.all(["tests", "test", "__tests__"].map((d) => walk(ports, d)))).flat().filter((f) => CODE.test(f))])];
-  const program = makeProgram(ctx.root, [...sources, ...tests]);
-  const checker = program.getTypeChecker();
-  const rel = (sf: ts.SourceFile) => sf.fileName.slice(ctx.root.length + 1);
-  const mine = new Set([...sources, ...tests]);
-  const inProject = (s: ts.Symbol) => !!s.declarations?.length && s.declarations.every((d) => mine.has(rel(d.getSourceFile())));
-  const read = new Map(sources.flatMap((f) => { const sf = program.getSourceFile(`${ctx.root}/${f}`); return sf ? [[f, readModule(checker, sf, inProject)] as const] : []; }));
-  const wanted = new Set([...read.values()].flatMap((m) => m.found.flatMap((x) => (x.cls ? [x.symbol, x.cls.symbol] : [x.symbol]))));
-  const uses = usesOf(checker, program.getSourceFiles().filter((sf) => mine.has(rel(sf))), rel, wanted);
+  const byFile = new Map<string, ReadModule>(), instrumented = new Map<string, string>();
+  for (const lang of LANGS) {
+    const src = sources.filter((f) => lang.code.test(f));
+    if (!src.length) continue;
+    const r = await lang.read(ctx, src, tests.filter((f) => lang.code.test(f)));
+    for (const [f, m] of r.modules) byFile.set(f, m);
+    for (const [f, t] of r.instrumented) instrumented.set(f, t);
+  }
+  const read = new Map(sources.flatMap((f) => (byFile.has(f) ? [[f, byFile.get(f)!] as const] : [])));
   const texts = new Map<string, string>();
   for (const f of all) if (!isTest(f)) texts.set(f, (await ports.fs.read(f)) ?? "");
-  const instrumented = new Map<string, string>(); // for recording: per source file with exported functions
-  for (const [f, m] of read) {
-    // a constructor records as `new <Class>`: its arguments are receivers for the instance methods
-    const ctors = new Map(m.found.flatMap((x) => (x.cls?.ctor ? [[x.cls.name, x.cls.ctor] as const] : [])));
-    const targets = [...m.found.flatMap((x) => (x.node ? [{ name: x.fn.name, node: x.node }] : [])), ...[...ctors].map(([name, node]) => ({ name: `new ${name}`, node }))];
-    if (targets.length) instrumented.set(f, instrument(program.getSourceFile(`${ctx.root}/${f}`)!, f, targets));
-  }
-  return { read, uses, texts, instrumented };
+  return { read, texts, instrumented };
 }
 
 const RECORDED = ".openarc/recorded";
@@ -466,10 +197,10 @@ async function recorder(ctx: DecompileCtx, instrumented: Map<string, string>, wa
 /** The state, and how many re-recorded observations differ from the line that was in the file. */
 export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { changed: number }> {
   const { ports } = ctx;
-  const { read, uses, texts, instrumented } = await scan(ctx);
+  const { read, texts, instrumented } = await scan(ctx);
   const prev = JSON.parse((await ports.fs.read(STATE_FILE)) ?? "null") as DecompileState | null;
   const state: DecompileState = { version: 1, modules: {} };
-  const box = await sandbox(ctx, texts);
+  const box = sandbox(ctx, texts);
   let changed = 0;
   const testRuns = new Map<string, boolean>();
   let rec: Awaited<ReturnType<typeof recorder>> | null = null;
@@ -478,7 +209,7 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
    *  when the two disagree, what was recorded from it is dropped. */
   const passes = async (file: string): Promise<boolean> => {
     if (testRuns.has(file)) return testRuns.get(file)!;
-    const run = async (env?: Record<string, string>) => (await ports.proc.run([...ctx.testCmd!, file], 300_000, { cwd: ctx.root, ...(env ? { env } : {}) })).code === 0;
+    const run = (env?: Record<string, string>) => langOf(file)!.runTest(ctx, file, env);
     let ok = await run(rec?.env(file));
     const got = rec ? await rec.collect() : new Map<string, Json[][]>();
     if (rec && !ok && (ok = await run())) ctx.log(`${file}: recording changed the outcome of this test file; its result without recording counts, and nothing recorded from it is used`);
@@ -496,7 +227,7 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
       const before = await ports.fs.read(arcFile);
       let old: ArcModule | null = null;
       try { old = before === null ? null : parseArc(before); } catch (e) { ctx.log(`${arcFile}: ${(e as Error).message}; left as it is`); state.modules[file] = prev?.modules[file] ?? { hash: "", arc: arcFile, fns: {}, skipped: {} }; continue; }
-      const testsOf = (x: Found) => [...(uses.tests.get(x.symbol) ?? [])].sort();
+      const testsOf = (x: FoundFn) => x.tests;
       const hash = sha(`${text}\0${m.found.map((x) => testsOf(x).join(",")).join(";")}\0${ctx.testCmd?.join(" ") ?? ""}`);
       const known = prev?.modules[file];
       const reuse = !ctx.fresh && !!old && known?.hash === hash;
@@ -518,11 +249,11 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
         } else {
           // inputs: recorded from the tests first (real usage), then literal calls, then the types. An input's origin: a
           // literal call (it names the line), else the test it was recorded from, else the types, else its observed line
-          const calls = (uses.calls.get(x.symbol) ?? []).slice(0, 6), from = new Map<string, string>();
+          const calls = x.calls.slice(0, 6), from = new Map<string, string>();
           const seen = [...new Map((fromTests.get(`${file}\0${name}`) ?? []).map((r) => [key(r.args), r])).values()].slice(0, 6);
           // an instance method: each input on every receiver (constructor arguments from `new X(...)` with literals, then
           // recorded from the tests, then none when the constructor needs none). ponytail: at most 3 receivers
-          const receivers = !x.cls ? [] : [...new Map([...(uses.calls.get(x.cls.symbol) ?? []).map((c) => c.args), ...(fromTests.get(`${file}\0new ${x.cls.name}`) ?? []).map((r) => r.args), ...(x.cls.bare ? [[]] : [])].map((a) => [key(a), a])).values()].slice(0, 3);
+          const receivers = !x.cls ? [] : [...new Map([...x.cls.calls.map((c) => c.args), ...(fromTests.get(`${file}\0new ${x.cls.name}`) ?? []).map((r) => r.args), ...(x.cls.bare ? [[]] : [])].map((a) => [key(a), a])).values()].slice(0, 3);
           const widen = (a: Json[]): Json[][] => (x.cls ? receivers.map((rv) => [rv, ...a]) : [a]);
           const origin = (a: Json[], o: string) => { for (const w of widen(a)) if (!from.has(key(w))) from.set(key(w), o); };
           for (const c of calls) origin(c.args, `call ${c.at}`);
@@ -597,7 +328,7 @@ export async function checkSpecs(ctx: DecompileCtx, only?: (file: string, fn: st
   }
   const items: CheckItem[] = [], summary: CheckSummary = { functions: 0, preserved: 0, changed: 0, failing: 0, unrunnable: 0, removed: 0, new: 0, held: 0, broken: 0, unparsable: 0 };
   const add = (i: CheckItem) => { items.push(i); summary[i.kind]++; };
-  const box = await sandbox(ctx, texts);
+  const box = sandbox(ctx, texts);
   try {
     for (const m of arcs) {
       const exported = new Set(read.get(m.file)?.found.map((x) => x.fn.name));
