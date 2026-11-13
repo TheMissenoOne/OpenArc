@@ -24,7 +24,7 @@ On Linux, install bubblewrap for the strong tier (`sudo apt-get install bubblewr
 
 ## Install
 
-The package is [`open-arc` on npm](https://www.npmjs.com/package/open-arc); the command it installs is `openarc`.
+The package is [`open-arc` on npm](https://www.npmjs.com/package/open-arc); the command it installs is `openarc`. Without Node, a standalone download works for decompiling and checking existing code: see [[Install]].
 
 ```bash
 mkdir my-app && cd my-app && npm init -y && npm pkg set type=module

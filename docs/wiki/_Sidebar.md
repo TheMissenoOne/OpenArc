@@ -1,6 +1,7 @@
 **OpenArc**
 
 - [[Home]]
+- [[Install]]
 - [[Getting Started]]
 - [[Setup]]
 - [[Code First]]
