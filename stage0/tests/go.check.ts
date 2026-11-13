@@ -189,11 +189,14 @@ try {
     tier("node");
     const r = t.oa(["decompile"]);
     assert.strictEqual(r.code, 0, r.out);
-    assert.match(r.out, /^OARC-E092 sandbox unavailable: Go code needs bwrap \(Linux\) or sandbox-exec \(macOS\) and this tier is node\. sandbox\.isolation "unsafe-none" runs it with no sandbox: as you, with your files and network$/m);
+    assert.match(r.out, /^OARC-E092 sandbox unavailable: Go code needs bwrap \(Linux\) or sandbox-exec \(macOS\), not node, so no Go function ran\. To run Go code with no sandbox at all, as you, with your files and your network, set "sandbox": \{ "isolation": "unsafe-none" \} in openarc\.config\.json, then run decompile --fresh$/m);
+    assert.strictEqual(r.out.match(/OARC-E092/g)?.length, 1, "said once per run");
     assert.match(r.out, /observed 0, described 1,/);
+    const kept = (JSON.parse(t.read(".openarc/decompile.json")) as { modules: Record<string, { fns: Record<string, { why: string }> }> }).modules["src/t.go"]!.fns.Inc!.why;
+    assert.strictEqual(kept, 'OARC-E092 sandbox unavailable: Go code needs bwrap (Linux) or sandbox-exec (macOS), not node; or sandbox.isolation "unsafe-none" (no sandbox), then decompile --fresh');
     if (process.platform === "win32") {
       tier("unsafe-none");
-      const u = t.oa(["decompile"]);
+      const u = t.oa(["decompile", "--fresh"]);
       assert.match(u.out, /observed 1, described 0,/, u.out);
       assert.ok(t.read("arc/spec/t.arc").includes("  observed (0) => 1\n"), t.read("arc/spec/t.arc"));
       console.log("go.check ok: Windows has no sandbox for Go: checked the node tier's refusal and an unsafe-none run only");

@@ -232,10 +232,10 @@ function open(ctx: DecompileCtx, _texts: Map<string, string>): Runner {
       // the node tier cannot confine a Go binary, and the container tier has no Go toolchain; said once per run, since
       // decompile only records each function's reason
       if (tier !== "bwrap" && tier !== "sandbox-exec" && tier !== "unsafe-none") {
-        // how to proceed, in at most the 200 characters decompile keeps of a reason
-        const error = `OARC-E092 sandbox unavailable: Go code needs bwrap (Linux) or sandbox-exec (macOS) and this tier is ${tier}. sandbox.isolation "unsafe-none" runs it with no sandbox: as you, with your files and network`;
-        if (!refused) (refused = true), ctx.log(error);
-        return { error };
+        const why = `Go code needs bwrap (Linux) or sandbox-exec (macOS), not ${tier}`;
+        if (!refused) (refused = true), ctx.log(`OARC-E092 sandbox unavailable: ${why}, so no Go function ran. To run Go code with no sandbox at all, as you, with your files and your network, set "sandbox": { "isolation": "unsafe-none" } in openarc.config.json, then run decompile --fresh`);
+        // the reason decompile keeps (200 characters at most)
+        return { error: `OARC-E092 sandbox unavailable: ${why}; or sandbox.isolation "unsafe-none" (no sandbox), then decompile --fresh` };
       }
       const info = seen.get(file), f = info?.file.funcs.find((x) => x.name === fn.name);
       if (!info || !f) return { error: `${file}: ${fn.name} is not an exported Go function here` };
