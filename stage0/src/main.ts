@@ -27,7 +27,7 @@ import { SHEET_FILE } from "./sheet.ts";
 import { STATE_FILE, checkLine, checkSpecs, decompile, report, todo, type DecompileState } from "./decompile.ts";
 import { parseArc, type ArcModule } from "./arc.ts";
 import { missingLine, rollUp, formatStatus, statusDetail } from "./levels.ts";
-import { ARCH_FILE, CONCEPT_FILE, checkArch, checkConcept, deriveArch, formatReport, importsOf, parseArch, parseConcept, printArch, printConcept, projectName, sources, updateArch, type Arch, type Concept } from "./levels.ts";
+import { ARCH_FILE, CONCEPT_FILE, checkArch, checkConcept, deriveArch, formatReport, parseArch, projectImports, parseConcept, printArch, printConcept, projectName, sources, updateArch, type Arch, type Concept } from "./levels.ts";
 import { LINT_USAGE, lintCommand } from "./lint.ts";
 import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools, type TierChoice } from "./isolation.ts";
 import { arcAccept, arcCompile, arcPrompt, arcStatus, compileTargets, failLine } from "./arcsync.ts";
@@ -530,7 +530,7 @@ async function archCmd(root: string, ports: Ports, argv: string[]): Promise<numb
     console.error(`openarc: bad-flag\n\n${USAGE}`);
     return 2;
   }
-  const json = flags.includes("--json"), code = await sources(ports, dirs.length ? dirs : ["src"]), files = [...code.keys()], edges = importsOf(code);
+  const json = flags.includes("--json"), code = await sources(ports, dirs.length ? dirs : ["src"]), files = [...code.keys()], edges = await projectImports(ports, code);
   const text = await ports.fs.read(ARCH_FILE);
   let a: Arch | null;
   try { a = text === null ? null : parseArch(text); } catch (e) { return console.error(`${ARCH_FILE}: ${(e as Error).message}`), 1; }
@@ -1200,4 +1200,9 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
-process.exitCode = await main(process.argv.slice(2));
+// a missing toolchain a language needs (lang/go.ts NO_GO): one line, not a stack
+process.exitCode = await main(process.argv.slice(2)).catch((e: unknown) => {
+  if ((e as Error | null)?.name !== "OpenArcSetup") throw e;
+  console.error(`openarc: ${(e as Error).message}`);
+  return 1;
+});

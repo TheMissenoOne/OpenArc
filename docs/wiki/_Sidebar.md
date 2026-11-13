@@ -21,6 +21,7 @@
 - [[Arc Sync]]
 - [[View]]
 - [[Levels]]
+- [[Languages]]
 - [[CLI Reference]]
 - [[Bootstrap]]
 - [[Design Log]]
