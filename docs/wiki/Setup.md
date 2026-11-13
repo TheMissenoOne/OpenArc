@@ -17,18 +17,18 @@ Paths are relative to the agent root (below). `<project>` is the project folder 
 | all | `<project>/.openarc/bin/openarc` | the wrapper (below) |
 | all | `<project>/.openarc/.gitignore` | gains a `bin/` line |
 | all | `<project>/openarc.config.json` | the default config, only if missing. The guard is active only where this file exists |
-| all | `AGENTS.md` | one section between `<!-- openarc:begin -->` and `<!-- openarc:end -->`: where the specs live, to read them before the source, the wrapper command, and not to edit code between `// @openarc:begin` and `// @openarc:end`. Created if missing |
-| Claude Code | `.claude/skills/openarc-sheet/SKILL.md`, `.claude/skills/openarc-specs/SKILL.md` | the two skills |
+| all | `AGENTS.md` | one section between `<!-- openarc:begin -->` and `<!-- openarc:end -->`: where the specs and the design files (`arc/features/`) live, to read them before the source, the wrapper command, and not to edit code between `// @openarc:begin` and `// @openarc:end`. Created if missing |
+| Claude Code | `.claude/skills/openarc-sheet/SKILL.md`, `.claude/skills/openarc-specs/SKILL.md`, `.claude/skills/openarc-design/SKILL.md` | the three skills |
 | Claude Code | `.claude/settings.local.json` | a `PreToolUse` command hook on `Edit\|Write\|MultiEdit` running `guard --hook`. Exit 2 blocks the edit |
 | Claude Code | `.mcp.json` | the MCP server `openarc` (`mcpServers.openarc`), see [[MCP]]. Claude Code asks before starting it |
-| Codex | `.agents/skills/openarc-sheet/SKILL.md`, `.agents/skills/openarc-specs/SKILL.md` | the two skills |
+| Codex | `.agents/skills/openarc-sheet/SKILL.md`, `.agents/skills/openarc-specs/SKILL.md`, `.agents/skills/openarc-design/SKILL.md` | the three skills |
 | Codex | `.codex/hooks.json` | a `PreToolUse` command hook on `apply_patch\|Edit\|Write` running `guard --hook` |
 | Codex | `.codex/config.toml` | the MCP server, `[mcp_servers.openarc]` between `# openarc:begin` and `# openarc:end`. Only when the file is missing or already has those markers (below) |
-| OpenCode | `.opencode/skills/openarc-sheet/SKILL.md`, `.opencode/skills/openarc-specs/SKILL.md` | the two skills |
+| OpenCode | `.opencode/skills/openarc-sheet/SKILL.md`, `.opencode/skills/openarc-specs/SKILL.md`, `.opencode/skills/openarc-design/SKILL.md` | the three skills |
 | OpenCode | `opencode.json` | the MCP server `openarc` (`mcp.openarc`) |
 | OpenCode | `.opencode/plugins/openarc.ts` | the plugin: the guard in `tool.execute.before`, and the sync watcher in a project with `openarc.spec.md` |
 
-The skills are `openarc-sheet` (the spec sheet and host-agent compiling, see [[Host Agent Mode]]) and `openarc-specs` (the [[Levels]], the [[Decompile]] workflow, and the rules for writing intents with few tokens). Setup copies them from OpenArc's `integrations/` folder and adds one line under the front matter that names the project folder and the wrapper command.
+The skills are `openarc-sheet` (the spec sheet and host-agent compiling, see [[Host Agent Mode]]), `openarc-specs` (the [[Levels]], the [[Decompile]] workflow, and the rules for writing intents with few tokens), and `openarc-design` (the design files in `arc/features/`, see [[PDL]]: keeping design and code in step in both directions, and how to write a design). Setup copies them from OpenArc's `integrations/` folder and adds one line under the front matter that names the project folder and the wrapper command.
 
 By default it installs for every agent whose binary (`claude`, `codex`, `opencode`) is on the `PATH`. `--agents` picks them; an agent named there is installed even if it is not on the `PATH`.
 
@@ -89,6 +89,7 @@ Against Claude Code 2.1.323, Codex 0.163.0 and OpenCode 1.19.5, on 2026-11-12:
 Things to know:
 
 - The MCP registrations were checked as described in [[MCP]].
+- The `openarc-design` skill came after these checks: it is installed the same way, into the same folders, but no agent binary has listed it yet.
 - **Codex** reads `.codex/config.toml` and runs project hooks only in a trusted project, and only after you have reviewed and trusted the hook in Codex. Until then `hooks/list` shows it as `untrusted`. Skills load either way.
 - **OpenCode** also reads skills from `.claude/skills/` and `.agents/skills/`. The copies are identical, and OpenCode lists each name once. On first load it writes its own `package.json` and `node_modules/` into `.opencode/`; `--remove` leaves those, since they are not OpenArc's.
 - Without `.git` at the agent root, the hook commands assume the agent runs them from the agent root.

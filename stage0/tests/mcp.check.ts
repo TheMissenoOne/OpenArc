@@ -42,7 +42,7 @@ try {
   assert.deepStrictEqual((await rpc("ping")).result, {});
 
   const tools = (await rpc("tools/list")).result.tools as { name: string; description: string; inputSchema: { properties: object } }[];
-  for (const t of ["status", "decompile_report", "decompile_todo", "decompile_check", "arch", "arch_check", "concept", "concept_check", "inspect", "guard", "prompt", "accept"]) assert.ok(tools.some((x) => x.name === t), t);
+  for (const t of ["status", "decompile_report", "decompile_todo", "decompile_check", "arch", "arch_check", "concept", "concept_check", "inspect", "guard", "prompt", "accept", "pdl_status", "pdl_show", "pdl_check", "pdl_sync"]) assert.ok(tools.some((x) => x.name === t), t);
   assert.ok(tools.every((t) => "root" in t.inputSchema.properties && t.description.length < 140), "every tool takes root; descriptions stay short");
   assert.ok(!tools.some((t) => t.name === "setup" || t.name === "decompile"));
 
@@ -68,6 +68,26 @@ try {
   assert.deepStrictEqual(c, { content: [{ type: "text", text: "ok" }], isError: false });
   assert.strictEqual((await call("guard", { root: other, file: "src/m.ts" })).isError, true, "a path alone checks nothing");
   assert.strictEqual(readFileSync(join(other, "src/m.ts"), "utf8"), owned);
+
+  // the design language: status, show, check, sync on a one-feature design over src/b.ts
+  mkdirSync(join(dir, "arc/features"), { recursive: true });
+  writeFileSync(join(dir, "arc/features/b.arc"), 'feature B {\n  returns one;\n  source "src/b.ts";\n\n  b() { gives back 1; }\n}\n');
+  const pdl = async (name: string, args: object = {}) => { const c = await call(name, args); assert.strictEqual(c.isError, false, c.content[0]!.text); return c.content[0]!.text; };
+  assert.deepStrictEqual(JSON.parse(await pdl("pdl_status")).blocks.map((b: { id: string; status: string }) => `${b.id} ${b.status}`), ["B new", "B.b new"]);
+  assert.strictEqual(JSON.parse(await pdl("pdl_status", { id: "B.b" })).summary.blocks, 1);
+  const shown = JSON.parse(await pdl("pdl_show", { id: "B.b" }));
+  assert.deepStrictEqual([shown.text, shown.purpose, shown.source], ["b() { gives back 1; }", ["returns one"], ["src/b.ts"]]);
+  assert.match((await call("pdl_show", { id: "B.nope" })).content[0]!.text, /no block B\.nope[\s\S]*exit 1$/);
+  assert.strictEqual(JSON.parse(await pdl("pdl_check")).ok, true);
+  assert.strictEqual((await call("pdl_sync", { ids: [] })).isError, true, "sync names its blocks");
+  assert.strictEqual((await call("pdl_sync", { ids: ["--all"] })).isError, true);
+  assert.match(await pdl("pdl_sync", { ids: ["B", "B.b"] }), /^synced 2 blocks/);
+  assert.strictEqual(JSON.parse(await pdl("pdl_status")).summary.inStep, 2);
+  writeFileSync(join(dir, "arc/features/broken.arc"), "feature C {\n");
+  c = await call("pdl_check");
+  assert.strictEqual(c.isError, true);
+  assert.strictEqual(JSON.parse(c.content[0]!.text.split("\n")[0]!).ok, false, "the JSON report, then the exit");
+  rmSync(join(dir, "arc/features/broken.arc"));
 
   // protocol errors
   r = await raw("{ not json", null);

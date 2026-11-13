@@ -161,6 +161,8 @@ openarc pdl format [--check] [files...]
 
 A typical loop for an agent: `pdl status` to see what moved, `pdl show <id>` for one block, edit the code or the design until they agree, `pdl check`, then `pdl sync <id>`.
 
+[[Setup]] installs the `openarc-design` skill for Claude Code, Codex and OpenCode, which teaches an agent this loop in both directions and the rules for writing a design. The [[MCP]] server has `pdl_status`, `pdl_show`, `pdl_check` and `pdl_sync`.
+
 ## Not in this slice
 
 - Nothing evaluates `check` or `example` yet: they are kept as text.
