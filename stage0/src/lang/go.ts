@@ -52,7 +52,7 @@ function helper(ctx: Ctx): Promise<string> {
     const { go, env } = await goTool(ctx.ports);
     const src = join(HERE, "arcgo");
     const hash = createHash("sha256").update(readFileSync(join(src, "main.go"))).update(readFileSync(join(src, "go.mod"))).update(go).digest("hex").slice(0, 12);
-    const bin = join(ctx.root, ".openarc", "go", `arcgo-${hash}`);
+    const bin = join(ctx.root, ".openarc", "go", `arcgo-${hash}${process.platform === "win32" ? ".exe" : ""}`); // Windows: go build adds .exe
     if (!existsSync(bin)) {
       const r = await ctx.ports.proc.run([go, "build", "-o", bin, "."], 300_000, { cwd: src, env: { ...env, GOFLAGS: "-mod=mod", GOPROXY: "off" } });
       if (r.code !== 0) throw new Error(`building the Go helper failed: ${r.stdout.trim()}`);

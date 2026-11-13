@@ -70,6 +70,7 @@ try {
   const replies: any[] = [];
   for await (const l of createInterface({ input: server.stdout })) if (replies.push(JSON.parse(l)) === 2) break;
   server.stdin.end();
+  if (server.exitCode === null) await new Promise((done) => server.on("exit", done)); // Windows: a running bin\node.exe cannot be deleted below
   assert.strictEqual(replies[0].result.serverInfo.name, "openarc");
   assert.match(replies[1].result.content[0].text, /stale/, JSON.stringify(replies[1]));
 
@@ -96,6 +97,6 @@ try {
   assert.strictEqual(w.status, 1, w.stdout + w.stderr);
   assert.match(w.stdout, /inc\.inc: stale/);
 } finally {
-  rmSync(tmp, { recursive: true, force: true });
+  rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }); // Windows: a file a child just closed can stay locked briefly
 }
 console.log("binary.check ok");
