@@ -45,6 +45,16 @@ Hard rules for intents, to keep token use low:
 
 Run `openarc decompile --check`. A `changed` line means behaviour changed with no spec change: report it. Do not paper over it by re-running `openarc decompile` unless the user accepts the change. A `failing` line is an `example` the code no longer satisfies.
 
+## Changing behaviour from the spec
+
+For a function in decompiled code (no markers), the `.arc` file leads:
+1. Edit its intent, `example` lines or rules in `arc/spec/<module>.arc` (an `example` only as the user confirmed it).
+2. `openarc arc status <module.fn>`: `stale` means an example fails; it shows what the code returns.
+3. `openarc arc prompt <module.fn>` prints what to write. Read nothing else.
+4. Write the body only (statements, no signature) and pipe it to `openarc arc accept <module.fn>`. It keeps the body only when every example holds; otherwise the file is unchanged and the failures are listed. Fix and retry at most twice.
+
+Do not edit such a function's body by hand when its spec changed: use this loop.
+
 ## Compiling as the host agent
 
 `openarc prompt <id>` prints what to write; pipe the body to `openarc accept <id>`, which checks and commits it. Never edit code between `// @openarc:begin` and `// @openarc:end` by hand: see the `openarc-sheet` skill.

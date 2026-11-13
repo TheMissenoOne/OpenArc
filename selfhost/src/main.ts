@@ -30,6 +30,7 @@ import { missingLine, rollUp, formatStatus, statusDetail } from "./levels.ts";
 import { ARCH_FILE, CONCEPT_FILE, checkArch, checkConcept, deriveArch, formatReport, importsOf, parseArch, parseConcept, printArch, printConcept, projectName, sources, updateArch, type Arch, type Concept } from "./levels.ts";
 import { LINT_USAGE, lintCommand } from "./lint.ts";
 import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools, type TierChoice } from "./isolation.ts";
+import { arcAccept, arcCompile, arcPrompt, arcStatus, compileTargets, failLine } from "./arcsync.ts";
 import { guardHook, hostPorts, hostPrompt, hostRefusal } from "./host.ts";
 import { parseCodeOutput } from "./output-format.ts";
 import { setupCommand } from "./setup.ts";
@@ -310,6 +311,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc doctor
        openarc adopt [--brief] [--json] [--no-model] | sync [--watch] [--brief] [--json] [--no-model]
        openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>] [--no-record]] [--fresh] [--json] | decompile --report|--todo [--json] | decompile --check [dirs...] [--out=<dir>] [--rule-inputs <n>] [--json]
+       openarc arc status [<module>|<module.fn>] [--json] | arc prompt <module.fn> [--json] | arc accept <module.fn> [--file <path>] [--json] | arc compile <module.fn>|<module>|--stale [--json]
        openarc arch [dirs...] [--check] [--json] | concept [--check] [--json]
        openarc status [--json] [--part <name>] [--goal <name>]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
@@ -396,6 +398,60 @@ async function guardCmd(root: string, ports: Ports, argv: string[]): Promise<num
   if (json) console.log(JSON.stringify({ ok: !edited.length, edited }));
   else for (const e of edited) console.log(`${e.file}: ${e.id} is compiler-owned and was ${e.what}; edit its spec and recompile, or \`openarc freeze ${e.id}\` to own it`);
   return edited.length ? 1 : 0;
+}
+
+/** `openarc arc status|prompt|accept|compile`: edits to `.arc` files reach the code (src/arcsync.ts). Only compile
+ *  calls a model. */
+async function arcCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  const json = rest.includes("--json");
+  const fi = rest.indexOf("--file");
+  const file = fi >= 0 ? rest[fi + 1] : undefined;
+  const out = rest.find((a) => a.startsWith("--out="))?.slice(6) ?? "arc/spec";
+  const args = rest.filter((a, i) => a !== "--json" && !a.startsWith("--out=") && (fi < 0 || (i !== fi && i !== fi + 1)));
+  const target = args[0];
+  const bad = args.length > 1 || (fi >= 0 && (sub !== "accept" || !file || file.startsWith("--"))) || (target?.startsWith("--") && !(sub === "compile" && target === "--stale"))
+    || (sub === "status" ? false : !target) || !["status", "prompt", "accept", "compile"].includes(sub ?? "");
+  if (bad) return console.error(`openarc: bad-flag\n\n${USAGE}`), 2;
+  const ctx = { ports, root, out, request: (p: engine.Project | null, ids: string[]) => request(root, p, ids), log: (l: string) => console.error(l) };
+  if (sub === "status") {
+    const rows = await arcStatus(ctx, target);
+    const count = (s: string) => rows.filter((r) => r.status === s).length;
+    const summary = { functions: rows.length, ok: count("ok"), stale: count("stale"), unrunnable: count("unrunnable"), noExamples: count("no examples") };
+    if (json) console.log(JSON.stringify({ ok: !summary.stale, summary, fns: rows }));
+    else {
+      for (const r of rows) {
+        console.log(r.status === "stale" ? r.failing!.map((x) => `${r.id}: stale: ${failLine(x)}`).join("\n") : `${r.id}: ${r.status}${r.why ? `: ${r.why}` : ""}`);
+        for (const c of r.changed ?? []) console.log(`${r.id}: observed (${c.args.map((a) => JSON.stringify(a)).join(", ")}) changed: was ${c.was}, now ${c.now}`);
+      }
+      console.log(`${summary.functions} functions: ok ${summary.ok}, stale ${summary.stale}, unrunnable ${summary.unrunnable}, no examples ${summary.noExamples}`);
+    }
+    return target && !rows.length ? (console.error(`openarc: no function or module ${target} in ${out}`), 1) : summary.stale ? 1 : 0;
+  }
+  if (sub === "prompt") {
+    const p = await arcPrompt(ctx, target!);
+    if ("refused" in p) return console.error(p.refused), 1;
+    const { instruction, ...rest } = p;
+    console.log(json ? JSON.stringify(rest) : `${instruction}\n\n${p.prompt}`);
+    return 0;
+  }
+  for (const txid of await recover(ports.fs)) console.error(fmt({ code: "OARC-W094", detail: txid }));
+  if (sub === "accept") {
+    if (!file && process.stdin.isTTY) return console.error("pipe the body on stdin, or pass --file <path>"), 1;
+    const res = await arcAccept(ctx, target!, readFileSync(file ? resolve(process.cwd(), file) : 0, "utf8"));
+    if ("refused" in res) return console.error(res.refused), 1;
+    if (json) console.log(JSON.stringify({ ...res, id: target }));
+    else console.log(res.ok ? `accepted ${target}` : res.problems.join("\n"));
+    return res.ok ? 0 : 1;
+  }
+  const { ids, rows } = await compileTargets(ctx, target!);
+  if (!rows.length) return console.error(`openarc: no function or module ${target} in ${out}`), 1;
+  if (!ids.length) return console.log("nothing is stale"), 0;
+  const cfg = (await engine.parse(ports, request(root, null, []), [])).config, backend = cfg.backends[cfg.compilation.defaultBackend]!;
+  const res = await arcCompile(ctx, ids, (system, user) => complete(ports, { ...backend, outputFormat: "code" }, system, user), cfg.compilation.maxAttempts);
+  if (json) console.log(JSON.stringify({ ok: res.every((r) => r.ok), fns: res }));
+  else for (const r of res) console.log(r.ok ? `compiled ${r.id} (attempt ${r.attempts})` : [`${r.id}: not compiled after ${r.attempts} attempts`, ...r.problems.map((l) => `  ${l}`)].join("\n"));
+  return res.every((r) => r.ok) ? 0 : 1;
 }
 
 /** `openarc decompile [dirs...]`: code to `.arc` specs, nothing in the code changes. `--report` and `--todo` read the last run.
@@ -875,6 +931,7 @@ async function main(argv: string[]): Promise<number> {
   if (argv[0] === "migrate") return migrateCmd(root, ports, argv.slice(1));
   if (argv[0] === "adopt" || argv[0] === "sync") return syncCmd(root, ports, argv);
   if (argv[0] === "decompile") return decompileCmd(root, ports, argv.slice(1));
+  if (argv[0] === "arc") return arcCmd(root, ports, argv.slice(1));
   if (argv[0] === "arch" || argv[0] === "concept") return (argv[0] === "arch" ? archCmd : conceptCmd)(root, ports, argv.slice(1));
   if (argv[0] === "prompt" || argv[0] === "accept") return hostCmd(root, ports, argv);
   if (argv[0] === "guard") return guardCmd(root, ports, argv.slice(1));

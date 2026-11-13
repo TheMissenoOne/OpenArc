@@ -65,7 +65,7 @@ export async function walk(ports: Ports, dir: string, out: string[] = [], keep =
   return out;
 }
 
-function makeProgram(root: string, files: string[]): ts.Program {
+export function makeProgram(root: string, files: string[]): ts.Program {
   const cfg = ts.readConfigFile(`${root}/tsconfig.json`, ts.sys.readFile);
   const parsed = cfg.config ? ts.parseJsonConfigFileContent(cfg.config, ts.sys, root).options : {};
   // a project with no tsconfig (plain JavaScript) gets modern defaults; JavaScript is read, never reported on
@@ -171,7 +171,7 @@ const resolved = (checker: ts.TypeChecker, s: ts.Symbol | undefined) => (s && s.
 interface Found { fn: ArcFn; symbol: ts.Symbol; inputs: Json[][] | null; pos: number; node?: ts.FunctionLikeDeclaration }
 
 /** The function a declaration binds: `function f`, `const f = <fn>`, `export default <fn>`, `exports.f = <fn>`. */
-function fnOf(d: ts.Node): ts.FunctionLikeDeclaration | undefined {
+export function fnOf(d: ts.Node): ts.FunctionLikeDeclaration | undefined {
   let n: ts.Node | undefined = ts.isVariableDeclaration(d) || ts.isPropertyAssignment(d) ? d.initializer : ts.isExportAssignment(d) ? d.expression
     : ts.isBinaryExpression(d) ? d.right : ts.isBinaryExpression(d.parent) && d.parent.left === d ? d.parent.right : d;
   while (n && ts.isParenthesizedExpression(n)) n = n.expression;
@@ -507,8 +507,8 @@ export interface CheckSummary { functions: number; preserved: number; changed: n
 
 /** `decompile --check`: every `example` and `observed` line in the `.arc` files under `ctx.out` against the code as it is
  *  now. Reads only the `.arc` files and the code (not the state file) and writes nothing. ok: nothing changed, failed or
- *  was removed. ponytail: finite inputs; agreeing on them does not prove two versions equal. */
-export async function checkSpecs(ctx: DecompileCtx): Promise<{ ok: boolean; summary: CheckSummary; items: CheckItem[] }> {
+ *  was removed. `only`: check just the functions it accepts. ponytail: finite inputs; agreeing on them does not prove two versions equal. */
+export async function checkSpecs(ctx: DecompileCtx, only?: (file: string, fn: string) => boolean): Promise<{ ok: boolean; summary: CheckSummary; items: CheckItem[] }> {
   const { read, texts } = await scan(ctx);
   const arcs: ArcModule[] = [];
   for (const f of await walk(ctx.ports, ctx.out, [], (n) => n.endsWith(".arc"))) {
@@ -521,6 +521,7 @@ export async function checkSpecs(ctx: DecompileCtx): Promise<{ ok: boolean; summ
     for (const m of arcs) {
       const exported = new Set(read.get(m.file)?.found.map((x) => x.fn.name));
       for (const f of m.fns) {
+        if (only && !only(m.file, f.name)) continue; // openarc arc: one function, or a few
         if (!exported.has(f.name)) { add({ file: m.file, fn: f.name, kind: "removed" }); continue; }
         summary.functions++;
         if (!f.examples.length) continue;
@@ -550,7 +551,7 @@ export async function checkSpecs(ctx: DecompileCtx): Promise<{ ok: boolean; summ
     }
     for (const [file, m] of read) {
       const specified = new Set(arcs.filter((a) => a.file === file).flatMap((a) => a.fns.map((f) => f.name)));
-      for (const x of m.found) if (!specified.has(x.fn.name)) add({ file, fn: x.fn.name, kind: "new" });
+      for (const x of m.found) if (!specified.has(x.fn.name) && (!only || only(file, x.fn.name))) add({ file, fn: x.fn.name, kind: "new" });
     }
   } finally {
     await box.close();
