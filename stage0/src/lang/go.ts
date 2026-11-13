@@ -307,7 +307,9 @@ async function locate(ctx: Ctx, _file: string, text: string, name: string): Prom
 }
 
 /** `go build` and `go vet` on the package of `file` in a staged copy of its module holding `after`; only the errors the
- *  new text adds (the same check on the file as it is first, when the new text fails). */
+ *  new text adds (the same check on the file as it is first, when the new text fails). Packages that import it are not
+ *  built: a Go signature is declared, never inferred from the body, so a new body cannot change what a caller compiles
+ *  against. */
 async function problems(ctx: Ctx, file: string, after: string): Promise<string[]> {
   const mod = await moduleOf(ctx.ports, file);
   if (mod === null) return [`${file}: no go.mod in its directory or above`];

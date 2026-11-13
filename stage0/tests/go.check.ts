@@ -261,6 +261,21 @@ try {
   r = oa(["arc", "status", "calc.Add"]);
   assert.strictEqual(r.code, 0, r.out);
   assert.match(r.out, /^calc\.Add: ok$/m);
+  // a method on a pointer receiver, the same way
+  write("arc/spec/calc.arc", read("arc/spec/calc.arc").replace("  observed new ({n: 5}) . (2) => 7\n", "  example new ({n: 5}) . (2) => 9\n"));
+  r = oa(["arc", "prompt", "calc.Counter.Inc"]);
+  assert.ok(r.out.includes("Current code:\nfunc (c *Counter) Inc(by int) int {\n\tc.N += by\n\treturn c.N\n}\n"), r.out);
+  const src2 = read("src/calc.go");
+  r = oa(["arc", "accept", "calc.Counter.Inc"], "c.N += by * 3\nreturn c.N");
+  assert.strictEqual(r.code, 1, r.out);
+  assert.match(r.out, /^example new \(\{n: 5\}\) \. \(2\) => 9: the code returns 11$/m);
+  r = oa(["arc", "accept", "calc.Counter.Inc"], "func (c *Counter) Inc(by int) int {\n\treturn 0\n}");
+  assert.strictEqual(r.code, 1, r.out);
+  assert.match(r.out, /repeats the signature/);
+  assert.strictEqual(read("src/calc.go"), src2);
+  r = oa(["arc", "accept", "calc.Counter.Inc"], "c.N += 2 * by\nreturn c.N");
+  assert.strictEqual(r.code, 0, r.out);
+  assert.strictEqual(read("src/calc.go"), src2.replace("\tc.N += by\n", "\tc.N += 2 * by\n"));
 
   // ── one folder, two languages: a Go module in svc/ and JavaScript in src/, decompiled in one run; the architecture
   // reads both

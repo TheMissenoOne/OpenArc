@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import type { CompileRequest, Ports } from "./types.ts";
 import * as engine from "./engine.ts";
-import { parseArc, printArc, printExample, printOutcome, printValue, type ArcExample, type ArcFn, type ArcModule } from "./arc.ts";
+import { parseArc, printArc, printExample, printOutcome, printValue, type ArcExample, type ArcFn, type ArcModule, type ArcType } from "./arc.ts";
 import { argsFit, checkRules } from "./rules.ts";
 import { LANGS, langOf, type FoundFn, type Lang, type ReadModule, type Runner } from "./lang/lang.ts";
 
@@ -245,7 +245,7 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
           x.fn.examples = was?.examples ?? [];
           why = had.why;
           origins = had.origins;
-          if (why?.startsWith("example ")) failed = why; // an `example` that failed then fails now: nothing changed
+          if (/^(example|rule) /.test(why ?? "")) failed = why; // an `example` or rule that failed then fails now: nothing changed
         } else {
           // inputs: recorded from the tests first (real usage), then literal calls, then the types. An input's origin: a
           // literal call (it names the line), else the test it was recorded from, else the types, else its observed line
@@ -269,6 +269,10 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
             if ("error" in ran) { why = firstLine(ran.error); if (reqs.length) failed = `${printExample({ ...reqs[0]!, name: undefined })}: ${why}`; }
             else {
               failed = reqs.map((e, i) => unmet(e, ran[i]!)).find(Boolean);
+              // the rules, on the calls this run made (no generated inputs: `--check` is the thorough pass); a broken or
+              // unreadable one fails the function, in the words `--check` prints without the file and function
+              const bad = failed || !x.fn.rules.length ? undefined : ruleItems(file, x.fn, m.types, ran.map(runOf)).find((i) => i.kind !== "held");
+              if (bad) failed = checkLine(bad).slice(`${file}: ${name}: `.length);
               const now = ran.slice(reqs.length);
               for (const e of olds) {
                 const r = now[inputs.findIndex((a) => key(a) === key(flat(e)))];
@@ -352,13 +356,8 @@ export async function checkSpecs(ctx: DecompileCtx, only?: (file: string, fn: st
           const extra = f.name.includes(".") && !f.static ? [] : engine.oracleInputs(f.examples.map((e) => ({ args: e.args })), seen.size + cap, 1, [], argsFit(f, m.types)).filter((a) => !seen.has(key(a))).slice(0, cap);
           const more = extra.length ? await box.run(m.file, f, extra) : [];
           if ("error" in more) ctx.log(`${m.file}: ${f.name}: generated inputs unrunnable, rules checked on the written lines only: ${firstLine(more.error)}`);
-          const runs = [...ran, ...("error" in more ? [] : more)].map((r) => (isThrown(r.got) ? { args: r.args, threw: true } : { args: r.args, result: r.got, ...(r.after ? { after: r.after } : {}), threw: false }));
-          for (const r of checkRules(f, m.types, runs)) {
-            const at = { file: m.file, fn: f.name, rule: r.rule };
-            if (r.broken) add({ ...at, kind: "broken", args: r.broken.args, now: r.broken.result === undefined ? "throws" : printOutcome({ args: [], expected: r.broken.result, ...(r.broken.after ? { after: r.broken.after } : {}) }), ...(r.error ? { why: r.error } : {}) });
-            else if (r.error) add({ ...at, kind: "unparsable", why: r.error });
-            else add({ ...at, kind: "held", inputs: r.held });
-          }
+          const runs = [...ran, ...("error" in more ? [] : more)].map(runOf);
+          for (const i of ruleItems(m.file, f, m.types, runs)) add(i);
         }
       }
     }
@@ -370,6 +369,18 @@ export async function checkSpecs(ctx: DecompileCtx, only?: (file: string, fn: st
     await box.close();
   }
   return { ok: !summary.changed && !summary.failing && !summary.removed && !summary.broken && !summary.unparsable, summary, items };
+}
+
+type RuleRun = { args: Json[]; result?: Json; after?: Json[]; threw: boolean };
+const runOf = (r: Ran): RuleRun => (isThrown(r.got) ? { args: r.args, threw: true } : { args: r.args, result: r.got, ...(r.after ? { after: r.after } : {}), threw: false });
+
+/** checkRules on `runs`, as findings: held, broken (the first call it was false on) or unparsable. */
+function ruleItems(file: string, f: ArcFn, types: ArcType[], runs: RuleRun[]): CheckItem[] {
+  return checkRules(f, types, runs).map((r): CheckItem => {
+    const at = { file, fn: f.name, rule: r.rule };
+    if (r.broken) return { ...at, kind: "broken", args: r.broken.args, now: r.broken.result === undefined ? "throws" : printOutcome({ args: [], expected: r.broken.result, ...(r.broken.after ? { after: r.broken.after } : {}) }), ...(r.error ? { why: r.error } : {}) };
+    return r.error ? { ...at, kind: "unparsable", why: r.error } : { ...at, kind: "held", inputs: r.held };
+  });
 }
 
 /** One line per finding: the text `decompile --check` prints. */

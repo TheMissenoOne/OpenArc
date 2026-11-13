@@ -221,6 +221,120 @@ export function move(p: Pt, dx: number): Pt {
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.strictEqual(read("src/geo.ts"), ts0.replace("{\n  return { x: p.x + dx, y: p.y };\n}", "{\n  return { x: p.x + dx, y: p.y + dx };\n}"));
   assert.strictEqual((await oa(["arc", "status"])).code, 0);
+
+  // ── methods: an instance and a static method (`fn Class.m`, `fn static Class.m`), `export default class` as
+  // `default.m`, and `module.exports = { f() {} }`, in plain JavaScript; then TypeScript, where a body that breaks a
+  // caller in another file is rejected naming it, and a broken rule shows in decompile's state and in `openarc status`
+  dir = mkdtempSync(join(resolve(".."), ".arcsync-check-methods-"));
+  dirs.push(dir);
+  write("package.json", '{"name":"methods","version":"1.0.0","private":true,"type":"module"}');
+  write("src/shop.js", `// A cart.
+export class Cart {
+  constructor(n = 0) { this.n = n; }
+
+  // Adds k to the count.
+  add(k) {
+    return this.n + k;
+  }
+
+  static of(n) {
+    return n * 2;
+  }
+}
+`);
+  write("src/tally.js", "export default class {\n  half(n) {\n    return n / 2;\n  }\n}\n");
+  write("src/legacy.cjs", "module.exports = {\n  inc(n) {\n    return n + 1;\n  },\n};\n");
+  r = await oa(["decompile"]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  {
+    const m = parseArc(read("arc/spec/shop.arc"));
+    assert.deepStrictEqual(m.fns.map((f) => [f.name, !!f.static]), [["Cart.add", false], ["Cart.of", true]]);
+  }
+  specify("arc/spec/shop.arc", "Cart.add", [{ receiver: [1], args: [2], expected: 5 }]);
+  specify("arc/spec/shop.arc", "Cart.of", [{ args: [3], expected: 9 }]);
+  specify("arc/spec/tally.arc", "default.half", [{ receiver: [], args: [8], expected: 2 }]);
+  specify("arc/spec/legacy.arc", "inc", [{ args: [1], expected: 3 }]);
+  r = await oa(["arc", "status"]);
+  assert.match(r.out, /4 functions: ok 0, stale 4, unrunnable 0, no examples 0\n$/, r.out);
+  r = await oa(["arc", "prompt", "shop.Cart.add"]);
+  assert.ok(r.out.includes("Current code:\nexport class Cart {\n  ...\n  add(k) {\n    return this.n + k;\n  }\n  ...\n}\nFailing now:\n  example new (1) . (2) => 5: the code returns 3"), r.out);
+  const shop = read("src/shop.js");
+  r = await oa(["arc", "accept", "shop.Cart.add"], "return this.n + k * 3;");
+  assert.deepStrictEqual([r.code, r.out], [1, "example new (1) . (2) => 5: the code returns 7\n"]);
+  for (const [id, body] of [["shop.Cart.add", "add(k) { return this.n + 2 * k; }"], ["shop.Cart.of", "static of(n) {\n  return n * 3;\n}"]]) {
+    r = await oa(["arc", "accept", id!], body);
+    assert.match(r.err, /repeats the signature/, r.err);
+  }
+  assert.strictEqual(read("src/shop.js"), shop);
+  for (const [id, body] of [["shop.Cart.add", "return this.n + 2 * k;"], ["shop.Cart.of", "return n * 3;"], ["tally.default.half", "return n / 4;"], ["legacy.inc", "return n + 2;"]]) {
+    r = await oa(["arc", "accept", id!], body);
+    assert.strictEqual(r.code, 0, `${id}: ${r.out}${r.err}`);
+  }
+  assert.strictEqual(read("src/shop.js"), shop.replace("return this.n + k;", "return this.n + 2 * k;").replace("return n * 2;", "return n * 3;"));
+  assert.strictEqual(read("src/tally.js"), "export default class {\n  half(n) {\n    return n / 4;\n  }\n}\n");
+  assert.strictEqual(read("src/legacy.cjs"), "module.exports = {\n  inc(n) {\n    return n + 2;\n  },\n};\n");
+  assert.match((await oa(["arc", "status"])).out, /4 functions: ok 4, stale 0/);
+
+  dir = mkdtempSync(join(resolve(".."), ".arcsync-check-tsmethods-"));
+  dirs.push(dir);
+  write("package.json", '{"name":"typed2","version":"1.0.0","private":true,"type":"module"}');
+  write("tsconfig.json", JSON.stringify({ compilerOptions: { target: "es2023", module: "nodenext", moduleResolution: "nodenext", strict: true, noEmit: true, allowImportingTsExtensions: true } }));
+  write("src/geo.ts", `export class Counter {
+  n = 0;
+  inc(by: number): number {
+    return this.n + by;
+  }
+  static zero(x: number): number {
+    return x * 0;
+  }
+}
+
+/** A label for n. */
+export function label(n: number) {
+  return n > 0 ? "pos" : "neg";
+}
+`);
+  write("src/use.ts", `import { label } from "./geo.ts";
+
+export function shout(n: number): string {
+  const l: "pos" | "neg" = label(n);
+  return l.toUpperCase();
+}
+`);
+  r = await oa(["decompile"]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  specify("arc/spec/geo.arc", "Counter.inc", [{ receiver: [], args: [1], expected: 2 }]);
+  specify("arc/spec/geo.arc", "Counter.zero", [{ args: [2], expected: 4 }]);
+  specify("arc/spec/geo.arc", "label", [{ args: [1], expected: "pos" }, { args: [0], expected: "neg" }]);
+  const geo = read("src/geo.ts");
+  // the examples hold, but the inferred return type widens to string and the caller in src/use.ts no longer type checks
+  r = await oa(["arc", "accept", "geo.label"], 'const s: string = n > 0 ? "pos" : "neg";\nreturn s;');
+  assert.deepStrictEqual([r.code, r.out], [1, "TS2322 src/use.ts line 4: Type 'string' is not assignable to type '\"pos\" | \"neg\"'.\n"]);
+  r = await oa(["arc", "accept", "geo.Counter.zero"], 'return x + "";');
+  assert.deepStrictEqual([r.code, r.out], [1, "TS2322 line 7: Type 'string' is not assignable to type 'number'.\n"]);
+  r = await oa(["arc", "accept", "geo.Counter.inc"], "return this.n + by * 3;");
+  assert.deepStrictEqual([r.code, r.out], [1, "example new () . (1) => 2: the code returns 3\n"]);
+  assert.strictEqual(read("src/geo.ts"), geo);
+  for (const [id, body] of [["geo.Counter.inc", "return this.n + by * 2;"], ["geo.Counter.zero", "return x * 2;"]]) {
+    r = await oa(["arc", "accept", id!], body);
+    assert.strictEqual(r.code, 0, `${id}: ${r.out}${r.err}`);
+  }
+  assert.strictEqual(read("src/geo.ts"), geo.replace("return this.n + by;", "return this.n + by * 2;").replace("return x * 0;", "return x * 2;"));
+
+  // a rule the code breaks: `openarc decompile` checks it on the calls it makes, records the function as failing in the
+  // words `--check` prints, and `openarc status` counts it
+  {
+    const m = parseArc(read("arc/spec/geo.arc"));
+    m.fns.find((x) => x.name === "label")!.rules.push({ name: "positive", text: 'result == "pos"' });
+    write("arc/spec/geo.arc", printArc(m));
+  }
+  r = await oa(["decompile"]);
+  assert.match(r.out, /decompiled 2 modules: tested 0, failing 1,/, r.out);
+  const label = (JSON.parse(read(".openarc/decompile.json")) as { modules: Record<string, { fns: Record<string, { status: string; why?: string }> }> }).modules["src/geo.ts"]!.fns.label!;
+  assert.deepStrictEqual([label.status, label.why], ["failing", 'rule positive: broken by (0) -> "neg"']);
+  assert.ok((await oa(["decompile", "--check"])).out.includes('src/geo.ts: label: rule positive: broken by (0) -> "neg"\n'));
+  r = await oa(["status"]);
+  assert.match(r.out, /^total: 2 modules, 4 functions \(.*failing 1.*\); weakest failing$/m, r.out);
 } finally {
   server.close();
   for (const d of dirs) rmSync(d, { recursive: true, force: true });

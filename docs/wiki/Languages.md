@@ -90,11 +90,14 @@ name; `node`, `sandbox-exec` and `container` refuse Go code with `OARC-E092`.
 
 ### `arc accept`
 
-The helper gives the function's body by byte offsets; the new body replaces exactly those bytes, indented with a tab,
+The helper gives the function's (or method's: `fn Counter.Inc` is `func (c *Counter) Inc` or `func (c Counter) Inc`) body by byte offsets; the new body replaces exactly those bytes, indented with a tab,
 and everything outside it stays byte for byte. Then `go build` and `go vet` run on the function's package in a staged
 copy of the module holding the new text (they compile, they run nothing), and only errors the new text adds count,
 printed as the compiler prints them: `src/calc.go:12:13: undefined: missing`. Then the examples and rules run as for
 every language. `arc prompt` names the language (`(Go)`) and shows the current Go function.
+Packages that import the edited one are not built: a Go signature is declared, never inferred from the body, so a
+new body cannot change what a caller compiles against. (TypeScript infers return types, so its accept also type checks
+the files that import the edited one.)
 
 ### Limits
 
