@@ -234,6 +234,16 @@ function isolationNotice(cfg: OpenArcConfig): boolean {
   return true;
 }
 
+/** openarc.config.json, or the defaults when there is none. Invalid: the error is printed and the result is null (exit 1). */
+async function loadConfig(ports: Ports): Promise<OpenArcConfig | null> {
+  const { config, error } = parseConfig(await ports.fs.read("openarc.config.json"));
+  if (error) console.error(error);
+  return error ? null : config;
+}
+
+/** The effective tier's name, part of decompile's reuse key. */
+const tierName = (cfg: OpenArcConfig) => { const t = tierOf(cfg); return "error" in t ? "unavailable" : t.tier; };
+
 function request(root: string, project: { config: OpenArcConfig } | null, ids: string[]): CompileRequest {
   const cfg = project?.config ?? DEFAULT_CONFIG;
   const tier = tierOf(cfg);
@@ -416,6 +426,10 @@ async function arcCmd(root: string, ports: Ports, argv: string[]): Promise<numbe
   const bad = args.length > 1 || (fi >= 0 && (sub !== "accept" || !file || file.startsWith("--"))) || (target?.startsWith("--") && !(sub === "compile" && target === "--stale"))
     || (sub === "status" ? false : !target) || !["status", "prompt", "accept", "compile"].includes(sub ?? "");
   if (bad) return console.error(`openarc: bad-flag\n\n${USAGE}`), 2;
+  const config = await loadConfig(ports);
+  if (!config) return 1;
+  const available = sub === "prompt" || isolationNotice(config); // prompt runs nothing
+  if (!available && sub !== "status") return 1; // status reports what cannot run as unrunnable; accept and compile stop, as `openarc accept` does
   const ctx = { ports, root, out, request: (p: engine.Project | null, ids: string[]) => request(root, p, ids), log: (l: string) => console.error(l) };
   if (sub === "status") {
     const rows = await arcStatus(ctx, target);
@@ -464,6 +478,7 @@ async function viewCmd(root: string, ports: Ports, argv: string[]): Promise<numb
   const out = argv.find((a) => a.startsWith("--out="))?.slice(6) ?? "arc/spec";
   const args = argv.filter((a, i) => a !== "--once" && !a.startsWith("--out=") && (wi < 0 || (i !== wi && i !== wi + 1)));
   if (args.length > 1 || args[0]?.startsWith("-") || (width !== undefined && !(Number.isInteger(width) && width >= 20))) return console.error(`openarc: bad-flag\n\n${USAGE}`), 2;
+  if (!(await loadConfig(ports))) return 1; // its checks and compiles print the sandbox notice themselves
   const ctx = { ports, root, out, request: (p: engine.Project | null, ids: string[]) => request(root, p, ids), log: (l: string) => console.error(l) };
   return view(ctx, { once: argv.includes("--once"), cli: [process.execPath, ...process.execArgv, process.argv[1]!], ...(args[0] ? { module: args[0] } : {}), ...(width ? { width } : {}) });
 }
@@ -484,6 +499,10 @@ async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise
   }
   const has = (f: string) => flags.includes(f);
   const out = flags.find((f) => f.startsWith("--out="))?.slice(6) ?? "arc/spec";
+  const reports = has("--report") || has("--todo"); // they read the last run and run nothing
+  const config = reports ? DEFAULT_CONFIG : await loadConfig(ports);
+  if (!config) return 1;
+  if (!reports) isolationNotice(config); // on E092 too: each function records it as its reason, and nothing runs
   if (has("--check")) {
     const c = await checkSpecs({ ports, root, request: (p, ids) => request(root, p, ids), log: (l) => !has("--json") && console.log(l), dirs: dirs.length ? dirs : ["src"], out, ruleInputs: Number(flags.find((f) => f.startsWith("--rule-inputs="))?.slice(14) ?? 50) });
     const s = c.summary;
@@ -505,7 +524,7 @@ async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise
     const testCmd = flags.find((f) => f.startsWith("--run-tests"));
     state = await decompile({
       ports, root, request: (p, ids) => request(root, p, ids), log: (l) => !has("--json") && console.log(l),
-      dirs: dirs.length ? dirs : ["src"], out, fresh: has("--fresh"), record: !has("--no-record"),
+      dirs: dirs.length ? dirs : ["src"], out, fresh: has("--fresh"), record: !has("--no-record"), tier: tierName(config),
       ...(testCmd ? { testCmd: testCmd.includes("=") ? testCmd.slice(testCmd.indexOf("=") + 1).split(" ") : [process.execPath, "--test"] } : {}),
     });
   }
@@ -826,11 +845,8 @@ async function migrateCmd(root: string, ports: Ports, args: string[]): Promise<n
 /** `openarc doctor`: the selected isolation tier, then one example through it that must also fail to write a file, start
  *  a process and reach the network. No model. Exit 1 if the sandbox is unavailable or lets something through. */
 async function doctor(root: string, ports: Ports): Promise<number> {
-  const { config, error } = parseConfig(await ports.fs.read("openarc.config.json"));
-  if (error) {
-    console.error(error);
-    return 1;
-  }
+  const config = await loadConfig(ports);
+  if (!config) return 1;
   const tools = probeTools();
   const t = tierOf(config);
   console.log(`node ${process.versions.node} (${process.execPath}) on ${process.platform}-${process.arch}`);
