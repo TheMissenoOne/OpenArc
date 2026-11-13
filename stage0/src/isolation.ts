@@ -229,7 +229,7 @@ export interface GoBwrapArgs {
 
 /** bwrap for a Go run (lang/go.ts): the same namespaces as sandbox.buildArgv (no network, own pid and IPC), the stage
  *  read-only, a clean environment, and prlimit on every process (`go`, the compiler, the test binary and its children).
- *  ponytail: Linux only; Go code does not run in the other tiers except unsafe-none */
+ *  macOS: goSandboxExecArgv. Go code runs in no other tier except unsafe-none. */
 export function goBwrapArgv(a: GoBwrapArgs): string[] {
   return [
     "bwrap", "--unshare-all", "--die-with-parent", "--new-session", "--clearenv",
@@ -246,6 +246,29 @@ export function goBwrapArgv(a: GoBwrapArgs): string[] {
     "--chdir", "/work",
     "prlimit", `--as=${a.addressSpaceBytes}`, `--cpu=${a.cpuSeconds}`,
     ...a.args,
+  ];
+}
+
+/** sandbox-exec (macOS) for a Go run: the same reads and writes as goBwrapArgv as far as SBPL goes. No network; writes
+ *  only to the build cache, `tmpDir` (HOME, GOPATH and TMPDIR: bwrap's private /tmp) and /dev; no file contents under
+ *  the home directory except the stage, the Go root, the module cache, the build cache and `tmpDir`. A clean
+ *  environment (`env -i`) and `ulimit -t` for CPU seconds, inherited by every process.
+ *  ponytail: no address-space limit (macOS does not enforce RLIMIT_AS), no PID/IPC namespace, and files outside the home
+ *  directory stay readable as in the JavaScript profile; a pid-namespace equivalent would need a VM or a container */
+export function goSandboxExecArgv(a: GoBwrapArgs & { tmpDir: string }): string[] {
+  const subpaths = (dirs: string[]) => dirs.map((d) => `(subpath ${sbplString(real(d))})`).join(" ");
+  const profile = [
+    "(version 1)",
+    "(allow default)",
+    "(deny network*)",
+    "(deny file-write*)",
+    `(allow file-write* (subpath "/dev") ${subpaths([a.buildCache, a.tmpDir])})`,
+    `(deny file-read-data (subpath ${sbplString(real(homedir()))}))`,
+    `(allow file-read-data ${subpaths([a.stageDir, a.goRoot, ...(a.modCache ? [a.modCache] : []), a.buildCache, a.tmpDir])})`,
+  ].join("\n");
+  return [
+    "sandbox-exec", "-p", profile, "/usr/bin/env", "-i", ...Object.entries(a.env).map(([k, v]) => `${k}=${v}`),
+    "/bin/sh", "-c", `ulimit -t ${a.cpuSeconds} && exec "$@"`, "sh", ...a.args,
   ];
 }
 

@@ -2,10 +2,10 @@
 // .openarc/go/ on first use) reads a module with go/types: exported functions, methods and struct types, doc comments,
 // literal calls and which _test.go files use what. Examples run in a staged copy of the module: a generated in-package
 // test file (lang-go/harness.go) decodes each input into the real parameter types, calls, and prints the JavaScript
-// harness's JSON lines; `go test` runs it in the bwrap tier, network off. Accept splices a body by the helper's byte
+// harness's JSON lines; `go test` runs it in the bwrap or sandbox-exec tier, network off. Accept splices a body by the helper's byte
 // offsets and checks the staged package with `go build` and `go vet`. docs/wiki/Languages.md has the type mapping.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Ports } from "../types.ts";
@@ -13,7 +13,7 @@ import type { ArcFn, ArcType } from "../arc.ts";
 import * as engine from "../engine.ts";
 import { inputsFor } from "../sync.ts";
 import { readHarnessOutput } from "../sandbox.ts";
-import { goBwrapArgv } from "../isolation.ts";
+import { goBwrapArgv, goSandboxExecArgv } from "../isolation.ts";
 import { walk, type DecompileCtx } from "../decompile.ts";
 import type { Edge } from "../levels.ts";
 import type { Call, FoundFn, Json, Lang, Located, Read, ReadModule, Runner } from "./lang.ts";
@@ -33,7 +33,7 @@ let toolchain: Promise<{ go: string; root: string; modCache: string; env: Record
  *  user's environment (this go first on PATH, no toolchain download, no cgo). */
 function goTool(ports: Ports) {
   return (toolchain ??= (async () => {
-    const found = process.env.OPENARC_GO || (process.env.PATH ?? "").split(delimiter).map((d) => join(d, "go")).find((p) => p && existsSync(p));
+    const found = process.env.OPENARC_GO || (process.env.PATH ?? "").split(delimiter).map((d) => join(d, process.platform === "win32" ? "go.exe" : "go")).find((p) => p && existsSync(p));
     if (!found || !existsSync(found)) throw Object.assign(new Error(NO_GO), { name: "OpenArcSetup" });
     const go = realpathSync(found);
     const env = { PATH: [join(go, ".."), process.env.PATH].filter(Boolean).join(delimiter), GOTOOLCHAIN: "local", CGO_ENABLED: "0" };
@@ -52,7 +52,7 @@ function helper(ctx: Ctx): Promise<string> {
     const { go, env } = await goTool(ctx.ports);
     const src = join(HERE, "arcgo");
     const hash = createHash("sha256").update(readFileSync(join(src, "main.go"))).update(readFileSync(join(src, "go.mod"))).update(go).digest("hex").slice(0, 12);
-    const bin = join(ctx.root, ".openarc", "go", `arcgo-${hash}`);
+    const bin = join(ctx.root, ".openarc", "go", `arcgo-${hash}${process.platform === "win32" ? ".exe" : ""}`); // Windows: go build adds .exe
     if (!existsSync(bin)) {
       const r = await ctx.ports.proc.run([go, "build", "-o", bin, "."], 300_000, { cwd: src, env: { ...env, GOFLAGS: "-mod=mod", GOPROXY: "off" } });
       if (r.code !== 0) throw new Error(`building the Go helper failed: ${r.stdout.trim()}`);
@@ -223,14 +223,20 @@ const goErrors = (out: string): string[] => {
 let stages = 0;
 function open(ctx: DecompileCtx, _texts: Map<string, string>): Runner {
   const staged = new Map<string, Promise<string>>(); // per module
-  let req: Promise<ReturnType<DecompileCtx["request"]>> | undefined;
+  let req: Promise<ReturnType<DecompileCtx["request"]>> | undefined, refused = false;
   return {
     observe: async (file, fn, inputs) => {
       const r = await (req ??= engine.parse(ctx.ports, ctx.request(null, []), []).then((p) => ctx.request(p, [])));
       if (r.sandbox.unavailable) return { error: `OARC-E092 sandbox unavailable: ${r.sandbox.unavailable}` };
       const tier = r.sandbox.isolation ?? "bwrap";
-      // ponytail: Go runs in bwrap (Linux) only, or unsandboxed when asked by name; the node tier cannot confine a Go binary
-      if (tier !== "bwrap" && tier !== "unsafe-none") return { error: `OARC-E092 sandbox unavailable: Go code runs in the bwrap tier only (this one is ${tier})` };
+      // the node tier cannot confine a Go binary, and the container tier has no Go toolchain; said once per run, since
+      // decompile only records each function's reason
+      if (tier !== "bwrap" && tier !== "sandbox-exec" && tier !== "unsafe-none") {
+        const why = `Go code needs bwrap (Linux) or sandbox-exec (macOS), not ${tier}`;
+        if (!refused) (refused = true), ctx.log(`OARC-E092 sandbox unavailable: ${why}, so no Go function ran. To run Go code with no sandbox at all, as you, with your files and your network, set "sandbox": { "isolation": "unsafe-none" } in openarc.config.json, then run decompile --fresh`);
+        // the reason decompile keeps (200 characters at most)
+        return { error: `OARC-E092 sandbox unavailable: ${why}; or sandbox.isolation "unsafe-none" (no sandbox), then decompile --fresh` };
+      }
       const info = seen.get(file), f = info?.file.funcs.find((x) => x.name === fn.name);
       if (!info || !f) return { error: `${file}: ${fn.name} is not an exported Go function here` };
       const tool = await goTool(ctx.ports);
@@ -239,17 +245,18 @@ function open(ctx: DecompileCtx, _texts: Map<string, string>): Runner {
       await ctx.ports.fs.write(`${dir}/${pkg ? `${pkg}/` : ""}zz_openarc_test.go`, harness(info.file.package, f));
       await ctx.ports.fs.write(`${dir}/.openarc/plan.json`, JSON.stringify(inputs));
       const cache = join(ctx.root, ".openarc", "go-build"); // the sandbox's own build cache: what runs there never writes the user's
-      mkdirSync(cache, { recursive: true });
+      // HOME, GOPATH and TMPDIR: bwrap's private /tmp, else a fresh one per run, removed after it (absolute on every OS)
+      const tmp = tier === "bwrap" ? "/tmp" : join(ctx.root, ".openarc", "go-tmp", String(++stages));
+      for (const d of [cache, tmp]) if (d !== "/tmp") mkdirSync(d, { recursive: true });
       const stageAbs = join(ctx.root, dir);
-      const sandboxed = tier === "bwrap";
-      const work = sandboxed ? "/work" : stageAbs;
-      const env = { PATH: `${tool.root}/bin:/usr/bin:/bin`, HOME: "/tmp", GOPATH: "/tmp/gopath", GOCACHE: cache, GOMODCACHE: tool.modCache, GOPROXY: "off", GOFLAGS: "-mod=readonly", GOTOOLCHAIN: "local", CGO_ENABLED: "0", GOENV: "off", GOTELEMETRY: "off", OPENARC_PLAN: `${work}/.openarc/plan.json` };
+      const work = tier === "bwrap" ? "/work" : stageAbs;
+      const env = { PATH: [join(tool.root, "bin"), "/usr/bin", "/bin"].join(delimiter), HOME: tmp, TMPDIR: tmp, GOPATH: join(tmp, "gopath"), GOCACHE: cache, GOMODCACHE: tool.modCache, GOPROXY: "off", GOFLAGS: "-mod=readonly", GOTOOLCHAIN: "local", CGO_ENABLED: "0", GOENV: "off", GOTELEMETRY: "off", OPENARC_PLAN: `${work}/.openarc/plan.json` };
       const args = ["test", "-count=1", "-vet=off", "-v", "-run", "^TestOpenarcRun$", `./${pkg}`]; // -vet=off: a vet finding in the code is no reason not to run it
-      const argv = sandboxed
-        ? goBwrapArgv({ stageDir: stageAbs, goRoot: tool.root, modCache: existsSync(tool.modCache) ? tool.modCache : null, buildCache: cache, cpuSeconds: r.sandbox.cpuSeconds, addressSpaceBytes: r.sandbox.addressSpaceBytes, env, args: [join(tool.root, "bin", "go"), ...args] })
-        : [join(tool.root, "bin", "go"), ...args];
+      const sb = { stageDir: stageAbs, goRoot: tool.root, modCache: existsSync(tool.modCache) ? tool.modCache : null, buildCache: cache, cpuSeconds: r.sandbox.cpuSeconds, addressSpaceBytes: r.sandbox.addressSpaceBytes, env, args: [join(tool.root, "bin", "go"), ...args] };
+      const argv = tier === "bwrap" ? goBwrapArgv(sb) : tier === "sandbox-exec" ? goSandboxExecArgv({ ...sb, tmpDir: tmp }) : sb.args;
       // the wall clock: a cold build cache compiles the standard library's test dependencies first; each timeout costs 5 s
-      const ran = await ctx.ports.proc.run(argv, (r.sandbox.cpuSeconds + 120) * 1000 + 6000 * inputs.length, sandboxed ? {} : { cwd: stageAbs, env });
+      const ran = await ctx.ports.proc.run(argv, (r.sandbox.cpuSeconds + 120) * 1000 + 6000 * inputs.length, tier === "bwrap" ? {} : { cwd: stageAbs, env });
+      if (tier !== "bwrap") rmSync(tmp, { recursive: true, force: true });
       if (ran.timedOut) return { error: "OARC-E091 sandbox timed out" };
       const mark = "\x1eopenarc ";
       const out = ran.stdout.split("\n").flatMap((l) => (l.includes(mark) ? [l.slice(l.indexOf(mark) + mark.length)] : [])).join("\n");

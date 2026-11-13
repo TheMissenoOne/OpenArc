@@ -326,7 +326,7 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
           if (!inputs.length && !reqs.length) why = x.cls && !receivers.length ? `no way to construct ${x.cls.name} found` : "no inputs: the parameter types say too little and no call passes literals";
           else {
             let ran = await box.run(file, x.fn, [...reqs.map(flat), ...inputs]);
-            if ("error" in ran && inputs.length) {
+            if ("error" in ran && inputs.length && !ran.error.startsWith("OARC-E092")) { // E092: no sandbox to run in, which no input caused
               // the batch failed as a whole (an input that exits the process or hits the CPU limit): the requirements run
               // alone and decide the status; then each other input runs on its own, so one bad input cannot take the rest
               // down. What brought a lone input down is no throw a caller would see: it is dropped, with a line.

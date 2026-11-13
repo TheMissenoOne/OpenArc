@@ -3,6 +3,8 @@
 // timeout), `--run-tests`, `--check` with rules, `openarc arc status|prompt|accept`, `status`, and a folder holding both a
 // Go module and JavaScript decompiled in one run. Nothing in the project's code may change except an accepted body.
 // Without a Go toolchain (OPENARC_GO, else go on PATH) it checks only the message that says so, and skips the rest.
+// Every OS: the node tier refuses Go code with how to proceed. Windows (no OS sandbox): that refusal and an unsafe-none
+// run, then stops. Linux (bwrap) and macOS (sandbox-exec): everything, plus what the sandbox denies the code.
 // Run: OPENARC_GO=/path/to/go node --no-warnings tests/go.check.ts
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
@@ -13,9 +15,10 @@ import "../src/decompile.ts"; // first: the language modules import it back
 import type { DecompileCtx } from "../src/decompile.ts";
 import { langOf } from "../src/lang/lang.ts";
 import type { Ports } from "../src/types.ts";
+import { DEFAULT_CONFIG } from "../src/config.ts";
 
 const MAIN = resolve("src/main.ts");
-const go = process.env.OPENARC_GO || (process.env.PATH ?? "").split(delimiter).map((d) => join(d, "go")).find((p) => existsSync(p));
+const go = process.env.OPENARC_GO || (process.env.PATH ?? "").split(delimiter).map((d) => join(d, process.platform === "win32" ? "go.exe" : "go")).find((p) => existsSync(p));
 const roots: string[] = [];
 const project = (files: Record<string, string>) => {
   const dir = mkdtempSync(join(resolve(".."), ".go-check-"));
@@ -183,6 +186,29 @@ try {
     process.exit(0);
   }
 
+  // ── the node tier cannot confine a Go binary: nothing runs, and the refusal says how to proceed
+  {
+    const t = project({ "go.mod": "module example.com/t\n\ngo 1.22\n", "src/t.go": "package t\n\n// Inc adds one.\nfunc Inc(n int) int {\n\treturn n + 1\n}\n" });
+    const tier = (isolation: string) => t.write("openarc.config.json", JSON.stringify({ ...DEFAULT_CONFIG, sandbox: { isolation } }));
+    tier("node");
+    const r = t.oa(["decompile"]);
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /^OARC-E092 sandbox unavailable: Go code needs bwrap \(Linux\) or sandbox-exec \(macOS\), not node, so no Go function ran\. To run Go code with no sandbox at all, as you, with your files and your network, set "sandbox": \{ "isolation": "unsafe-none" \} in openarc\.config\.json, then run decompile --fresh$/m);
+    assert.strictEqual(r.out.match(/OARC-E092/g)?.length, 1, "said once per run");
+    assert.match(r.out, /observed 0, described 1,/);
+    const kept = (JSON.parse(t.read(".openarc/decompile.json")) as { modules: Record<string, { fns: Record<string, { why: string }> }> }).modules["src/t.go"]!.fns.Inc!.why;
+    assert.strictEqual(kept, 'OARC-E092 sandbox unavailable: Go code needs bwrap (Linux) or sandbox-exec (macOS), not node; or sandbox.isolation "unsafe-none" (no sandbox), then decompile --fresh');
+    if (process.platform === "win32") {
+      tier("unsafe-none");
+      const u = t.oa(["decompile", "--fresh"]);
+      assert.match(u.out, /observed 1, described 0,/, u.out);
+      assert.ok(t.read("arc/spec/t.arc").includes("  observed (0) => 1\n"), t.read("arc/spec/t.arc"));
+      console.log("go.check ok: Windows has no sandbox for Go: checked the node tier's refusal and an unsafe-none run only");
+      for (const d of roots) rmSync(d, { recursive: true, force: true });
+      process.exit(0);
+    }
+  }
+
   const p = project({ "go.mod": "module example.com/calc\n\ngo 1.22\n", "src/calc.go": CALC, "src/loop.go": LOOP, "src/calc_test.go": TESTS });
   const { oa, read, write } = p;
   const code = () => ["go.mod", "src/calc.go", "src/loop.go", "src/calc_test.go"].map(read).join("\0");
@@ -327,6 +353,41 @@ try {
   assert.strictEqual(r.code, 0, r.out);
   assert.ok(flat.read("arc/spec/add.arc").startsWith('module add from "add.go"\n\nfn Add(a: Int, b: Int): Int\n  "Add adds."\n  observed (2, 3) => 5\n'), flat.read("arc/spec/add.arc"));
   assert.deepStrictEqual((JSON.parse(flat.read(".openarc/decompile.json")) as typeof state).modules["add.go"]!.fns.Add!.tests, ["add_test.go"]);
+  // ── what the sandbox denies the code: a project file outside the stage, writing the stage, the network
+  {
+    const s = project({ "go.mod": "module example.com/probe\n\ngo 1.22\n", "secret.txt": "s\n", "src/probe.go": "" });
+    s.write("src/probe.go", `package probe
+
+import (
+	"net"
+	"os"
+	"time"
+)
+
+// Probe reports what the code may do.
+func Probe() string {
+	out := "read:yes"
+	if _, err := os.ReadFile(${JSON.stringify(join(s.dir, "secret.txt"))}); err != nil {
+		out = "read:no"
+	}
+	if os.WriteFile("probe.txt", []byte("x"), 0o644) == nil {
+		out += " write:yes"
+	} else {
+		out += " write:no"
+	}
+	if c, err := net.DialTimeout("tcp", "1.1.1.1:53", 2*time.Second); err == nil {
+		c.Close()
+		out += " net:yes"
+	} else {
+		out += " net:no"
+	}
+	return out
+}
+`);
+    r = s.oa(["decompile"]);
+    assert.strictEqual(r.code, 0, r.out);
+    assert.ok(s.read("arc/spec/probe.arc").includes('  observed () => "read:no write:no net:no"\n'), s.read("arc/spec/probe.arc"));
+  }
   console.log("go.check ok");
 } finally {
   for (const d of roots) rmSync(d, { recursive: true, force: true });

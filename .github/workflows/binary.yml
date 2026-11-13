@@ -1,0 +1,60 @@
+name: Standalone download
+
+# Builds the standalone download (stage0/tools/build-binary.ts) on every platform the release ships and runs it with no
+# node on the PATH (stage0/tests/binary.check.ts). ci.yml calls it on every push and uploads nothing; release.yml calls
+# it with the tag and upload: true, then attaches the artifacts to the GitHub Release.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "the tag to build; empty: the commit that triggered the caller"
+        type: string
+        default: ""
+      upload:
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # linux-x64, linux-arm64, darwin-arm64, darwin-x64, win32-x64
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: stage0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 25.x # the runtime the download ships
+
+      - name: Tag matches the package version
+        if: inputs.ref != ''
+        env:
+          TAG: ${{ inputs.ref }}
+        run: |
+          v="v$(node -p 'require("./core/package.json").version')"
+          [ "$v" = "$TAG" ] || { echo "tag $TAG but core/package.json says $v"; exit 1; }
+
+      - name: Install
+        run: npm ci
+
+      # builds build/openarc-<version>-<os>-<arch>.tar.gz (.zip on Windows), then runs it with no node on the PATH
+      - name: Build and check the standalone download
+        run: OPENARC_BINARY_CHECK=1 node --no-warnings tests/binary.check.ts
+
+      - uses: actions/upload-artifact@v4
+        if: inputs.upload
+        with:
+          name: openarc-${{ matrix.os }}
+          path: |
+            stage0/build/openarc-*.tar.gz
+            stage0/build/openarc-*.zip
+          if-no-files-found: error
