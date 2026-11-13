@@ -138,6 +138,7 @@ assert.deepEqual(blocks(parse(REF)).map((b) => [b.id, b.kind, b.line]), [
 const confirmBlock = blocks(parse(REF)).find((b) => b.id === "Checkout.confirm")!.node;
 assert.deepEqual([confirmBlock.params, confirmBlock.paramList, confirmBlock.type], ["cart: Cart, card: Card", [{ name: "cart", type: "Cart" }, { name: "card", type: "Card" }], "Order"]);
 assert.deepEqual(blocks(parse("feature F { g() { x; } h(a, b: [Int]) { y; } }")).map((b) => [b.id, b.node.paramList, b.node.type]), [["F", undefined, undefined], ["F.g", [], undefined], ["F.h", [{ name: "a" }, { name: "b", type: "[Int]" }], undefined]]);
+assert.deepEqual(blocks(parse("feature F { Cart.add(n: Num): Num {} }")).map((b) => [b.id, b.kind, b.node.name]), [["F", "feature", "F"], ["F.Cart.add", "function", "Cart.add"]], "a method keeps its class in its name");
 
 // ── classification: exact forms, and sentences that only start like one ──
 const k = (text: string, parent: Parameters<typeof classify>[1] = "function") => classify(text, parent);

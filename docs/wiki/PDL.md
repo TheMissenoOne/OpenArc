@@ -161,6 +161,26 @@ openarc pdl format [--check] [files...]
 
 A typical loop for an agent: `pdl status` to see what moved, `pdl show <id>` for one block, edit the code or the design until they agree, `pdl check`, then `pdl sync <id>`.
 
+## Starting from existing code
+
+```
+openarc pdl draft <file-or-dir>... [--name <Name>] [--json]
+```
+
+`pdl draft` writes the first design file for code that already exists, with no model: a skeleton that an agent or a person then fills in and prunes. Each argument becomes one feature, named in PascalCase after the file (without its extension) or the directory (`--name` sets it, for a single argument), and written to `arc/features/<kebab-name>.arc`. When that file exists, or a design file already holds a feature of that name, nothing is written and the command exits 1, naming the file.
+
+What the skeleton holds, in this order:
+
+- a comment above the feature asking for what the code does not say (why it exists, its limits, plans). Comments are where people write natural language for the agent;
+- one purpose sentence, the first sentence of the file's or package's doc comment, else the placeholder `describe what this is for;`;
+- `source "<path>";` (a directory ends in `/`);
+- for each file a language adapter reads (TypeScript, JavaScript, Go), one function block per exported function and public method of an exported class (`Class.method`, id `Feature.Class.method`), in source order, with its parameters, the types the adapter knows (not `Any`, not long ones) and the return type. The body is the first sentence of the doc comment, or empty (`{}`). When the feature covers more than one file, each block has its own `source` line, so its status follows only that file;
+- for each file no adapter reads, one comment: `// <path>: no reader for this language yet; describe its operations here.`
+
+A directory skips test files, `node_modules`, `.git`, `.openarc`, `dist`, `build`, `arc`, dot-files, and files that are not code (docs, data, styles). A file named on the command line is always drafted, unless it is a test file. A doc sentence becomes a valid sentence statement: `;` turns into `,`, braces into parentheses, and when that still does not parse as one plain sentence, quotes, brackets and comment openers are dropped; a sentence that would read as an exact form (`uses cache`) is left out.
+
+The draft never invents `state`, `rule`, `screen` or `assume` blocks: those are design choices for whoever fills it in. It passes `pdl check`, is already in `pdl format` layout, and every block starts as `new` in `pdl status`. The command prints the file, the number of function blocks and the design size as a percentage of the code (`--json`: `{drafted: [{file, feature, functions, ratio}], next}`). Then: fill the purpose, delete the blocks a reader would assume, add notes, and `pdl sync` once design and code agree.
+
 ## Not in this slice
 
 - Nothing evaluates `check` or `example` yet: they are kept as text.
