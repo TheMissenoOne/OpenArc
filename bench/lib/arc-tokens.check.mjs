@@ -97,24 +97,28 @@ try {
   let rep = await report(jsonl);
   assert.equal(rep.code, 0);
   assert.match(rep.out, /tokens \(input \+ output\): B 1050, A 550/);
-  assert.match(rep.out, /correct steps: B 3, A 1/);
+  assert.match(rep.out, /correct function-steps: B 5, A 3 \(tolerance 1: 10% of 5 function-steps/, "5 function-steps: 10% rounds to 0, the minimum is 1");
+  assert.match(rep.out, /correct steps \(cumulative, secondary, not in the rule\): B 3, A 1/);
   assert.match(rep.out, /verdict: not supported/);
+  // hand-made: 3 steps of 7 exercises each, 21 function-steps, tolerance 2; ok[i] = exercises passing at step i
   const made = (name, a, b) => {
     const f = join(dir, `${name}.jsonl`);
-    writeFileSync(f, [0, 1, 2].flatMap((i) => [["A", a], ["B", b]].map(([arm, [tok, ok]]) => JSON.stringify({ arm, i, step: `s${i}`, prompt: tok[i], eval: 0, calls: 1, correct: ok[i], wallMs: 1000 }))).join("\n") + "\n");
+    const heldOut = (n) => Object.fromEntries([...Array(7).keys()].map((k) => [`e${k}`, { allPass: k < n }]));
+    writeFileSync(f, [0, 1, 2].flatMap((i) => [["A", a], ["B", b]].map(([arm, [tok, ok]]) => JSON.stringify({ arm, i, step: `s${i}`, prompt: tok[i], eval: 0, calls: 1, heldOut: heldOut(ok[i]), correct: ok[i] === 7, wallMs: 1000 }))).join("\n") + "\n");
     return f;
   };
-  const B = [[400, 300, 300], [true, true, true]];
-  rep = await report(made("win", [[200, 200, 200], [true, true, false]], B));
+  const B = [[400, 300, 300], [7, 7, 7]];
+  rep = await report(made("win", [[200, 200, 200], [7, 7, 6]], B));
   assert.match(rep.out, /A\/B 0\.600/);
+  assert.match(rep.out, /correct function-steps: B 21, A 20 \(tolerance 2: 10% of 21/);
   assert.match(rep.out, /verdict: supported/);
-  rep = await report(made("edge", [[300, 200, 200], [true, true, false]], B));
-  assert.match(rep.out, /A\/B 0\.700[\s\S]*verdict: supported/, "exactly 30% fewer is enough");
-  rep = await report(made("loss-tokens", [[300, 250, 250], [true, true, true]], B));
+  rep = await report(made("edge", [[300, 200, 200], [7, 6, 6]], B));
+  assert.match(rep.out, /A\/B 0\.700[\s\S]*B 21, A 19 [\s\S]*correct steps \(cumulative, secondary, not in the rule\): B 3, A 1[\s\S]*verdict: supported/, "exactly 30% fewer and exactly the tolerance below is enough; the cumulative count does not decide");
+  rep = await report(made("loss-tokens", [[300, 250, 250], [7, 7, 7]], B));
   assert.match(rep.out, /A\/B <= 0\.70 no[\s\S]*verdict: not supported/);
-  rep = await report(made("loss-correct", [[100, 100, 100], [true, false, false]], B));
-  assert.match(rep.out, /A correct >= B correct - 1 no[\s\S]*verdict: not supported/);
-  writeFileSync(join(dir, "partial.jsonl"), JSON.stringify({ arm: "B", i: 0, step: "s0", prompt: 1, eval: 1, calls: 1, correct: true, wallMs: 1 }) + "\n");
+  rep = await report(made("loss-correct", [[100, 100, 100], [7, 6, 5]], B));
+  assert.match(rep.out, /B 21, A 18 [\s\S]*A function-steps >= B function-steps - 2 no[\s\S]*verdict: not supported/, "one past the tolerance loses");
+  writeFileSync(join(dir, "partial.jsonl"), JSON.stringify({ arm: "B", i: 0, step: "s0", prompt: 1, eval: 1, calls: 1, heldOut: { e0: { allPass: true } }, correct: true, wallMs: 1 }) + "\n");
   rep = await report(join(dir, "partial.jsonl"));
   assert.equal(rep.code, 1);
   assert.match(rep.out, /verdict: not computable/);
