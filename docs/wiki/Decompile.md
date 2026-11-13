@@ -85,6 +85,8 @@ Types: `Int`, `Float`, `Num`, `Bool`, `Str`, `Any`, `Void`, `Null`, `[T]`, `{ k:
 
 What you write in an `.arc` file stays. A later run keeps a function's intent, rules and `example` lines, re-records its `observed` lines, and puts the lines in this order: intent, `hold`, `example`, `observed`, rules.
 
+That holds also when the code stops exporting a function (renamed, made private, or skipped). Its block stays in the `.arc` file, after the functions the code has, when it holds anything written by hand: an `example` line, a rule, `hold`, or an intent that is not the code's own comment (an intent whose origin the state file does not record counts as written by hand). A block with only `observed` lines (and the code's comment as intent) is dropped. Either way decompile prints one line: `src/r.js: b is not in the code; its block stays in the .arc file: it has lines written by hand`. `--check` and `arc status` report a kept function as `removed` and `unrunnable` until the code has it again or you delete the block.
+
 ## Status
 
 Each function gets one status, stored in `.openarc/decompile.json`:

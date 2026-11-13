@@ -44,8 +44,9 @@ export interface DecompileCtx {
  *  A state file from before `observed` says `examples` for observed: report() reads it as such. */
 export type FnStatus = "tested" | "failing" | "specified" | "observed" | "described" | "bare";
 /** origins: per observed line (JSON of its args), where the input came from: `call <file>:<line>`, `recorded <test file>`,
- *  `types` or `kept`. */
-export interface FnState { status: FnStatus; tests: string[]; why?: string; origins?: Record<string, string> }
+ *  `types` or `kept`. comment: when the intent lines are the code's own comment, their hash (else the intent was written
+ *  in the .arc file, or is unknown). */
+export interface FnState { status: FnStatus; tests: string[]; why?: string; origins?: Record<string, string>; comment?: string }
 export interface ModuleState { hash: string; arc: string; fns: Record<string, FnState>; skipped: Record<string, string> }
 export interface DecompileState { version: 1; modules: Record<string, ModuleState> }
 export const STATE_FILE = ".openarc/decompile.json";
@@ -294,6 +295,7 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
       for (const x of m.found) {
         const name = x.fn.name, was = old?.fns.find((f) => f.name === name), had = known?.fns[name];
         // what a person (or the host agent) wrote in the .arc file stays: intent, rules, hold, and its `example` lines
+        const comment = x.fn.intent.length ? sha(x.fn.intent.join("\n")) : undefined;
         if (was?.intent.length) x.fn.intent = was.intent;
         if (was) Object.assign(x.fn, { rules: was.rules, ...(was.hold ? { hold: true } : {}) });
         const reqs = (was?.examples ?? []).filter((e) => !e.observed), olds = (was?.examples ?? []).filter((e) => e.observed);
@@ -356,9 +358,18 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
         }
         why = failed ?? testWhy ?? why;
         const status: FnStatus = failed || ran === "failing" ? "failing" : ran ?? (reqs.length ? "specified" : x.fn.examples.length ? "observed" : x.fn.intent.length ? "described" : "bare");
-        fns[name] = { status, tests: mapped, ...(why ? { why } : {}), ...(origins ? { origins } : {}) };
+        fns[name] = { status, tests: mapped, ...(why ? { why } : {}), ...(origins ? { origins } : {}), ...(comment && comment === sha(x.fn.intent.join("\n")) ? { comment } : {}) };
       }
-      const next: ArcModule = { name: arcFile.slice(ctx.out.length + 1, -".arc".length).replaceAll("/", "."), file, intent: old?.intent ?? [], types: m.types, fns: m.found.map((x) => x.fn) };
+      // a function of the .arc file the code no longer has (unexported, renamed, skipped): its block stays when it holds
+      // anything written by hand, an intent that is not the code's comment included; one with observations only goes
+      const inCode = new Set(m.found.map((x) => x.fn.name));
+      const kept = (old?.fns ?? []).filter((f) => {
+        if (inCode.has(f.name)) return false;
+        const hand = f.examples.some((e) => !e.observed) || !!f.rules.length || !!f.hold || (!!f.intent.length && known?.fns[f.name]?.comment !== sha(f.intent.join("\n")));
+        ctx.log(`${file}: ${f.name} is not in the code; ${hand ? "its block stays in the .arc file: it has lines written by hand" : "its block is dropped from the .arc file: it had observations only"}`);
+        return hand;
+      });
+      const next: ArcModule = { name: arcFile.slice(ctx.out.length + 1, -".arc".length).replaceAll("/", "."), file, intent: old?.intent ?? [], types: m.types, fns: [...m.found.map((x) => x.fn), ...kept] };
       const out = printArc(next);
       if (out !== before) await ports.fs.write(arcFile, out);
       state.modules[file] = { hash, arc: arcFile, fns, skipped: m.skipped };

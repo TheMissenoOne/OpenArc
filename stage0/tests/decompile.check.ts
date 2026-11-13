@@ -493,6 +493,36 @@ try {
     assert.strictEqual(p.get("arc/spec/index.arc"), srcArc);
     assert.ok(p.get("arc/spec/lib/index.arc").startsWith('module lib.index from "lib/index.js"\n\nfn dec(n: Num): Num\n'));
   }
+
+  // a function the code no longer exports: its block stays when it holds lines written by hand, else it goes
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"gone","version":"1.0.0","private":true,"type":"module"}');
+    const fn = (name: string, doc = "") => `/** ${doc}\n *  @param {number} n */\nexport function ${name}(n) { return n; }\n`;
+    p.put("src/r.js", fn("a", "Code comment a.") + fn("b") + fn("c") + fn("d", "Code comment d.") + fn("e") + fn("f"));
+    assert.strictEqual(p.run("decompile").code, 0);
+    const block = (name: string) => new RegExp(`\\nfn ${name}\\(n: Num\\): Num\\n(  .*\\n)*`).exec(p.get("arc/spec/r.arc"))?.[0];
+    p.put("arc/spec/r.arc", p.get("arc/spec/r.arc")
+      .replace(/(fn b\(n: Num\): Num\n)  observed/, "$1  example")
+      .replace("fn c(n: Num): Num\n", 'fn c(n: Num): Num\n  "Written by hand."\n')
+      .replace('  "Code comment d."\n', '  "Edited by hand."\n')
+      .replace("fn f(n: Num): Num\n", "fn f(n: Num): Num\n  hold\n"));
+    assert.strictEqual(p.run("decompile").code, 0);
+    const written = Object.fromEntries(["b", "c", "d", "f"].map((n) => [n, block(n)]));
+    assert.ok(Object.values(written).every(Boolean) && block("a") && block("e"), p.get("arc/spec/r.arc"));
+    p.put("src/r.js", p.get("src/r.js").replaceAll("export function", "function") + "export const keep = () => 1;\n");
+    const r = p.run("decompile");
+    for (const [n, kept] of [["a", false], ["b", true], ["c", true], ["d", true], ["e", false], ["f", true]] as const)
+      assert.ok(r.out.includes(`src/r.js: ${n} is not in the code; ${kept ? "its block stays in the .arc file: it has lines written by hand" : "its block is dropped from the .arc file: it had observations only"}\n`), r.out);
+    assert.deepStrictEqual(Object.fromEntries(["b", "c", "d", "f"].map((n) => [n, block(n)])), written);
+    assert.ok(!block("a") && !block("e") && p.get("arc/spec/r.arc").startsWith('module r from "src/r.js"\n\nfn keep(): Num\n'), p.get("arc/spec/r.arc"));
+    // --check and arc status say they are gone
+    const c = p.run("decompile", "--check");
+    assert.strictEqual(c.code, 1, c.out);
+    assert.ok(["b", "c", "d", "f"].every((n) => c.out.includes(`src/r.js: ${n} removed: the code no longer exports it\n`)), c.out);
+    assert.match(p.run("arc", "status", "r.b").out, /^r\.b: unrunnable: the code no longer exports it$/m);
+  }
 } finally {
   for (const d of roots) rmSync(d, { recursive: true, force: true });
 }
