@@ -134,6 +134,8 @@ Copy `integrations/opencode/openarc.ts` to `.opencode/plugin/`, and `integration
 
 All three share the `openarc-sheet` skill, which tells the agent to read the one-line status and single regions, never the whole file.
 
+To have the agent itself write a region's body, with no backend, and to stop it from editing compiler-owned code by hand, see [[Host Agent Mode]].
+
 ## Commands
 
 | Command | Does |

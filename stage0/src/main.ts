@@ -29,6 +29,8 @@ import { parseArc, type ArcModule } from "./arc.ts";
 import { ARCH_FILE, CONCEPT_FILE, checkArch, checkConcept, deriveArch, formatReport, importsOf, parseArch, parseConcept, printArch, printConcept, projectName, sources, updateArch, type Arch, type Concept } from "./levels.ts";
 import { LINT_USAGE, lintCommand } from "./lint.ts";
 import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools, type TierChoice } from "./isolation.ts";
+import { guardHook, hostPorts, hostPrompt, hostRefusal } from "./host.ts";
+import { parseCodeOutput } from "./output-format.ts";
 
 const MESSAGES: Record<string, string> = {
   "OARC-W001": "'@openarc:' text that is not a valid marker",
@@ -308,6 +310,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>]] [--fresh] [--json] | decompile --report|--todo [--json]
        openarc arch [dirs...] [--check] [--json] | concept [--check] [--json]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
+       openarc prompt <id> [--json] | accept <id> [--file <path>] [--json] | guard [files...] [--json] | guard --hook
        ${LINT_USAGE}`;
 
 /** What git doesn't need from .openarc/: adds the lines that are missing. True when it wrote. */
@@ -318,6 +321,77 @@ async function ensureIgnored(ports: Ports): Promise<boolean> {
   if (!missing.length) return false;
   await ports.fs.write(".openarc/.gitignore", (had ?? "") + (had && !had.endsWith("\n") ? "\n" : "") + missing.join("\n") + "\n");
   return true;
+}
+
+/** `openarc prompt|accept <id>`: host-agent mode, the running coding agent writes the body (src/host.ts). No model call:
+ *  prompt is read-only; accept runs compile.run for this one region with the body as its only, cached, reply. */
+async function hostCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
+  const [cmd, ...rest] = argv;
+  const json = rest.includes("--json");
+  const fi = rest.indexOf("--file");
+  const file = fi >= 0 ? rest[fi + 1] : undefined;
+  const args = rest.filter((a, i) => a !== "--json" && (fi < 0 || (i !== fi && i !== fi + 1)));
+  const id = args[0];
+  if (!id || args.length > 1 || id.startsWith("--") || (fi >= 0 && (cmd === "prompt" || !file || file.startsWith("--")))) {
+    console.error(`openarc: ${id ? "bad-flag" : "missing-id"}\n\n${USAGE}`);
+    return 2;
+  }
+  const ds: Diagnostic[] = [];
+  const project = cmd === "prompt" ? await analyzeOffline(ports, root, ds) : await engine.parse(ports, request(root, null, []), ds);
+  if (cmd === "accept") await engine.analyze(ports, request(root, project, []), project, ds); // fingerprints: the cache path
+  ds.filter((d) => d.code.startsWith("OARC-E")).forEach((d) => console.error(fmt(d)));
+  const refused = hostRefusal(project, id, await ports.fs.read(SHEET_FILE));
+  if (refused) return console.error(refused), 1;
+  if (cmd === "prompt") {
+    const { instruction, ...out } = hostPrompt(project, id);
+    console.log(json ? JSON.stringify(out) : `${instruction}\n\n${out.prompt}`);
+    return 0;
+  }
+  const r = project.regions.find((x) => x.id === id)!;
+  const reject = (problems: string[]) => (json ? console.log(JSON.stringify({ ok: false, id, problems })) : problems.forEach((l) => console.log(l)), 1);
+  if (r.state === "compiler" && !r.stale) return reject([`${id} is verified and up to date: nothing to accept (change its spec first)`]);
+  if (!r.fingerprint) return reject([`${id}: no fingerprint, the default backend's model digest is unavailable (see the error above)`]);
+  if (!file && process.stdin.isTTY) return reject(["pipe the body on stdin, or pass --file <path>"]);
+  const reply = parseCodeOutput(readFileSync(file ? resolve(process.cwd(), file) : 0, "utf8"));
+  if (!reply.ok) return reject([`OARC-E081 ${reply.diagnostic.detail}`]);
+  clearStaleLock(root, (l) => console.error(l));
+  if (!isolationNotice(project.config)) return 1;
+  const seen = { served: false, problems: [] as string[] };
+  const res = await run(hostPorts(ports, id, engine.cachePathOf(r), reply, seen), request(root, project, [id]));
+  if (res.exit === 0 && seen.served) return console.log(json ? JSON.stringify({ ok: true, id, file: r.file }) : `accepted ${id}`), 0;
+  // the E082 that closes the one attempt repeats its first problem
+  const errors = res.diagnostics.filter((d) => d.code.startsWith("OARC-E") && !(seen.problems.length && d.code === "OARC-E082"));
+  const problems = [...seen.problems, ...errors.map(fmt)];
+  return reject(problems.length ? problems : [`${id}: not committed`]);
+}
+
+/** `openarc guard [files...]`: compiler-owned regions edited by hand (W060, or markers removed: E062), from the offline
+ *  analysis. `--hook`: the pre-edit check for agent hooks (src/host.ts guardHook): exit 2 blocks, anything else passes. */
+async function guardCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
+  if (argv[0] === "--hook" && argv.length === 1) {
+    let why: string | null = null;
+    try {
+      why = guardHook(root, readFileSync(0, "utf8"));
+    } catch { /* never block what it doesn't understand */ }
+    if (why) process.stderr.write(why + "\n");
+    return why ? 2 : 0;
+  }
+  const json = argv.includes("--json");
+  const files = argv.filter((a) => a !== "--json");
+  if (files.some((a) => a.startsWith("--"))) {
+    console.error(`openarc: bad-flag\n\n${USAGE}`);
+    return 2;
+  }
+  const only = files.map((a) => relative(root, resolve(process.cwd(), a)).split(sep).join("/"));
+  const ds: Diagnostic[] = [];
+  const project = await analyzeOffline(ports, root, ds);
+  const edited = ds
+    .filter((d) => d.code === "OARC-W060" || (d.code === "OARC-E062" && project.manifest.regions[d.id!]?.ownership === "compiler"))
+    .filter((d) => !only.length || only.includes(d.file!))
+    .map((d) => ({ id: d.id!, file: d.file!, what: d.code === "OARC-W060" ? "edited by hand" : "markers removed" }));
+  if (json) console.log(JSON.stringify({ ok: !edited.length, edited }));
+  else for (const e of edited) console.log(`${e.file}: ${e.id} is compiler-owned and was ${e.what}; edit its spec and recompile, or \`openarc freeze ${e.id}\` to own it`);
+  return edited.length ? 1 : 0;
 }
 
 /** `openarc decompile [dirs...]`: code to `.arc` specs, nothing in the code changes. `--report` and `--todo` read the last run. */
@@ -754,6 +828,8 @@ async function main(argv: string[]): Promise<number> {
   if (argv[0] === "adopt" || argv[0] === "sync") return syncCmd(root, ports, argv);
   if (argv[0] === "decompile") return decompileCmd(root, ports, argv.slice(1));
   if (argv[0] === "arch" || argv[0] === "concept") return (argv[0] === "arch" ? archCmd : conceptCmd)(root, ports, argv.slice(1));
+  if (argv[0] === "prompt" || argv[0] === "accept") return hostCmd(root, ports, argv);
+  if (argv[0] === "guard") return guardCmd(root, ports, argv.slice(1));
   if (argv[0] === "lint") { // spec rules, offline: no model, no sandbox (src/lint.ts)
     const args = argv.slice(1).map((a, i, all) => (/[/\\]|\.tsx?$/.test(a) && all[i - 1] !== "--profile" && all[i - 1] !== "--format" ? relative(root, resolve(process.cwd(), a)).split(sep).join("/") : a));
     return lintCommand(ports, request(root, null, []), args, { out: (l) => console.log(l), err: (l) => console.error(l), message: (c) => MESSAGES[c] ?? "" });

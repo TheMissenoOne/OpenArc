@@ -582,7 +582,7 @@ function nextLevel(p: Project, r: RegionInfo, level: ContextLevel, backend: Back
   return next;
 }
 
-const initialLevel = (p: Project, r: RegionInfo): ContextLevel =>
+export const initialLevel = (p: Project, r: RegionInfo): ContextLevel =>
   Math.max(p.config.regions?.[r.id]?.contextLevel ?? p.config.compilation.context.initialLevel, r.kind === "block" ? 1 : 0) as ContextLevel;
 
 /** stage 0 = default (or per-region) backend, stage 1 = fallback backend */
@@ -1650,7 +1650,7 @@ interface BatchShare { raw: string; tokens: Tokens | null; promptHash: string; i
 
 /** Regions that can share a request: plain function regions (no sketch, UI, class member or nested blocks). */
 const batchable = (r: RegionInfo) => r.kind === "function" && !r.spec.sketch && !r.spec.ui && !r.spec.codeFirst?.cls && r.childSpans.length === 0;
-const cachePathOf = (r: RegionInfo) => `.openarc/cache/${r.fingerprint.replace("sha256:", "")}.json`;
+export const cachePathOf = (r: RegionInfo) => `.openarc/cache/${r.fingerprint.replace("sha256:", "")}.json`;
 
 /** The context of a batched request: the sections every member has verbatim, once (their type closures merged into
  *  one Types section), then one "## Region <id>" section per member with the rest, then the shared Rules. */

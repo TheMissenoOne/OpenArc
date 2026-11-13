@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const PANE = {
   plugin: 'openarc',
@@ -13,7 +13,8 @@ const STATUS = JSON.stringify({
 const sent: string[] = []
 type Spawn = (argv: string[]) => { chunks: string[]; code: number }
 const ok: Spawn = () => ({ chunks: [`compiling: a.b\n${STATUS}\n`], code: 0 })
-const engine = (on: any, spawned: string[][], prompts: string[], hasConfig: boolean, run: Spawn = ok) => {
+const engine = (on: any, spawned: string[][], prompts: string[], hasConfig: boolean, run: Spawn = ok, env: Record<string, string> = {}) => {
+  mock.env(on, env)
   on('command.register', (_: unknown, e: { name: string }) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.status', () => ({ value: undefined }))
@@ -86,4 +87,35 @@ test('a failed adoption does not start the watcher', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /adopt failed/ }))?.text).toContain('exit 1')
   await ui.unmount()
+})
+
+test('an edit of a compiler-owned region is denied with the guard\'s reason; anything else goes through', async ($, on) => {
+  const runs: { argv: readonly string[]; stdin?: string }[] = []
+  let answer: () => { exitCode: number; stdout: string; stderr: string } = () => ({ exitCode: 2, stdout: '', stderr: 'm.f is compiler-owned: edit its spec\n' })
+  engine(on, [], [], true)
+  on('process.run', (_: unknown, e: { argv: readonly string[]; init?: { stdin?: string } }) => {
+    runs.push({ argv: e.argv, stdin: e.init?.stdin })
+    return { value: { ...answer(), isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  let ran = 0
+  on('tool.call', () => (ran++, { result: { ok: true } }) as never)
+  const edit = { tool: 'Edit', file_path: '/p/src/m.ts', old_string: 'return 1;', new_string: 'return 2;' } as never
+  expect(await $.tool.call(edit)).toEqual({ deny: 'm.f is compiler-owned: edit its spec' })
+  expect(ran).toBe(0)
+  expect(runs[0]!.argv).toEqual(['node_modules/.bin/openarc', 'guard', '--hook'])
+  expect(JSON.parse(runs[0]!.stdin!)).toEqual({ tool_name: 'Edit', tool_input: { file_path: '/p/src/m.ts', old_string: 'return 1;', new_string: 'return 2;' } })
+  answer = () => ({ exitCode: 0, stdout: '', stderr: '' })
+  await $.tool.call(edit)
+  expect(ran).toBe(1)
+  answer = () => { throw new Error('ENOENT') } // no binary: never blocks
+  await $.tool.call(edit)
+  expect(ran).toBe(2)
+})
+
+test('OPENARC_BIN names the binary', async ($, on) => {
+  const spawned: string[][] = []
+  engine(on, spawned, [], true, ok, { OPENARC_BIN: '/opt/openarc/bin/openarc' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect(spawned[0]![0]).toBe('/opt/openarc/bin/openarc')
 })
