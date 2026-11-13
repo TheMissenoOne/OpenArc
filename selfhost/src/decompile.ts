@@ -240,7 +240,7 @@ function arcPaths(ctx: DecompileCtx, files: string[], owner: Map<string, string>
   const own = new Map<string, string>();
   for (const [arc, src] of [...owner].sort()) if (!own.has(src)) own.set(src, arc);
   const tries = new Map(files.filter((f) => !own.has(f)).map((f) => {
-    const dir = ctx.dirs.find((d) => inDir(d, f))!, rel = dir === "." ? f : f.slice(dir.length + 1), stem = rel.replace(CODE, "");
+    const dir = ctx.dirs.filter((d) => inDir(d, f)).sort((a, b) => (b === "." ? 0 : b.length) - (a === "." ? 0 : a.length))[0]!, rel = dir === "." ? f : f.slice(dir.length + 1), stem = rel.replace(CODE, "");
     return [f, [...new Set([stem, `${dir}/${stem}`, rel, `${dir}/${rel}`].map((x) => `${ctx.out}/${x.replace(/^\.\//, "")}.arc`))]];
   }));
   const level = new Map([...tries.keys()].map((f) => [f, 0]));
@@ -255,11 +255,15 @@ function arcPaths(ctx: DecompileCtx, files: string[], owner: Map<string, string>
   return new Map(files.map((f) => [f, own.get(f) ?? at(f)]));
 }
 
+/** A source path as a run writes it now: an earlier `decompile ./src` left `./src/a.js` in module lines and the state. */
+const plain = (f: string) => f.replace(/^(\.\/+)+/, "");
+
 /** The state, and how many re-recorded observations differ from the line that was in the file. */
 export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { changed: number }> {
   const { ports } = ctx;
   const { read, texts, instrumented } = await scan(ctx);
   const prev = JSON.parse((await ports.fs.read(STATE_FILE)) ?? "null") as DecompileState | null;
+  if (prev) prev.modules = Object.fromEntries(Object.entries(prev.modules).map(([f, m]) => [plain(f), m]));
   const state: DecompileState = { version: 1, modules: {} };
   const box = sandbox(ctx, texts), importsOf = await importClosure(ports, texts);
   // the existing .arc files, and the source each one's module line names
@@ -267,7 +271,7 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
   for (const f of await walk(ports, ctx.out, [], (n) => n.endsWith(".arc"))) {
     const t = (await ports.fs.read(f)) ?? "", line = /^module\s+[\w$.-]+\s+from\s+(".*")$/m.exec(t);
     arcTexts.set(f, t);
-    try { if (line) owner.set(f, JSON.parse(line[1]!) as string); } catch { /* parseArc says what is wrong with it */ }
+    try { if (line) owner.set(f, plain(JSON.parse(line[1]!) as string)); } catch { /* parseArc says what is wrong with it */ }
   }
   const arcOf = arcPaths(ctx, [...read.keys()], owner);
   let changed = 0;
@@ -422,8 +426,9 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
   // the modules of other dirs stay while their source exists; in the scanned dirs only this run's
   const others: Record<string, ModuleState> = {};
   for (const [f, m] of Object.entries(prev?.modules ?? {})) if (!state.modules[f] && !ctx.dirs.some((d) => inDir(d, f)) && (await ports.fs.read(f)) !== null) others[f] = m;
-  await ports.fs.write(STATE_FILE, JSON.stringify({ ...state, modules: { ...others, ...state.modules } }, null, 1) + "\n");
-  return { ...state, changed };
+  const modules = { ...others, ...state.modules };
+  await ports.fs.write(STATE_FILE, JSON.stringify({ ...state, modules }, null, 1) + "\n");
+  return { ...state, modules, changed };
 }
 
 /** One finding of `decompile --check`. `was`/`now`: outcomes as `.arc` prints them. */

@@ -5,7 +5,7 @@
 // harness's JSON lines; `go test` runs it in the bwrap or sandbox-exec tier, network off. Accept splices a body by the helper's byte
 // offsets and checks the staged package with `go build` and `go vet`. docs/wiki/Languages.md has the type mapping.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Ports } from "../types.ts";
@@ -246,8 +246,9 @@ function open(ctx: DecompileCtx, _texts: Map<string, string>): Runner {
       await ctx.ports.fs.write(`${dir}/.openarc/plan.json`, JSON.stringify(inputs));
       const cache = join(ctx.root, ".openarc", "go-build"); // the sandbox's own build cache: what runs there never writes the user's
       // HOME, GOPATH and TMPDIR: bwrap's private /tmp, else a fresh one per run, removed after it (absolute on every OS)
-      const tmp = tier === "bwrap" ? "/tmp" : join(ctx.root, ".openarc", "go-tmp", String(++stages));
-      for (const d of [cache, tmp]) if (d !== "/tmp") mkdirSync(d, { recursive: true });
+      mkdirSync(join(ctx.root, ".openarc", "go-tmp"), { recursive: true });
+      mkdirSync(cache, { recursive: true });
+      const tmp = tier === "bwrap" ? "/tmp" : mkdtempSync(join(ctx.root, ".openarc", "go-tmp", "r-")); // unique across processes too
       const stageAbs = join(ctx.root, dir);
       const work = tier === "bwrap" ? "/work" : stageAbs;
       const env = { PATH: [join(tool.root, "bin"), "/usr/bin", "/bin"].join(delimiter), HOME: tmp, TMPDIR: tmp, GOPATH: join(tmp, "gopath"), GOCACHE: cache, GOMODCACHE: tool.modCache, GOPROXY: "off", GOFLAGS: "-mod=readonly", GOTOOLCHAIN: "local", CGO_ENABLED: "0", GOENV: "off", GOTELEMETRY: "off", OPENARC_PLAN: `${work}/.openarc/plan.json` };

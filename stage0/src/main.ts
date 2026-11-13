@@ -773,6 +773,7 @@ function oracleFlags(args: string[]): { count?: number; seed?: number } | null {
 
 /** `openarc check <id> --oracle <module>#<export> [--runs <n>] [--seed <n>]`: differential test against a reference implementation (engine.oracleCheck). */
 async function check(root: string, ports: Ports, args: string[]): Promise<number> {
+  if (!(await loadConfig(ports))) return 1;
   if (args.includes("--mutants")) return mutantsCmd(root, ports, args);
   const [id, flag, oracle, ...rest] = args;
   const opts = oracleFlags(rest);

@@ -15,6 +15,7 @@ if (process.platform === "win32") {
 }
 const MAIN = resolve("src/main.ts");
 let dir = "";
+let onAsk: (() => void) | null = null; // runs once, while the model "works"
 const oa = (args: string[], stdin = "") => new Promise<{ code: number | null; out: string; err: string }>((done) => {
   const c = spawn(process.execPath, ["--no-warnings", MAIN, ...args], { cwd: dir, stdio: ["pipe", "pipe", "pipe"] });
   let out = "", err = "";
@@ -41,6 +42,7 @@ const server = createServer((req, res) => {
   req.on("data", (b) => (body += b));
   req.on("end", () => {
     asked.push(JSON.stringify(JSON.parse(body)));
+    onAsk?.(), (onAsk = null);
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: replies.shift() ?? "return 0;" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
   });
@@ -192,6 +194,14 @@ add(2, 3); double(3); push([1], 2); need(4); same(1);
   assert.strictEqual(r.code, 1, r.out);
   assert.match(r.out, /^calc\.double: not compiled after 2 attempts\n  example \(3\) => 13: the code returns 2\n$/);
   assert.deepStrictEqual([asked.length, read("src/calc.js")], [4, src4]);
+  // the file edited while the model works: the reply is not spliced into the earlier text, the edit stays
+  onAsk = () => write("src/calc.js", `${src4}// mine\n`);
+  replies.push("return 13;");
+  r = await oa(["arc", "compile", "calc.double"]);
+  assert.strictEqual(r.code, 1, r.out);
+  assert.match(r.out, /src\/calc\.js changed while the model worked/);
+  assert.deepStrictEqual([asked.length, read("src/calc.js")], [5, `${src4}// mine\n`]);
+  write("src/calc.js", src4);
 
   // ── TypeScript ──
   dir = mkdtempSync(join(resolve(".."), ".arcsync-check-ts-"));
@@ -243,7 +253,7 @@ export class Cart {
 }
 `);
   write("src/tally.js", "export default class {\n  half(n) {\n    return n / 2;\n  }\n}\n");
-  write("src/legacy.cjs", "module.exports = {\n  inc(n) {\n    return n + 1;\n  },\n};\n");
+  write("src/legacy.cjs", "function inc() {\n  return 0;\n}\nmodule.exports = {\n  inc(n) {\n    return n + 1 + inc();\n  },\n};\n");
   r = await oa(["decompile"]);
   assert.strictEqual(r.code, 0, r.out + r.err);
   {
@@ -272,7 +282,7 @@ export class Cart {
   }
   assert.strictEqual(read("src/shop.js"), shop.replace("return this.n + k;", "return this.n + 2 * k;").replace("return n * 2;", "return n * 3;"));
   assert.strictEqual(read("src/tally.js"), "export default class {\n  half(n) {\n    return n / 4;\n  }\n}\n");
-  assert.strictEqual(read("src/legacy.cjs"), "module.exports = {\n  inc(n) {\n    return n + 2;\n  },\n};\n");
+  assert.strictEqual(read("src/legacy.cjs"), "function inc() {\n  return 0;\n}\nmodule.exports = {\n  inc(n) {\n    return n + 2;\n  },\n};\n"); // the exported one, not the private function
   assert.match((await oa(["arc", "status"])).out, /4 functions: ok 4, stale 0/);
 
   dir = mkdtempSync(join(resolve(".."), ".arcsync-check-tsmethods-"));

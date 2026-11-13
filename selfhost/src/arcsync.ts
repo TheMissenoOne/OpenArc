@@ -208,6 +208,8 @@ export async function arcCompile(ctx: ArcCtx, ids: string[], ask: (system: strin
       let reply: string;
       try { reply = await ask(p.system, repair ? `${p.prompt}\n\n${repair}` : p.prompt); }
       catch (e) { previous = { body: "", problems: [`the model request failed: ${(e as Error).message}`] }; break; }
+      // the source was read before the request: a file edited meanwhile is not overwritten with the earlier text
+      if ((await ctx.ports.fs.read(got.entry.mod.file)) !== got.text) { previous = { body: "", problems: [`${got.entry.mod.file} changed while the model worked; nothing was written, run it again`] }; break; }
       const res = await arcAccept(ctx, id, reply, got);
       if ("ok" in res && res.ok) { previous = null; break; }
       const body = readReply(reply);

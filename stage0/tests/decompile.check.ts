@@ -626,7 +626,7 @@ try {
     cfg("bwarp");
     const doctor = p.run("doctor");
     assert.strictEqual(doctor.code, 1);
-    for (const args of [["decompile"], ["decompile", "--check"], ["decompile", "--fresh", "--json"], ["arc", "status"], ["arc", "prompt", "x.inc"], ["arc", "compile", "x.inc"], ["view", "--once"]])
+    for (const args of [["decompile"], ["decompile", "--check"], ["decompile", "--fresh", "--json"], ["arc", "status"], ["arc", "prompt", "x.inc"], ["arc", "compile", "x.inc"], ["view", "--once"], ["check", "x.inc", "--oracle", "y"], ["check", "--mutants"]])
       assert.deepStrictEqual(p.run(...args), doctor, args.join(" "));
     const split = (...args: string[]) => spawnSync(process.execPath, ["--no-warnings", MAIN, ...args], { cwd: p.root, encoding: "utf8" });
     cfg("node");
@@ -642,6 +642,23 @@ try {
     assert.match(r.out, /OARC-W047/);
     assert.match(r.out, /^src\/x\.js: 1 functions$/m, r.out);
     assert.match(p.run("decompile").out, /^src\/x\.js: 1 functions \(unchanged\)$/m);
+  }
+  // nested dirs name a file by the most specific one, whatever the order; a module line an earlier run wrote as
+  // `./src/a.js` still owns its file; the returned state counts the modules of other dirs too
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"nest","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/a.js", "/** @param {number} n */\nexport function inc(n) { return n + 1; }\n");
+    p.put("lib/b.js", "/** @param {number} n */\nexport function dec(n) { return n - 1; }\n");
+    assert.strictEqual(p.run("decompile", ".", "src").code, 0);
+    assert.deepStrictEqual([p.state().modules["src/a.js"]!.arc, p.state().modules["lib/b.js"]!.arc], ["arc/spec/a.arc", "arc/spec/lib/b.arc"]);
+    p.put("arc/spec/a.arc", p.get("arc/spec/a.arc").replace('from "src/a.js"', 'from "./src/a.js"').replace("observed (", "example ("));
+    const r = p.run("decompile", "src", "--json");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.strictEqual(p.state().modules["src/a.js"]!.arc, "arc/spec/a.arc");
+    assert.match(p.get("arc/spec/a.arc"), /^  example \(/m); // the requirement was read from the file it was in
+    assert.deepStrictEqual(Object.keys((JSON.parse(r.out.slice(r.out.indexOf("{"))) as { modules: object }).modules).sort(), ["lib/b.js", "src/a.js"]);
   }
 } finally {
   for (const d of roots) rmSync(d, { recursive: true, force: true });

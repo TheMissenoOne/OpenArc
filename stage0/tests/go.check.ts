@@ -8,7 +8,8 @@
 // Run: OPENARC_GO=/path/to/go node --no-warnings tests/go.check.ts
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { parseArc, printArc } from "../src/arc.ts";
 import "../src/decompile.ts"; // first: the language modules import it back
@@ -393,7 +394,9 @@ func Probe() string {
 `);
     r = s.oa(["decompile"]);
     assert.strictEqual(r.code, 0, r.out);
-    assert.ok(s.read("arc/spec/probe.arc").includes('  observed () => "read:no write:no net:no"\n'), s.read("arc/spec/probe.arc"));
+    // sandbox-exec denies reads under the home directory only: a checkout outside it leaves the file beside it readable
+    const reads = process.platform === "darwin" && !realpathSync(s.dir).startsWith(realpathSync(homedir()) + "/") ? "yes" : "no";
+    assert.ok(s.read("arc/spec/probe.arc").includes(`  observed () => "read:${reads} write:no net:no"\n`), s.read("arc/spec/probe.arc"));
   }
   // the arc commands reach it: status, a stale example, accept (a wrong body leaves the file as it was), and view
   flat.write("arc/spec/add.arc", flat.read("arc/spec/add.arc").replace("  observed (2, 3) => 5\n", "  example (2, 3) => 5\n  example (1, 1) => 3\n"));

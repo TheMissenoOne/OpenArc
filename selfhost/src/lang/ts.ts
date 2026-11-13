@@ -349,14 +349,15 @@ export function locate(sf: ts.SourceFile, name: string): ts.FunctionLikeDeclarat
     const m = classOf(sf, name.slice(0, dot))?.members.find((x) => ts.isMethodDeclaration(x) && !!x.body && !!x.name && !ts.isComputedPropertyName(x.name) && x.name.text === name.slice(dot + 1));
     return m as ts.MethodDeclaration | undefined;
   }
-  let inObject: ts.FunctionLikeDeclaration | undefined; // `module.exports = { f() {} }`: only when nothing above binds f
+  // what `exports` binds wins over a local declaration of the same name: it is the one decompile read
+  let inObject: ts.FunctionLikeDeclaration | undefined, local: ts.FunctionLikeDeclaration | undefined;
   for (const st of sf.statements) {
     if (ts.isFunctionDeclaration(st)) {
       const isDefault = !!st.modifiers?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword);
-      if (st.body && (name === "default" ? isDefault : st.name?.text === name)) return st;
+      if (st.body && (name === "default" ? isDefault : st.name?.text === name)) local ??= st;
     } else if (ts.isVariableStatement(st)) {
       const d = st.declarationList.declarations.find((v) => ts.isIdentifier(v.name) && v.name.text === name);
-      if (d) return fnOf(d);
+      if (d) local ??= fnOf(d);
     } else if (ts.isExportAssignment(st) && !st.isExportEquals && name === "default") return fnOf(st);
     else if (ts.isExpressionStatement(st) && ts.isBinaryExpression(st.expression) && st.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
       const l = st.expression.left, r = unwrap(st.expression.right);
@@ -369,7 +370,7 @@ export function locate(sf: ts.SourceFile, name: string): ts.FunctionLikeDeclarat
       }
     }
   }
-  return inObject;
+  return inObject ?? local;
 }
 
 const parse = (file: string, text: string) => ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, isTs(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS);
