@@ -216,6 +216,30 @@ async function importClosure(ports: Ports, texts: Map<string, string>): Promise<
   };
 }
 
+/** Each source's `.arc` file. A source that an existing `.arc` file names on its module line keeps that file (the module
+ *  line is the authority). The others get `<out>/<path in its dir, no extension>.arc`; when sources would share a file,
+ *  or one would take a file another module's line claims, each of them gets a longer path: its dir in front
+ *  (`lib/index`), then also its extension (`a.js`), then both. Depends on the sources and the `.arc` files, not on the
+ *  order they are listed in. owner: per existing `.arc` file, the source its module line names. */
+function arcPaths(ctx: DecompileCtx, files: string[], owner: Map<string, string>): Map<string, string> {
+  const own = new Map<string, string>();
+  for (const [arc, src] of [...owner].sort()) if (!own.has(src)) own.set(src, arc);
+  const tries = new Map(files.filter((f) => !own.has(f)).map((f) => {
+    const dir = ctx.dirs.find((d) => inDir(d, f))!, rel = dir === "." ? f : f.slice(dir.length + 1), stem = rel.replace(CODE, "");
+    return [f, [...new Set([stem, `${dir}/${stem}`, rel, `${dir}/${rel}`].map((x) => `${ctx.out}/${x.replace(/^\.\//, "")}.arc`))]];
+  }));
+  const level = new Map([...tries.keys()].map((f) => [f, 0]));
+  const at = (f: string) => tries.get(f)![level.get(f)!]!;
+  for (let bumped = true; bumped;) {
+    bumped = false;
+    const n = new Map<string, number>();
+    for (const f of tries.keys()) n.set(at(f), (n.get(at(f)) ?? 0) + 1);
+    for (const f of [...tries.keys()].filter((f) => (n.get(at(f))! > 1 || owner.has(at(f))) && level.get(f)! < tries.get(f)!.length - 1)) level.set(f, level.get(f)! + 1), bumped = true;
+  }
+  for (const [f, l] of level) if (l) ctx.log(`${f}: its .arc file is ${at(f)}: ${tries.get(f)![0]} would be another module's too`);
+  return new Map(files.map((f) => [f, own.get(f) ?? at(f)]));
+}
+
 /** The state, and how many re-recorded observations differ from the line that was in the file. */
 export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { changed: number }> {
   const { ports } = ctx;
@@ -223,6 +247,14 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
   const prev = JSON.parse((await ports.fs.read(STATE_FILE)) ?? "null") as DecompileState | null;
   const state: DecompileState = { version: 1, modules: {} };
   const box = sandbox(ctx, texts), importsOf = await importClosure(ports, texts);
+  // the existing .arc files, and the source each one's module line names
+  const arcTexts = new Map<string, string>(), owner = new Map<string, string>();
+  for (const f of await walk(ports, ctx.out, [], (n) => n.endsWith(".arc"))) {
+    const t = (await ports.fs.read(f)) ?? "", line = /^module\s+[\w$.-]+\s+from\s+(".*")$/m.exec(t);
+    arcTexts.set(f, t);
+    try { if (line) owner.set(f, JSON.parse(line[1]!) as string); } catch { /* parseArc says what is wrong with it */ }
+  }
+  const arcOf = arcPaths(ctx, [...read.keys()], owner);
   let changed = 0;
   const testRuns = new Map<string, boolean>();
   let rec: Awaited<ReturnType<typeof recorder>> | null = null;
@@ -243,10 +275,12 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
     if (ctx.testCmd && ctx.record) rec = await recorder(ctx, instrumented, new Set([...read].flatMap(([f, m]) => m.found.flatMap((x) => [`${f}\0${x.fn.name}`, ...(x.cls ? [`${f}\0new ${x.cls.name}`] : [])]))));
     for (const [file, m] of read) {
       const text = texts.get(file) ?? "";
-      const dir = ctx.dirs.find((d) => inDir(d, file))!;
-      const stem = (dir === "." ? file : file.slice(dir.length + 1)).replace(CODE, "");
-      const arcFile = `${ctx.out}/${stem}.arc`;
-      const before = await ports.fs.read(arcFile);
+      const arcFile = arcOf.get(file)!, before = arcTexts.get(arcFile) ?? null;
+      if (owner.has(arcFile) && owner.get(arcFile) !== file) { // every longer path is taken too: never another module's file
+        ctx.log(`${arcFile}: it is ${owner.get(arcFile)}'s .arc file; ${file} left out`);
+        if (prev?.modules[file]) state.modules[file] = prev.modules[file];
+        continue;
+      }
       let old: ArcModule | null = null;
       try { old = before === null ? null : parseArc(before); } catch (e) { ctx.log(`${arcFile}: ${(e as Error).message}; left as it is`); state.modules[file] = prev?.modules[file] ?? { hash: "", arc: arcFile, fns: {}, skipped: {} }; continue; }
       const testsOf = (x: FoundFn) => x.tests;
@@ -324,7 +358,7 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
         const status: FnStatus = failed || ran === "failing" ? "failing" : ran ?? (reqs.length ? "specified" : x.fn.examples.length ? "observed" : x.fn.intent.length ? "described" : "bare");
         fns[name] = { status, tests: mapped, ...(why ? { why } : {}), ...(origins ? { origins } : {}) };
       }
-      const next: ArcModule = { name: stem.replaceAll("/", "."), file, intent: old?.intent ?? [], types: m.types, fns: m.found.map((x) => x.fn) };
+      const next: ArcModule = { name: arcFile.slice(ctx.out.length + 1, -".arc".length).replaceAll("/", "."), file, intent: old?.intent ?? [], types: m.types, fns: m.found.map((x) => x.fn) };
       const out = printArc(next);
       if (out !== before) await ports.fs.write(arcFile, out);
       state.modules[file] = { hash, arc: arcFile, fns, skipped: m.skipped };

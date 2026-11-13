@@ -50,6 +50,8 @@ The state file records where each observation's input came from (`origins`, keye
 
 One file per module, under `arc/spec/` by default (`--out=<dir>` changes it), mirroring the source tree. The levels above it live next to that folder: see [[Levels]].
 
+The module's name is its path inside its source dir without the extension, with `/` as `.`: `src/deep/screen.js` is `deep.screen` in `arc/spec/deep/screen.arc`. When two source files would get the same name (`src/index.ts` and `lib/index.ts` with `decompile src lib`, or `src/a.ts` beside `src/a.js`), or a name whose file another module's `.arc` file already holds, each of them gets a longer one: the source dir in front (`lib.index` in `arc/spec/lib/index.arc`), and if that still collides, the extension kept (`a.js` in `arc/spec/a.js.arc`). Decompile prints one line per lengthened name: `lib/index.js: its .arc file is arc/spec/lib/index.arc: arc/spec/index.arc would be another module's too`. The result depends only on the files, not on the order of the dirs. An `.arc` file belongs to the source its `module ... from "<file>"` line names: a later run keeps a module in the file that names it, and never writes or reads another module's file as its own.
+
 ```
 module survival from "src/survival.js"
 

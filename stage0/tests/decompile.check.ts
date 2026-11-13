@@ -433,6 +433,66 @@ try {
     assert.match(r.out, /^src\/m\.js: dbl\(-1\) changed: was -2, now -3$/m);
     assert.deepStrictEqual([dbl().status, dbl().why], ["failing", "example (1) => 2: the code returns 3"]);
   }
+
+  // colliding module names: each gets a longer one, the same whatever the order; the others keep theirs
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"twins","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/index.js", "/** @param {number} n */\nexport function inc(n) { return n + 1; }\n");
+    p.put("lib/index.js", "/** @param {number} n */\nexport function dec(n) { return n - 1; }\n");
+    p.put("src/a.js", "export const fromJs = () => 1;\n");
+    p.put("src/a.ts", "export const fromTs = (): number => 2;\n");
+    p.put("src/other.js", "export const other = () => 3;\n");
+    let r = p.run("decompile", "lib", "src");
+    assert.strictEqual(r.code, 0, r.out);
+    for (const l of ["lib/index.js: its .arc file is arc/spec/lib/index.arc: arc/spec/index.arc would be another module's too", "src/index.js: its .arc file is arc/spec/src/index.arc: arc/spec/index.arc would be another module's too", "src/a.js: its .arc file is arc/spec/a.js.arc: arc/spec/a.arc would be another module's too", "src/a.ts: its .arc file is arc/spec/a.ts.arc: arc/spec/a.arc would be another module's too"]) assert.ok(r.out.includes(`${l}\n`), r.out);
+    const heads = () => Object.fromEntries(Object.entries(p.state().modules).map(([f, m]) => [f, `${m.arc}: ${p.get(m.arc).split("\n")[0]}`]));
+    const want = {
+      "lib/index.js": 'arc/spec/lib/index.arc: module lib.index from "lib/index.js"', "src/index.js": 'arc/spec/src/index.arc: module src.index from "src/index.js"',
+      "src/a.js": 'arc/spec/a.js.arc: module a.js from "src/a.js"', "src/a.ts": 'arc/spec/a.ts.arc: module a.ts from "src/a.ts"', "src/other.js": 'arc/spec/other.arc: module other from "src/other.js"',
+    };
+    assert.deepStrictEqual(heads(), want);
+    assert.ok(!existsSync(join(p.root, "arc/spec/index.arc")) && !existsSync(join(p.root, "arc/spec/a.arc")));
+    // the other order, from scratch: the same files
+    rmSync(join(p.root, "arc"), { recursive: true });
+    rmSync(join(p.root, ".openarc"), { recursive: true });
+    assert.strictEqual(p.run("decompile", "src", "lib").code, 0);
+    assert.deepStrictEqual(heads(), want);
+    // a second run: each module keeps its file, nothing is lengthened again
+    r = p.run("decompile", "src", "lib");
+    assert.ok(!r.out.includes("would be another"), r.out);
+    assert.match(r.out, /^lib\/index\.js: 1 functions \(unchanged\)$/m);
+    // the longer names address the modules everywhere
+    p.put("arc/spec/lib/index.arc", p.get("arc/spec/lib/index.arc").replace("  observed (1) => 0\n", "  example (1) => 0\n"));
+    r = p.run("arc", "status", "lib.index");
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /^lib\.index\.dec: ok$/m);
+    assert.match(p.run("arc", "status", "a.js").out, /^a\.js\.fromJs: no examples$/m);
+    const accept = spawnSync(process.execPath, ["--no-warnings", MAIN, "arc", "accept", "lib.index.dec"], { cwd: p.root, encoding: "utf8", input: "return n - 1;" });
+    assert.deepStrictEqual([accept.status, accept.stdout], [0, "accepted lib.index.dec\n"]);
+    assert.match(p.run("decompile", "src", "lib").out, /^lib\/index\.js: 1 functions$/m);
+    assert.ok(p.run("decompile", "--report").out.includes("lib/index.js: tested 0, failing 0, specified 1,"));
+    assert.ok(p.run("decompile", "--todo").out.split("\n").includes("arc/spec/lib/index.arc: dec"));
+    assert.strictEqual(p.run("decompile", "--check", "src", "lib").code, 0);
+    assert.strictEqual(p.run("arch", "src", "lib").code, 0);
+    assert.match(p.run("status").out, /^total: 5 modules, 5 functions/m);
+  }
+
+  // one dir at a time: the second run never takes (or reads as its own) the .arc file of a module from the first
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"steps","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/index.js", "/** @param {number} n */\nexport function inc(n) { return n + 1; }\n");
+    p.put("lib/index.js", "/** @param {number} n */\nexport function dec(n) { return n - 1; }\n");
+    assert.strictEqual(p.run("decompile", "src").code, 0);
+    const srcArc = p.get("arc/spec/index.arc");
+    const r = p.run("decompile", "lib");
+    assert.ok(r.out.includes("lib/index.js: its .arc file is arc/spec/lib/index.arc: arc/spec/index.arc would be another module's too\n"), r.out);
+    assert.strictEqual(p.get("arc/spec/index.arc"), srcArc);
+    assert.ok(p.get("arc/spec/lib/index.arc").startsWith('module lib.index from "lib/index.js"\n\nfn dec(n: Num): Num\n'));
+  }
 } finally {
   for (const d of roots) rmSync(d, { recursive: true, force: true });
 }
