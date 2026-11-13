@@ -9,6 +9,10 @@ const version = JSON.parse(readFileSync(`${root}/core/package.json`, "utf8")).ve
 rmSync(`${root}/build/dist`, { recursive: true, force: true }); // keep earlier *.tgz: other checkouts install them by path
 // Run TypeScript's own entry through node: node_modules/.bin/tsc is a shell shim that Windows can't exec directly.
 execFileSync(process.execPath, [`${root}/node_modules/typescript/bin/tsc`, "-p", "tsconfig.build.json"], { stdio: "inherit" });
+// tsc compiles only .ts: the argument recorder decompile loads into test processes is plain .mjs, next to it in dist/core
+for (const f of readdirSync(`${root}/core`).filter((x) => x.endsWith(".mjs"))) cpSync(`${root}/core/${f}`, `${root}/build/dist/core/${f}`);
+// Go (src/lang/go.ts): the helper's sources, built on first use, and the harness template, at the same relative place
+cpSync(`${root}/lang-go`, `${root}/build/dist/lang-go`, { recursive: true });
 const tsVersion = JSON.parse(readFileSync(`${root}/node_modules/typescript/package.json`, "utf8")).version as string;
 writeFileSync(`${root}/build/package.json`, JSON.stringify({
   name: "open-arc",
@@ -29,7 +33,7 @@ writeFileSync(`${root}/build/package.json`, JSON.stringify({
     "./palette/*": { types: "./dist/src/palette/*.d.ts", default: "./dist/src/palette/*.js" },
     "./palette/loginPage": null, // a .tsx React component, not compiled into dist: copy it from palette/ instead
   },
-  files: ["dist", "README.md", "palette"],
+  files: ["dist", "README.md", "palette", "integrations"],
   engines: { node: ">=23.6" },
   dependencies: { typescript: `^${tsVersion}` },
   publishConfig: { access: "public" },
@@ -41,4 +45,8 @@ rmSync(`${root}/build/palette`, { recursive: true, force: true });
 mkdirSync(`${root}/build/palette/fakes`, { recursive: true });
 for (const f of readdirSync(`${root}/src/palette`)) cpSync(`${root}/src/palette/${f}`, `${root}/build/palette/${f}`);
 for (const f of readdirSync(`${root}/tests/fakes`).filter((x) => x.startsWith("palette."))) cpSync(`${root}/tests/fakes/${f}`, `${root}/build/palette/fakes/${f}`);
+// What `openarc setup` installs, read at run time from ../../integrations/ next to dist/src/setup.js
+rmSync(`${root}/build/integrations`, { recursive: true, force: true });
+cpSync(`${root}/../integrations/claude-code/skills`, `${root}/build/integrations/claude-code/skills`, { recursive: true });
+cpSync(`${root}/../integrations/opencode/openarc.ts`, `${root}/build/integrations/opencode/openarc.ts`);
 console.log(`built open-arc@${version} -> build/`);

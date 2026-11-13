@@ -11,14 +11,13 @@
 // node evolve-multi.mjs --dataset <ts-bench> --work <dir> --oa <open-arc-x.y.z.tgz> --matrix matrix-evolve-multi.json --out <dir> --seed n
 // --pack <n>: instead of the scenario above, every exercise of BENCH_EXERCISES dealt by seed into files of n functions, 5 files per step;
 //             with --rounds, one function added to every file per step instead (single-region prompts, no batches)
-import { createServer } from "node:http";
 import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { readFile, writeFile, rm, mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { parseArgs } from "node:util";
-import { EXERCISES, packSteps, instructions, split, run, heldOut, runTests, prepareTestDir, exampleLine, exampleTest } from "./lib/common.mjs";
-import { specSource, configFor, sketchFile } from "./lib/adapter.mjs";
-import { chat, extractCode } from "./lib/baseline.mjs";
+import { EXERCISES, packSteps, split, run, prepareTestDir } from "./lib/common.mjs";
+import { specSource, configFor } from "./lib/adapter.mjs";
+import { INTENT_CHANGE, HAND, SCENARIO, fnsOf, touched, grow, handPresent, applyHand, memAvailMb, meterProxy, score as scoreIn, stepD } from "./lib/multi.mjs";
 
 const { values: a } = parseArgs({ options: {
   dataset: { type: "string" }, work: { type: "string" }, oa: { type: "string" }, matrix: { type: "string" }, out: { type: "string" },
@@ -42,49 +41,14 @@ const oaModules = join(oaDir, "node_modules");
 
 // --- token meter (OpenAI-compatible usage)
 let meter;
-createServer(async (req, res) => {
-  const chunks = [];
-  for await (const c of req) chunks.push(c);
-  try {
-    const up = await fetch(new URL(backend.baseUrl).origin + req.url, { method: req.method, headers: { "content-type": "application/json" }, body: req.method === "GET" ? undefined : Buffer.concat(chunks) });
-    const text = await up.text();
-    res.writeHead(up.status, { "content-type": up.headers.get("content-type") ?? "application/json" }).end(text);
-    if (/\/chat\/completions/.test(req.url)) try { const j = JSON.parse(text); meter.calls++; meter.prompt += j.usage?.prompt_tokens ?? 0; meter.eval += j.usage?.completion_tokens ?? 0; } catch {}
-  } catch (e) { if (!res.headersSent) res.writeHead(502); res.end(String(e)); }
-}).listen(port, "127.0.0.1");
-const memAvailMb = () => +readFileSync("/proc/meminfo", "utf8").match(/MemAvailable:\s+(\d+)/)[1] / 1024;
+meterProxy(backend, port, (j) => { meter.calls++; meter.prompt += j.usage?.prompt_tokens ?? 0; meter.eval += j.usage?.completion_tokens ?? 0; });
 
 // --- the scenario
-const INTENT_CHANGE = "Return a new value and never mutate the input.";
-const HAND = `// hand-written: fill ring by ring
-  const m: number[][] = Array.from({ length: size }, () => new Array<number>(size).fill(0));
-  let n = 1;
-  for (let ring = 0; ring < Math.ceil(size / 2); ring++) {
-    const last = size - 1 - ring;
-    for (let c = ring; c <= last; c++) m[ring]![c] = n++;
-    for (let r = ring + 1; r <= last; r++) m[r]![last] = n++;
-    for (let c = last - 1; c >= ring && last > ring; c--) m[last]![c] = n++;
-    for (let r = last - 1; r > ring && last > ring; r--) m[r]![ring] = n++;
-  }
-  return m;`;
-const STEPS = a.pack ? packSteps(Object.fromEntries(Object.entries(EXERCISES.functions).map(([ex, e]) => [ex, Object.keys(e.fns)])), +a.pack, 5, seed, a.rounds) : [
-  { name: "create text.ts and arrays.ts", add: { text: ["acronym", "diamond"], arrays: ["flatten-array", "binary-search"] } },
-  { name: "add codec.ts", add: { codec: ["variable-length-quantity"] } },
-  { name: "add transpose to arrays.ts", add: { arrays: ["transpose"] } },
-  { name: "change flatten intent", intent: "flatten-array" },
-  { name: "add grid.ts", add: { grid: ["spiral-matrix"] } },
-  { name: "hand-edit ofSize, add rectangles", hand: true, add: { grid: ["rectangles"] } },
-  { name: "add wordy to text.ts", add: { text: ["wordy"] } },
-  { name: "change binary-search intent", intent: "binary-search" },
-  { name: "no change", none: true },
-];
-const fnsOf = (ex) => Object.keys(EXERCISES.functions[ex].fns);
+const STEPS = a.pack ? packSteps(Object.fromEntries(Object.entries(EXERCISES.functions).map(([ex, e]) => [ex, Object.keys(e.fns)])), +a.pack, 5, seed, a.rounds) : SCENARIO;
 const all = STEPS.flatMap((s) => Object.values(s.add ?? {}).flat());
 const splits = {};
 for (const ex of new Set(all)) splits[ex] = await split(a.dataset, ex, a.work);
-const fileOf = (layout, ex) => Object.keys(layout).find((f) => layout[f].includes(ex));
-/** files the step touches: the files it adds to, the file of a changed intent, the file of the hand edit */
-const touched = (st, layout) => [...new Set([...Object.keys(st.add ?? {}), ...(st.intent ? [fileOf(layout, st.intent)] : [])])];
+const ctx = { dataset: a.dataset, splits, backend, port, model, seed, oaModules };
 
 /** OpenArc spec part of one file (specSource per exercise, one open-arc import), intent changes applied. */
 function specs(exs, changed, cfg = {}) {
@@ -94,18 +58,7 @@ function specs(exs, changed, cfg = {}) {
 }
 /** Keep generated bodies: rebuild the spec part, keep every region already in the file. */
 const respec = (file, exs, changed, cfg) => specs(exs, changed, cfg) + [...file.matchAll(/\/\/ @openarc:begin [\s\S]*?\/\/ @openarc:end \S+\n/g)].map((m) => m[0]).join("\n");
-const handPresent = (src) => src.replace(/\s+/g, " ").includes(HAND.replace(/\s+/g, " "));
-
-/** held-out per exercise, against its file through a re-export */
-async function score(dir, layout, path) {
-  const out = {};
-  for (const [f, exs] of Object.entries(layout)) for (const ex of exs) {
-    const h = await heldOut(a.dataset, ex, join(dir, "heldout", ex), `export * from ${JSON.stringify(path(f))};\n`, splits[ex], { "open-arc": join(oaModules, "open-arc") });
-    out[ex] = { passed: h.passed, total: h.total, allPass: h.allPass, publicPass: h.publicPass, loadError: h.loadError?.slice(0, 300) };
-  }
-  return out;
-}
-const grow = (layout, add) => { for (const [f, exs] of Object.entries(add ?? {})) layout[f] = [...(layout[f] ?? []), ...exs]; };
+const score = (dir, layout, path) => scoreIn(ctx, dir, layout, path);
 
 async function armOpenArc(dir, cfg) {
   await rm(dir, { recursive: true, force: true });
@@ -144,24 +97,6 @@ async function armOpenArc(dir, cfg) {
   return steps;
 }
 
-const SYSTEM = "You are an expert TypeScript programmer. Reply with the complete TypeScript file in a single ```ts code block and nothing else.";
-const examplesOf = (ex) => fnsOf(ex).flatMap((f) => splits[ex].examples[f].map((e) => exampleLine(f, e))).join("\n");
-const sigOf = (ex) => { const e = EXERCISES.functions[ex]; return `${e.types ? e.types + "\n\n" : ""}${fnsOf(ex).map((f) => { const [, p, r] = e.fns[f].match(/^\((.*)\) => (.*)$/); return `export function ${f}(${p}): ${r}`; }).join("\n")}`; };
-function changeText(st, f, layout, cfg = {}) {
-  const parts = [];
-  for (const ex of st.add?.[f] ?? []) parts.push(`Add ${fnsOf(ex).map((x) => `\`${x}\``).join(" and ")} (exercise "${ex}"):\n\n${instructions(a.dataset, ex)}\n\nSignature:\n\n\`\`\`ts\n${sigOf(ex)}\n\`\`\`\n\nExamples that must hold:\n${examplesOf(ex)}${cfg.sketch ? outline(ex) : ""}`);
-  if (st.intent && fileOf(layout, st.intent) === f) parts.push(`Change ${fnsOf(st.intent).map((x) => `\`${x}\``).join(" and ")}: ${INTENT_CHANGE}`);
-  return parts.join("\n\n");
-}
-// the C-sketch outline for the plain prompt: the same sketch file, arc.hole("...") read as "fill in: ..."
-const outline = (ex) => { const s = fnsOf(ex).filter((f) => existsSync(sketchFile(ex, f))).map((f) => `\`${f}\` = ${readFileSync(sketchFile(ex, f), "utf8").trim()}`); return s.length ? `\n\nImplementation outline (each arc.hole("...") is a gap you fill as described):\n\n\`\`\`ts\n${s.join("\n\n")}\n\`\`\`` : ""; };
-const publicTests = (f, exs) => {
-  const dec = `const d = (v: any): any => v === "$undefined" ? undefined : v === "$NaN" ? NaN : v === "$Infinity" ? Infinity : v === "$-Infinity" ? -Infinity : Array.isArray(v) ? v.map(d) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, d(x)])) : v;\n`;
-  let s = `import { it, expect } from '@jest/globals'\nimport * as m from './${f}.ts'\n${dec}`;
-  for (const ex of exs) for (const fn of fnsOf(ex)) for (const e of splits[ex].examples[fn]) s += exampleTest(fn, e);
-  return s;
-};
-
 async function armD(dir, cfg = {}) {
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
@@ -171,30 +106,8 @@ async function armD(dir, cfg = {}) {
   for (const st of STEPS) {
     const t0 = Date.now(); meter = { calls: 0, prompt: 0, eval: 0 };
     grow(layout, st.add);
-    if (st.hand) code.grid = code.grid.replace(/export (?:function ofSize\([^)]*\)[^{]*|const ofSize[^=]*=\s*\([^)]*\)[^{]*)\{[\s\S]*?\n\}/, `export function ofSize(size: number): number[][] {\n  ${HAND}\n}`);
-    let attempts = 0, publicPass = true;
-    if (!st.none) for (const f of touched(st, layout)) {
-      const ask = code[f]
-        ? `Current file \`${f}.ts\`:\n\n\`\`\`ts\n${code[f]}\n\`\`\`\n\n${changeText(st, f, layout, cfg)}\n\nKeep everything else unchanged. Return the complete file.`
-        : `Write the TypeScript file \`${f}.ts\`.\n\n${changeText(st, f, layout, cfg)}\n\nReturn the complete file.`;
-      const messages = [{ role: "system", content: SYSTEM }, { role: "user", content: ask }];
-      await writeFile(join(dir, `${f}.public.test.ts`), publicTests(f, layout[f]));
-      const total = layout[f].reduce((n, ex) => n + fnsOf(ex).reduce((k, fn) => k + splits[ex].examples[fn].length, 0), 0);
-      let ok = false;
-      for (let i = 1; i <= 3 && !ok; i++) {
-        attempts++;
-        const reply = await chat(backend, port, model, messages, { seed, temperature: 0 });
-        const next = extractCode(reply);
-        await writeFile(path(f), next);
-        const pt = await runTests(join(dir, `${f}.public.test.ts`));
-        const failed = pt.lines.filter((l) => !l.ok);
-        ok = pt.lines.length === total && !failed.length;
-        if (ok || i === 3) code[f] = next;
-        if (!ok) messages.push({ role: "assistant", content: reply }, { role: "user", content: `The file fails these examples:\n${pt.lines.length ? failed.map((l) => `- ${l.name}: ${l.msg}`).join("\n").slice(0, 3000) : `The file did not load:\n${pt.stderr.split("\n").filter(Boolean).slice(-8).join("\n")}`}\n\nFix it and return the complete corrected file.` });
-      }
-      publicPass &&= ok;
-    }
-    for (const [f, c] of Object.entries(code)) await writeFile(path(f), c);
+    if (st.hand) code.grid = applyHand(code.grid);
+    const { attempts, publicPass } = await stepD(ctx, dir, st, layout, code, cfg);
     steps.push({ step: st.name, wallMs: Date.now() - t0, ...meter, attempts, publicPass, hand: steps.some((s) => s.hand !== undefined) || st.hand ? handPresent(code.grid ?? "") : undefined, heldOut: await score(dir, layout, path) });
   }
   return steps;

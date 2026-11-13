@@ -130,9 +130,11 @@ This installs the skill and a hook that adds one status line at the start of a s
 
 ### OpenCode
 
-Copy `integrations/opencode/openarc.ts` to `.opencode/plugin/`, and `integrations/opencode/skill/openarc-sheet/` to `.opencode/skill/openarc-sheet/`. The plugin runs the watcher for the life of the session.
+`openarc setup --agents opencode` installs it (see [[Setup]]). By hand: copy `integrations/opencode/openarc.ts` to `.opencode/plugins/`, and `integrations/opencode/skill/openarc-sheet/` to `.opencode/skills/openarc-sheet/`. In a project with `openarc.spec.md`, the plugin runs the watcher for the life of the session.
 
 All three share the `openarc-sheet` skill, which tells the agent to read the one-line status and single regions, never the whole file.
+
+To have the agent itself write a region's body, with no backend, and to stop it from editing compiler-owned code by hand, see [[Host Agent Mode]].
 
 ## Commands
 

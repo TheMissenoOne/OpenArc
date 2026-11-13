@@ -117,4 +117,28 @@ assert.equal(showValue(toJson(undefined)), "undefined");
   assert.throws(() => timedCall(() => { throw new RangeError("own"); }, []), RangeError); // the body's own errors pass through
   assert.equal(timedCall((a: number, b: number) => a + b, [2, 3]), 5);
 }
-console.log("equality: tolerance, -0, NaN, tokens, faithful printing, fitLine repro, nested fakes, call timeout ok");
+// `after`: the arguments as the call leaves them; the oracle reports and compares argument changes
+{
+  type Tick = (stats: { water: number }, env: { temp: number }) => { cold: number };
+  const tick: Tick = (stats, env) => ((stats.water = Math.max(0, stats.water - 10)), { cold: env.temp < 0 ? 1 : 0 });
+  const spec = arc.defineRegion<Tick>({
+    id: "t.tick",
+    intent: "",
+    examples: [
+      { args: [{ water: 50 }, { temp: 20 }], expected: { cold: 0 }, after: [{ water: 40 }, { temp: 20 }] },
+      { name: "wrong", args: [{ water: 5 }, { temp: -1 }], expected: { cold: 1 }, after: [{ water: 5 }, { temp: -1 }] },
+    ],
+  });
+  assert.deepStrictEqual(await runExamples(process.cwd(), tick, spec as unknown as RegionSpec<AnyFn>), [
+    { name: "#1", ok: true },
+    { name: "wrong", ok: false, actual: { after: [{ water: 0 }, { temp: -1 }] } },
+  ]);
+  // equal returns, different argument changes: a disagreement; a side that changes nothing has no *After
+  const keeps: Tick = (_stats, env) => ({ cold: env.temp < 0 ? 1 : 0 });
+  const out = await runOracle(tick, keeps, [[{ water: 50 }, { temp: 20 }]]);
+  assert.deepStrictEqual(out, [{ name: "#1", ok: false, actual: { args: [{ water: 50 }, { temp: 20 }], got: { cold: 0 }, oracle: { cold: 0 }, gotAfter: [{ water: 40 }, { temp: 20 }] } }]);
+  assert.deepStrictEqual(await runOracle(tick, tick, [[{ water: 50 }, { temp: 20 }]]), [{ name: "#1", ok: true }]);
+  const plain = await runOracle((n: number) => n + 1, () => 0, [[1]]);
+  assert.deepStrictEqual(plain, [{ name: "#1", ok: false, actual: { args: [1], got: 2, oracle: 0 } }], "no gotAfter when nothing changed");
+}
+console.log("equality: tolerance, -0, NaN, tokens, faithful printing, fitLine repro, nested fakes, call timeout, after ok");

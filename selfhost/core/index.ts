@@ -46,6 +46,8 @@ export type Example<F extends AnyFn> = {
   args: FakeArgs<Parameters<F>>;
   /** fake name -> expected snapshot() after the call */
   fakesAfter?: { [fake: string]: Json };
+  /** every argument as the call leaves it (same length as args), for a function that changes its arguments in place */
+  after?: FakeArgs<Parameters<F>>;
   /** numbers match when |a - b| <= tolerance * max(1, |a|, |b|); default: the spec's tolerance, else 1e-9 */
   tolerance?: number;
   /** compare numbers bit-exactly (Object.is: -0 differs from 0, no tolerance); NaN still equals NaN */

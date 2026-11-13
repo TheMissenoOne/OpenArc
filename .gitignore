@@ -7,3 +7,4 @@ build/
 **/.openarc/txn/
 **/.openarc/lock
 **/.openarc/backup/
+.*-check-*/

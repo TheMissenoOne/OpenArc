@@ -174,6 +174,12 @@ export async function runExamples(root: string, fn: AnyFn, spec: RegionSpec<AnyF
           out.push(withHits({ name, ok: false, actual: toJson(actual) }));
           continue;
         }
+        // `after`: the arguments as the call leaves them (each example has its own clone). ponytail: for examples without
+        // fakes; a resolved fake compares as the function it became
+        if (ex.after !== undefined && !valuesEqual(args, decodeTokens(ex.after), eq)) {
+          out.push(withHits({ name, ok: false, actual: { after: toJson(args) } }));
+          continue;
+        }
       }
       const after: Record<string, Json> = {};
       let fakesOk = true;
@@ -208,25 +214,43 @@ export interface HarnessPlanEntry {
   ui?: { param: string | null; root: UiNode };
   /** Code-first tests (§2.7): run after the examples by test-runner.ts. */
   tests?: import("./test-runner.ts").TestPlan;
+  /** A class member (decompile): `symbol` is the class. Static: `symbol[name](...args)`. Instance: the first argument is
+   *  the constructor's argument list, `new symbol(...first)[name](...rest)`, a fresh receiver per call. */
+  member?: { name: string; static?: boolean };
 }
 
-const settle = async (fn: AnyFn, args: unknown[]): Promise<{ value?: unknown; throws?: string }> => {
+/** What a plan entry calls: the export (a CommonJS module whose `module.exports` Node cannot list by name: through
+ *  `default`), or the class member it names. */
+function target(mod: Record<string, unknown>, entry: HarnessPlanEntry): AnyFn {
+  const exp = (mod[entry.symbol] ?? (mod.default as Record<string, unknown> | undefined)?.[entry.symbol]) as AnyFn & Record<string, AnyFn>;
+  const m = entry.member;
+  if (!m) return exp;
+  return m.static ? (...a: unknown[]) => exp[m.name]!(...a) : (ctor: unknown, ...a: unknown[]) => (new (exp as unknown as new (...c: unknown[]) => Record<string, AnyFn>)(...(ctor as unknown[])))[m.name]!(...a);
+}
+
+/** One call on its own clone of the args; `after` (the args as left, toJson) only when the call changed them. */
+const settle = async (fn: AnyFn, args: unknown[]): Promise<{ value?: unknown; throws?: string; clone: unknown[]; after?: Json }> => {
+  const clone = structuredClone(args);
   try {
-    return { value: await timedCall(fn, structuredClone(args)) };
+    const value = await timedCall(fn, clone);
+    const after = toJson(clone);
+    return JSON.stringify(after) === JSON.stringify(toJson(args)) ? { value, clone } : { value, clone, after };
   } catch (e) {
-    return { throws: e instanceof Error ? e.message : String(e) };
+    return { throws: e instanceof Error ? e.message : String(e), clone };
   }
 };
 
-/** Differential check: one outcome per input. They agree when both return equal values (valuesEqual) or both throw. */
+/** Differential check: one outcome per input. They agree when both throw, or both return equal values (valuesEqual) and
+ *  leave equal arguments. A disagreement adds `gotAfter`/`oracleAfter` for a side that changed its arguments. */
 export async function runOracle(fn: AnyFn, oracle: AnyFn, inputs: Json[][], o: EqualOptions = {}): Promise<Outcome[]> {
   const out: Outcome[] = [];
   for (const [i, raw] of inputs.entries()) {
     const args = decodeTokens(raw) as unknown[];
     const [got, want] = [await settle(fn, args), await settle(oracle, args)];
-    const ok = got.throws !== undefined || want.throws !== undefined ? got.throws !== undefined && want.throws !== undefined : valuesEqual(got.value, want.value, o);
+    const ok = got.throws !== undefined || want.throws !== undefined ? got.throws !== undefined && want.throws !== undefined : valuesEqual(got.value, want.value, o) && valuesEqual(got.clone, want.clone, o);
     const view = (r: typeof got): Json => (r.throws !== undefined ? { throws: r.throws } : toJson(r.value));
-    out.push(ok ? { name: `#${i + 1}`, ok } : { name: `#${i + 1}`, ok, actual: { args: raw, got: view(got), oracle: view(want) } });
+    const after = { ...(got.after !== undefined ? { gotAfter: got.after } : {}), ...(want.after !== undefined ? { oracleAfter: want.after } : {}) };
+    out.push(ok ? { name: `#${i + 1}`, ok } : { name: `#${i + 1}`, ok, actual: { args: raw, got: view(got), oracle: view(want), ...after } });
   }
   return out;
 }
@@ -244,8 +268,8 @@ export async function main(root: string, regionId: string): Promise<void> {
   const mod = await importFile(root, entry.module);
   const spec = entry.examples ? { ...(mod[entry.specExport] as RegionSpec<AnyFn>), examples: entry.examples as unknown as RegionSpec<AnyFn>["examples"], tolerance: entry.tolerance } : mod[entry.specExport];
   const outcomes = entry.oracle
-    ? await runOracle(mod[entry.symbol], (await importFile(root, entry.oracle.module))[entry.oracle.export], entry.oracle.inputs, { tolerance: entry.tolerance })
-    : await runExamples(root, mod[entry.symbol], spec);
+    ? await runOracle(target(mod, entry), (await importFile(root, entry.oracle.module))[entry.oracle.export], entry.oracle.inputs, { tolerance: entry.tolerance })
+    : await runExamples(root, target(mod, entry), spec);
   if (entry.tests && !entry.oracle) outcomes.push(...(await (await import("./test-runner.ts")).runTests(root, entry.tests))); // code-first
   for (const o of outcomes) process.stdout.write(JSON.stringify(o) + "\n");
   process.stdout.write(JSON.stringify({ done: outcomes.length }) + "\n");

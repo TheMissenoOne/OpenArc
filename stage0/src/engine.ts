@@ -17,11 +17,12 @@ import { OUTPUT_SCHEMA, STRICT_OUTPUT_SCHEMA, addTokens, baseUrlOf, completeWith
 import { BATCH_CODE_PROMPT_TEMPLATE, BATCH_CODE_SYSTEM, CODE_PROMPT_TEMPLATE, CODE_PROMPT_TEMPLATE_VERSION, CODE_SYSTEM, codeRules, liftImports, parseCodeOutput, splitCodeSections } from "./output-format.ts";
 const liftJson = (o: ModelOutput): ModelOutput => (o.ok && /^\s*import[\s{*]/.test(o.body) ? liftImports(o.body, o.imports) : o);
 import { buildArgv, readHarnessOutput } from "./sandbox.ts";
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join, posix, sep } from "node:path";
+import { dirname, join, posix, sep } from "node:path";
 import { HARNESS_ENTRY, bwrapReadPaths, tierArgv } from "./isolation.ts";
 // palette (structured specs, SPEC §2.5, §2.6, §3.7): concepts, UI specs and sketches; hooks below are marked `palette:`
 import * as sketch from "./sketch.ts";
@@ -69,6 +70,7 @@ export interface SpecInfo {
   codeFirst?: implicit.CodeFirstInfo; // code-first: the declaration is the spec (§3.8)
   backend?: string; // code-first: `@arc backend` / arc.configure (openarc.config.json regions[id] still wins)
   outputFormat?: "json" | "code"; // code-first: likewise
+  member?: { name: string; static?: boolean }; // decompile: a class member, `symbol` is the class (HarnessPlanEntry.member)
 }
 
 export interface ManifestEntry {
@@ -581,7 +583,7 @@ function nextLevel(p: Project, r: RegionInfo, level: ContextLevel, backend: Back
   return next;
 }
 
-const initialLevel = (p: Project, r: RegionInfo): ContextLevel =>
+export const initialLevel = (p: Project, r: RegionInfo): ContextLevel =>
   Math.max(p.config.regions?.[r.id]?.contextLevel ?? p.config.compilation.context.initialLevel, r.kind === "block" ? 1 : 0) as ContextLevel;
 
 /** stage 0 = default (or per-region) backend, stage 1 = fallback backend */
@@ -870,6 +872,7 @@ export function examplesHeading(text: string): string {
   if (tokens.length) notes.push(`the string${tokens.length > 1 ? "s" : ""} ${tokens.map((t) => `"${t}"`).join(", ")} stand${tokens.length > 1 ? "" : "s"} for ${tokens.length > 1 ? "those values" : "that value"}`);
   if (text.includes('"$fake"')) notes.push('{"$fake": name} is a test double for that parameter');
   if (text.includes('"throws"')) notes.push('{"throws": true} means the call must throw, and a "throws" string must appear in the error message');
+  if (text.includes('"after"')) notes.push('"after" lists every argument as the call must leave it (the body changes them in place)');
   return `Examples (${notes.join("; ")})`;
 }
 
@@ -1648,7 +1651,7 @@ interface BatchShare { raw: string; tokens: Tokens | null; promptHash: string; i
 
 /** Regions that can share a request: plain function regions (no sketch, UI, class member or nested blocks). */
 const batchable = (r: RegionInfo) => r.kind === "function" && !r.spec.sketch && !r.spec.ui && !r.spec.codeFirst?.cls && r.childSpans.length === 0;
-const cachePathOf = (r: RegionInfo) => `.openarc/cache/${r.fingerprint.replace("sha256:", "")}.json`;
+export const cachePathOf = (r: RegionInfo) => `.openarc/cache/${r.fingerprint.replace("sha256:", "")}.json`;
 
 /** The context of a batched request: the sections every member has verbatim, once (their type closures merged into
  *  one Types section), then one "## Region <id>" section per member with the rest, then the shared Rules. */
@@ -2090,7 +2093,7 @@ async function verify(ports: Ports, req: CompileRequest, p: Project, r: RegionIn
     if (conflict) return { ...fail([`OARC-E100 example "${conflict.detail}" fails without reaching any hole: the sketch decides it, so no fill can fix it`]), stop: conflict };
     if (real.length || (!res.complete && r.kind === "function"))
       return fail(real.map((o) => testsPlan.isTestOutcome(o.name) ? testsPlan.failureText(testOf(p, o.name, r.root), o.name, o.actual)
-        : `OARC-E090 example "${o.name}" failed: got ${showValue(o.actual)}; expected ${showValue(exampleExpected(rootSpec, o.name))}`).concat(res.complete ? [] : ["OARC-E090 harness output incomplete (process exited early?)"]));
+        : exampleFailure(rootSpec, o.name, o.actual)).concat(res.complete ? [] : ["OARC-E090 harness output incomplete (process exited early?)"]));
     if (cf || rootSpec.codeFirst) verifiedBy.push(...testsPlan.verifiedBy(rootSpec, res));
     else verifiedBy.push(`examples:${res.passed}/${rootSpec.ui ? res.passed + res.failed.length : rootSpec.examples.length}${res.failed.length ? ` (${res.failed.length} inconclusive: sibling blocks pending)` : ""}`);
     if (r.kind === "block") verifiedBy.push(`via:${r.root}`);
@@ -2143,11 +2146,15 @@ const testOf = (p: Project, name: string, id: string) => (p.tests ?? []).find((t
 const showValue = (v: Json | undefined): string =>
   v === undefined ? "undefined" : JSON.stringify(v).replace(/"\$(-0|NaN|-?Infinity|undefined)"/g, "$1");
 
-function exampleExpected(spec: SpecInfo, name: string): Json {
-  const exs = spec.examples as { name?: string; expected?: Json; throws?: Json; fakesAfter?: Json }[];
-  const i = exs.findIndex((e, k) => (e.name ?? `#${k + 1}`) === name);
-  const e = exs[i];
-  return e ? (e.expected ?? (e.throws !== undefined ? { throws: e.throws } : { fakesAfter: e.fakesAfter ?? null })) : null;
+function exampleFailure(spec: SpecInfo, name: string, actual: Json | undefined): string {
+  const exs = spec.examples as { name?: string; expected?: Json; throws?: Json; fakesAfter?: Json; after?: Json }[];
+  const e = exs.find((e, k) => (e.name ?? `#${k + 1}`) === name);
+  const a = actual as { after?: Json } | undefined;
+  // the harness reports a wrong `after` as { after: <the arguments> }; a result that only looks like it still reads as a result
+  if (e?.after !== undefined && a && typeof a === "object" && !Array.isArray(a) && Object.keys(a).length === 1 && a.after !== undefined)
+    return `OARC-E090 example "${name}" failed: arguments after the call are ${showValue(a.after)}; expected ${showValue(e.after)}`;
+  const want = e ? (e.expected ?? (e.throws !== undefined ? { throws: e.throws } : { fakesAfter: e.fakesAfter ?? null })) : null;
+  return `OARC-E090 example "${name}" failed: got ${showValue(actual)}; expected ${showValue(want)}`;
 }
 
 // ───────────────────────────── sandbox ─────────────────────────────
@@ -2189,17 +2196,21 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
   const tier = req.sandbox.isolation ?? "bwrap";
   const dir = p.sandboxDir ?? (p.sandboxDir = `.openarc/sandbox/${Date.now().toString(36)}`);
   const tg0 = performance.now();
+  // A project that doesn't install open-arc (decompile reads code as it is) runs this compiler's own harness: the entry
+  // imports it by path, and the sandbox may read that one directory. Only for a project on disk.
+  // ponytail: not the container tier, which mounts fixed paths; install open-arc in the project there
+  const own = existsSync(p.root) && !existsSync(join(p.root, "node_modules", "open-arc")) ? dirname(fileURLToPath(import.meta.resolve("open-arc/harness"))) : null;
   if ((await ports.fs.read(`${dir}/package.json`)) === null) {
     for (const f of ["package.json", "tsconfig.json", ...SOURCE_DIRS.map((d) => `${d}/package.json`)]) {
       const t = await ports.fs.read(f);
       if (t !== null) await ports.fs.write(`${dir}/${f}`, t);
     }
-    await ports.fs.write(`${dir}/.openarc/harness.mjs`, HARNESS_ENTRY); // the project's copy may predate argv[3]
+    await ports.fs.write(`${dir}/.openarc/harness.mjs`, own ? HARNESS_ENTRY.replace('"open-arc/harness"', JSON.stringify(import.meta.resolve("open-arc/harness"))) : HARNESS_ENTRY); // the project's copy may predate argv[3]
     // bwrap sees only the stage, so node_modules is hard-linked into it (Linux: cp -al always exists); links in it that
     // leave the project are bound at their real paths (isolation.bwrapReadPaths). The other tiers
     // read the project's node_modules in place: module resolution walks up from the stage, which lives inside the
     // project, and isolation.readPaths grants exactly that directory. The container tier mounts it at /work/node_modules.
-    if (tier === "bwrap") {
+    if (tier === "bwrap" && (!own || existsSync(join(p.root, "node_modules")))) {
       const cp = await ports.proc.run(["cp", "-al", `${p.root}/node_modules`, `${p.root}/${dir}/node_modules`], 60_000);
       if (cp.code !== 0) return lap(p, "sandboxStage", tg0), { complete: false, passed: 0, failed: [], hits: none, error: `OARC-E092 could not stage node_modules: ${cp.stdout}` };
     } else if (tier === "container") await ports.fs.write(`${dir}/node_modules/.mountpoint`, "");
@@ -2211,15 +2222,15 @@ async function runSandbox(ports: Ports, req: CompileRequest, p: Project, rootId:
   const tolerance = typeof spec.literal.tolerance === "number" ? { tolerance: spec.literal.tolerance } : {};
   // palette: a UI region's module is its component file; the harness gets the structure tree for the derived checks
   const uiPlan = spec.ui ? { module: p.regions.find((x) => x.id === rootId)!.file, ui: spec.ui as unknown as Json } : {};
-  await ports.fs.write(`${dir}/.openarc/harness-plan.json`, JSON.stringify({ [rootId]: { module: spec.file, symbol: spec.symbol, specExport: spec.exportName, examples: spec.examples, ...tolerance, ...(oracle ? { oracle } : {}), ...uiPlan, ...(tests ? { tests } : {}) } }));
+  await ports.fs.write(`${dir}/.openarc/harness-plan.json`, JSON.stringify({ [rootId]: { module: spec.file, symbol: spec.symbol, specExport: spec.exportName, examples: spec.examples, ...tolerance, ...(oracle ? { oracle } : {}), ...uiPlan, ...(tests ? { tests } : {}), ...(spec.member ? { member: spec.member } : {}) } }));
   const sb = p.config.sandbox ?? {};
   const limits = {
     nodeBin: req.sandbox.nodeBin, nodePrefix: req.sandbox.nodePrefix, heapMb: sb.heapMb ?? req.sandbox.heapMb,
     cpuSeconds: sb.cpuSeconds ?? req.sandbox.cpuSeconds, regionId: rootId,
   };
   const argv = tier === "bwrap"
-    ? buildArgv({ ...limits, stageDir: `${p.root}/${dir}`, addressSpaceBytes: sb.addressSpaceBytes ?? req.sandbox.addressSpaceBytes, extraReadPaths: bwrapReadPaths(p.root, `${p.root}/${dir}`) })
-    : tierArgv(tier, { ...limits, root: p.root, stageDir: join(p.root, dir), containerImage: req.sandbox.containerImage });
+    ? buildArgv({ ...limits, stageDir: `${p.root}/${dir}`, addressSpaceBytes: sb.addressSpaceBytes ?? req.sandbox.addressSpaceBytes, extraReadPaths: [...bwrapReadPaths(p.root, `${p.root}/${dir}`), ...(own ? [own] : [])] })
+    : tierArgv(tier, { ...limits, root: p.root, stageDir: join(p.root, dir), containerImage: req.sandbox.containerImage, ...(own ? { extraReads: [own] } : {}) });
   lap(p, "sandboxStage", tg0);
   const spawned = Date.now(), tr0 = performance.now();
   const ran = await ports.proc.run(argv, ((sb.cpuSeconds ?? req.sandbox.cpuSeconds) + 20) * 1000);
@@ -2971,9 +2982,19 @@ export async function oracleCheck(ports: Ports, req: CompileRequest, p: Project,
   }
 }
 
+/** One input's result; `after`: the arguments as the call left them, only when it changed them. */
+export type Observed = { args: Json[]; got: Json; after?: Json[] };
+const observed = (res: SandboxResult, inputs: Json[][]): Observed[] => {
+  const failed = new Map(res.failed.map((f) => [f.name, f.actual as { args: Json[]; got: Json; gotAfter?: Json[] }]));
+  return inputs.map((args, i) => {
+    const a = failed.get(`#${i + 1}`);
+    return a ? { args: a.args, got: a.got, ...(a.gotAfter !== undefined ? { after: a.gotAfter } : {}) } : { args, got: "__openarc_observe__" };
+  });
+};
+
 /** What a region's body returns on `inputs`, run in the sandbox: the oracle harness against a reference that never matches,
  *  so every outcome reports its `got`. No model. openarc sync uses it for characterization examples and drift. */
-export async function observe(ports: Ports, req: CompileRequest, p: Project, id: string, inputs: Json[][]): Promise<{ args: Json[]; got: Json }[] | { error: string }> {
+export async function observe(ports: Ports, req: CompileRequest, p: Project, id: string, inputs: Json[][]): Promise<Observed[] | { error: string }> {
   const module = ".openarc/observe-reference.mjs";
   const overlay = new Map(p.files).set(module, 'export const reference = () => "__openarc_observe__";\n');
   try {
@@ -2982,18 +3003,42 @@ export async function observe(ports: Ports, req: CompileRequest, p: Project, id:
     if (!res.complete) return { error: "harness output incomplete" };
     // A result equal to the sentinel passes, so the harness leaves it out of `failed`: one entry per input, by its #n name,
     // keeps results aligned with the inputs their callers index them by.
-    const failed = new Map(res.failed.map((f) => [f.name, f.actual as { args: Json[]; got: Json }]));
-    return inputs.map((args, i) => { const a = failed.get(`#${i + 1}`); return a ? { args: a.args, got: a.got } : { args, got: "__openarc_observe__" }; });
+    return observed(res, inputs);
   } finally {
     if (p.sandboxDir) await ports.fs.remove(p.sandboxDir);
     delete p.sandboxDir;
   }
 }
 
+/** observe() for an exported function that is no region (openarc decompile reads code it does not own): `files` is what
+ *  the sandbox stages. The stage is kept between calls, since staging node_modules costs more than the run; the caller
+ *  ends with closeSandbox. */
+export async function observeExport(ports: Ports, req: CompileRequest, p: Project, target: { file: string; symbol: string; member?: SpecInfo["member"] }, inputs: Json[][], files: Map<string, string>): Promise<Observed[] | { error: string }> {
+  const id = "openarc.observed", module = ".openarc/observe-reference.mjs";
+  p.specs.set(id, { id, kind: "function", file: target.file, symbol: target.symbol, exportName: "", literal: {}, examples: [], ...(target.member ? { member: target.member } : {}) } as unknown as SpecInfo);
+  try {
+    const res = await runSandbox(ports, req, p, id, new Map(files).set(module, 'export const reference = () => "__openarc_observe__";\n'), { module, export: "reference", inputs });
+    if (res.error) return { error: res.error };
+    if (!res.complete) return { error: "harness output incomplete" };
+    return observed(res, inputs);
+  } finally {
+    p.specs.delete(id);
+  }
+}
+export async function closeSandbox(ports: Ports, p: Project): Promise<void> {
+  if (p.sandboxDir) await ports.fs.remove(p.sandboxDir);
+  delete p.sandboxDir;
+}
+
 /** One line per disagreement, values printed faithfully. */
 export const showDisagreement = (d: { name: string; actual?: Json }): string => {
   const a = (d.actual ?? {}) as { args?: Json; got?: Json; oracle?: Json };
-  return `${d.name} args ${showValue(a.args)}: got ${showValue(a.got)}; oracle ${showValue(a.oracle)}`;
+  return `${d.name} args ${showValue(a.args)}: got ${showValue(a.got)}; oracle ${showValue(a.oracle)}${afterText(d.actual)}`;
+};
+/** A disagreement's argument changes, when either side made any: the unchanged side shows the input. */
+const afterText = (actual: Json | undefined): string => {
+  const a = (actual ?? {}) as { args?: Json; gotAfter?: Json; oracleAfter?: Json };
+  return a.gotAfter === undefined && a.oracleAfter === undefined ? "" : ` (arguments after: got ${showValue(a.gotAfter ?? a.args)}; oracle ${showValue(a.oracleAfter ?? a.args)})`;
 };
 
 // ───────────────────────────── check --mutants ─────────────────────────────
@@ -3140,7 +3185,7 @@ export async function mutantCheck(ports: Ports, req: CompileRequest, p: Project,
 function suggestion(actual: Json | undefined, examples: Json[], line: number): string {
   if (actual) {
     const a = actual as { args?: Json; got?: Json; oracle?: Json };
-    return `args ${showValue(a.args)} (original ${showValue(a.oracle)}, mutant ${showValue(a.got)})`;
+    return `args ${showValue(a.args)} (original ${showValue(a.oracle)}, mutant ${showValue(a.got)})${afterText(actual)}`;
   }
   return edgeKinds(examples).join(", ") || `an input or test that reaches line ${line}`;
 }

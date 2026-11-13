@@ -108,6 +108,17 @@ examples: [
 
 An example has `expected` or `throws`, never both (the type rejects it). `fakesAfter` still applies after the throw, and a body that is still pending counts as pending, not as a throw. When a body returns instead, the failure says what it returned: `got {"returned":0}; expected {"throws":"not found"}`; a different message prints as `got {"throws":"<message>"}`. The context package shows these examples to the model like any other.
 
+## Examples that change their arguments
+
+A function that changes an argument in place states it with `after`: every argument as the call leaves it, in order, the same length as `args`. It is compared like `expected` (same tolerance and `exact`), and it can go with `expected` or, for a function that returns nothing, alone:
+
+```ts
+type Tick = (stats: { water: number }, env: { temp: number }) => { cold: number };
+examples: [{ args: [{ water: 50 }, { temp: 20 }], expected: { cold: 0 }, after: [{ water: 49 }, { temp: 20 }] }]
+```
+
+A wrong `after` fails as `arguments after the call are [{"water":50},{"temp":20}]; expected [{"water":49},{"temp":20}]`. A `throws` example has no `after`. `after` is for examples without fakes: check a fake with `fakesAfter`. `check --oracle` and `check --mutants` also compare the arguments each side leaves: equal results with different argument changes disagree.
+
 ## Thin examples
 
 Examples are the only behaviour OpenArc checks, and in the evaluation three regions passed every example while disagreeing with the original code on ordinary inputs (`coverage` 50/80, `outputFileName` 8/40, `resolveChannelId` 1 of 5 URL forms). Two tools help:

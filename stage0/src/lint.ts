@@ -113,19 +113,20 @@ function check(r: engine.RegionInfo, checker: ts.TypeChecker, diskText: string):
   const s = r.spec;
   const out: { rule: string; message: string }[] = [];
   const add = (rule: string, message: string) => out.push({ rule, message });
-  const examples = s.examples as { name?: string; args?: Json[]; expected?: Json; throws?: Json }[];
+  const examples = s.examples as { name?: string; args?: Json[]; expected?: Json; throws?: Json; after?: Json }[];
   const tests = s.codeFirst?.tests ?? [];
 
   // contradictory-examples: same arguments, different outcome
-  const seen = new Map<string, { i: number; outcome: string }>();
+  const seen = new Map<string, { i: number; outcome: string; after?: string }>();
   examples.forEach((e, i) => {
     if (s.ui || !Array.isArray(e.args)) return;
     const key = canonicalJson(e.args);
     const outcome = e.throws !== undefined ? "throws" : e.expected === undefined ? null : canonicalJson(e.expected);
     if (outcome === null) return;
+    const after = e.after === undefined ? undefined : canonicalJson(e.after); // only two stated `after`s can contradict
     const prev = seen.get(key);
-    if (!prev) seen.set(key, { i, outcome });
-    else if (prev.outcome !== outcome) add("spec/contradictory-examples", `examples ${label(examples, prev.i)} and ${label(examples, i)} have the same args ${key} but different outcomes`);
+    if (!prev) seen.set(key, { i, outcome, after });
+    else if (prev.outcome !== outcome || (prev.after !== undefined && after !== undefined && prev.after !== after)) add("spec/contradictory-examples", `examples ${label(examples, prev.i)} and ${label(examples, i)} have the same args ${key} but different outcomes`);
   });
 
   // duplicate-test-names

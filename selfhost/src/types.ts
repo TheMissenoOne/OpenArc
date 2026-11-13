@@ -160,7 +160,8 @@ export interface HttpPort {
   get(url: string): Promise<string>;
 }
 export interface ProcPort {
-  run(argv: string[], timeoutMs: number, opts?: { stdin?: string; cwd?: string }): Promise<{ code: number | null; stdout: string; timedOut: boolean }>;
+  /** env: added to the inherited environment. */
+  run(argv: string[], timeoutMs: number, opts?: { stdin?: string; cwd?: string; env?: Record<string, string> }): Promise<{ code: number | null; stdout: string; timedOut: boolean }>;
 }
 export interface Ports {
   fs: FsPort;

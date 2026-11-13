@@ -190,6 +190,7 @@ export interface TierArgs {
   cpuSeconds: number;
   regionId: string;
   containerImage?: string;
+  extraReads?: string[]; // more directories the harness may read (the compiler's own harness, for a project without open-arc)
 }
 
 /** argv for every tier but bwrap (sandbox.buildArgv). The node flags are bwrap's minus bwrap and prlimit: no
@@ -210,9 +211,42 @@ export function tierArgv(tier: Exclude<SandboxTier, "bwrap">, a: TierArgs): stri
       "node", "--permission", "--allow-fs-read=/work", heap, "/work/.openarc/harness.mjs", a.regionId,
     ];
   }
-  const reads = readPaths(a.root, stage);
+  const reads = [...readPaths(a.root, stage), ...(a.extraReads ?? []).map(real)];
   const node = [a.nodeBin, "--permission", ...reads.map((p) => `--allow-fs-read=${p}`), heap, ...harness];
   return tier === "sandbox-exec" ? ["sandbox-exec", "-p", sbplProfile(reads, a.nodePrefix), ...node] : node;
+}
+
+export interface GoBwrapArgs {
+  stageDir: string; // the staged module (OS path), read-only at /work
+  goRoot: string; // read-only at its own path; args[0] is its bin/go
+  modCache: string | null; // the module cache, read-only at its own path
+  buildCache: string; // the only writable directory besides the tmpfs /tmp
+  cpuSeconds: number;
+  addressSpaceBytes: number;
+  env: Record<string, string>; // the whole environment: nothing else is inherited
+  args: string[];
+}
+
+/** bwrap for a Go run (lang/go.ts): the same namespaces as sandbox.buildArgv (no network, own pid and IPC), the stage
+ *  read-only, a clean environment, and prlimit on every process (`go`, the compiler, the test binary and its children).
+ *  ponytail: Linux only; Go code does not run in the other tiers except unsafe-none */
+export function goBwrapArgv(a: GoBwrapArgs): string[] {
+  return [
+    "bwrap", "--unshare-all", "--die-with-parent", "--new-session", "--clearenv",
+    ...Object.entries(a.env).flatMap(([k, v]) => ["--setenv", k, v]),
+    "--ro-bind", a.stageDir, "/work",
+    "--ro-bind", "/usr", "/usr",
+    "--symlink", "usr/lib64", "/lib64",
+    "--symlink", "usr/lib", "/lib",
+    "--symlink", "usr/bin", "/bin",
+    "--tmpfs", "/tmp", "--proc", "/proc", "--dev", "/dev",
+    "--ro-bind", a.goRoot, a.goRoot,
+    ...(a.modCache ? ["--ro-bind", a.modCache, a.modCache] : []),
+    "--bind", a.buildCache, a.buildCache,
+    "--chdir", "/work",
+    "prlimit", `--as=${a.addressSpaceBytes}`, `--cpu=${a.cpuSeconds}`,
+    ...a.args,
+  ];
 }
 
 /** Node's permission model denies network only from v25.0.0 (--allow-net); before that the node tier has no network isolation. */
