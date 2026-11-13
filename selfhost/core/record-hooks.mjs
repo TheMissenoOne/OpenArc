@@ -2,8 +2,8 @@
 // with the instrumented text decompile wrote for it, in the format Node chose (a .ts file is still type-stripped, CommonJS
 // stays CommonJS); every other file is untouched. The instrumented text is the project's own source plus one fixed
 // recorder call per exported function, so nothing from the test process is ever executed.
-// Covers `import` on the Node versions tested (22, 23, 25), also a CommonJS source that is imported. A `require()` from a
-// CommonJS test file is not covered (on Node 25 a `require()` inside an imported CommonJS module is).
+// Covers `import` on the Node versions tested (22, 23, 25), also a CommonJS source that is imported. A `require()` of a
+// .js or .cjs file from CommonJS does not come here: record.mjs covers it through the CommonJS loader.
 // ponytail: module.registerHooks would also cover require(), but on Node 22/23 it breaks require() of a .ts file;
 // switch to it once the supported Node versions no longer have that bug.
 import { readFileSync, realpathSync } from "node:fs";

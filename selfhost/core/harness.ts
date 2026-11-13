@@ -214,6 +214,18 @@ export interface HarnessPlanEntry {
   ui?: { param: string | null; root: UiNode };
   /** Code-first tests (§2.7): run after the examples by test-runner.ts. */
   tests?: import("./test-runner.ts").TestPlan;
+  /** A class member (decompile): `symbol` is the class. Static: `symbol[name](...args)`. Instance: the first argument is
+   *  the constructor's argument list, `new symbol(...first)[name](...rest)`, a fresh receiver per call. */
+  member?: { name: string; static?: boolean };
+}
+
+/** What a plan entry calls: the export (a CommonJS module whose `module.exports` Node cannot list by name: through
+ *  `default`), or the class member it names. */
+function target(mod: Record<string, unknown>, entry: HarnessPlanEntry): AnyFn {
+  const exp = (mod[entry.symbol] ?? (mod.default as Record<string, unknown> | undefined)?.[entry.symbol]) as AnyFn & Record<string, AnyFn>;
+  const m = entry.member;
+  if (!m) return exp;
+  return m.static ? (...a: unknown[]) => exp[m.name]!(...a) : (ctor: unknown, ...a: unknown[]) => (new (exp as unknown as new (...c: unknown[]) => Record<string, AnyFn>)(...(ctor as unknown[])))[m.name]!(...a);
 }
 
 /** One call on its own clone of the args; `after` (the args as left, toJson) only when the call changed them. */
@@ -256,8 +268,8 @@ export async function main(root: string, regionId: string): Promise<void> {
   const mod = await importFile(root, entry.module);
   const spec = entry.examples ? { ...(mod[entry.specExport] as RegionSpec<AnyFn>), examples: entry.examples as unknown as RegionSpec<AnyFn>["examples"], tolerance: entry.tolerance } : mod[entry.specExport];
   const outcomes = entry.oracle
-    ? await runOracle(mod[entry.symbol], (await importFile(root, entry.oracle.module))[entry.oracle.export], entry.oracle.inputs, { tolerance: entry.tolerance })
-    : await runExamples(root, mod[entry.symbol], spec);
+    ? await runOracle(target(mod, entry), (await importFile(root, entry.oracle.module))[entry.oracle.export], entry.oracle.inputs, { tolerance: entry.tolerance })
+    : await runExamples(root, target(mod, entry), spec);
   if (entry.tests && !entry.oracle) outcomes.push(...(await (await import("./test-runner.ts")).runTests(root, entry.tests))); // code-first
   for (const o of outcomes) process.stdout.write(JSON.stringify(o) + "\n");
   process.stdout.write(JSON.stringify({ done: outcomes.length }) + "\n");

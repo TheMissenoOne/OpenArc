@@ -4,10 +4,11 @@
 // Environment: OPENARC_RECORD_MANIFEST (JSON: absolute source path -> instrumented file), OPENARC_RECORD_OUT (directory
 // for calls-<pid>.jsonl), OPENARC_RECORD_TEST (the test file this process runs for). Without the first two it does nothing.
 // It must never throw into the program under test, and prints nothing.
-// Limits: it sees only modules Node's own loader loads through `import` (record-hooks.mjs), so not test runners that
-// transform sources themselves (Vitest, Jest): with those nothing is recorded. Only plain JSON arguments are kept.
-import { register } from "node:module";
-import { appendFileSync, mkdirSync } from "node:fs";
+// Limits: it sees only modules Node's own loaders load: `import` (record-hooks.mjs) and `require()` of a .js or .cjs file
+// (below), so not test runners that transform sources themselves (Vitest, Jest): with those nothing is recorded. Only
+// plain JSON arguments are kept.
+import Module, { register } from "node:module";
+import { appendFileSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 
 const { OPENARC_RECORD_MANIFEST: manifest, OPENARC_RECORD_OUT: out, OPENARC_RECORD_TEST: test = "" } = process.env;
 const MAX_JSON = 600, MAX_LISTS = 12;
@@ -36,6 +37,23 @@ function plain(v, budget) {
 
 if (manifest && out) {
   try { register("./record-hooks.mjs", import.meta.url); } catch { /* an older Node: nothing is recorded */ }
+  // require() of CommonJS from a CommonJS file does not pass the hooks above: the CommonJS loader's per-extension compile
+  // step loads the instrumented text instead. ponytail: Module._extensions is Node's long-standing internal hook (stable
+  // since Node 0.x); module.registerHooks replaces both once Node 22/23 are no longer supported (see record-hooks.mjs)
+  try {
+    const files = new Map(Object.entries(JSON.parse(readFileSync(manifest, "utf8"))).flatMap(([src, inst]) => { try { return [[realpathSync(src), inst]]; } catch { return []; } }));
+    for (const ext of [".js", ".cjs"]) {
+      const load = Module._extensions[ext];
+      // Node's own loader still decides the format; only the text it compiles is swapped
+      if (load) Module._extensions[ext] = function (m, filename) {
+        const inst = files.get(filename);
+        if (!inst) return load.call(this, m, filename);
+        const compile = m._compile;
+        m._compile = function (_text, ...rest) { return compile.call(this, readFileSync(inst, "utf8"), ...rest); };
+        try { return load.call(this, m, filename); } finally { delete m._compile; }
+      };
+    }
+  } catch { /* nothing is recorded through require() */ }
   const held = new Map(); // "<file>\0<name>" -> { file, name, lists: Set of argument-list JSON }
   const record = (file, name, args) => {
     try {
