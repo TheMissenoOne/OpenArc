@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { blocks, classify, clean, format, lint, parse, print, stmtsDeep } from "../src/pdl.ts";
+import { createHash } from "node:crypto";
+import { blocks, classify, clean, designKey, format, lint, notes, ownText, parse, print, stmtsDeep } from "../src/pdl.ts";
 
 const REF = `feature Checkout {
   a customer turns a cart into a paid order;
@@ -96,6 +97,18 @@ for (const t of [REF, ODD]) {
   assert.deepEqual(comments(f), comments(t), "format keeps every comment");
 }
 assert.ok(format(REF).includes("  release() {\n    give the reserved units back;\n  }\n"));
+// a state's transitions in columns; initial and final lines as they are; a transition with a comment keeps its layout
+assert.ok(format(REF).includes(`    initial cart;
+    cart     -> reserved : confirm() when every line is in stock;
+    reserved -> paid     : chargeOk() then email the receipt;
+    reserved -> cart     : chargeFailed() then release();
+    reserved -> cart     : after(15 min) then release();
+    final paid;
+`), format(REF));
+const SM = "feature F {\n  state S {\n    initial a;\n    a->bb:go();\n    bb  ->  a :  back()  then  x;\n    bb -> a /* why */ : retry();\n  }\n}\n";
+assert.equal(format(SM), "feature F {\n  state S {\n    initial a;\n    a  -> bb : go();\n    bb -> a  : back() then x;\n    bb -> a /* why */ : retry();\n  }\n}\n");
+assert.equal(format(format(SM)), format(SM), "alignment is idempotent");
+assert.deepEqual(texts(format(SM)).map((t) => t.replace(/\s/g, "")), texts(SM).map((t) => t.replace(/\s/g, "")), "alignment changes spacing only");
 assert.ok(format(ODD).includes("    if(x > 0) {\n      say yes;\n    } else if ( x < 0 ) {\n      say no;\n    } else {\n      say zero;\n    }\n"), format(ODD));
 assert.ok(format(ODD).includes(`a sentence with "two  spaces" inside; // trailing`), "a string keeps its spaces; a trailing comment stays on its line");
 assert.ok(format(ODD).includes("  a sentence // note\n    continued;"), "a line comment inside a statement keeps its line break");
@@ -140,6 +153,43 @@ assert.deepEqual([confirmBlock.params, confirmBlock.paramList, confirmBlock.type
 assert.deepEqual(blocks(parse("feature F { g() { x; } h(a, b: [Int]) { y; } }")).map((b) => [b.id, b.node.paramList, b.node.type]), [["F", undefined, undefined], ["F.g", [], undefined], ["F.h", [{ name: "a" }, { name: "b", type: "[Int]" }], undefined]]);
 assert.deepEqual(blocks(parse("feature F { Cart.add(n: Num): Num {} }")).map((b) => [b.id, b.kind, b.node.name]), [["F", "feature", "F"], ["F.Cart.add", "function", "Cart.add"]], "a method keeps its class in its name");
 
+assert.deepEqual(blocks(parse("feature F { Cart.add(n: Int): Int { x; } }")).map((b) => [b.id, b.kind, b.node.name, b.node.type]), [["F", "feature", "F", undefined], ["F.Cart.add", "function", "Cart.add", "Int"]], "a method header: Class.method");
+
+// ── notes: comments right above a block's header and among its own items ──
+const NOTED = `// why the feature exists
+feature F { // on the brace line: the feature's
+  a purpose;
+  // a feature note
+
+  // not above g: a blank line follows
+
+  /* above g */
+  // above g too
+  g() {
+    x; // trailing x, inside g
+    if (y) {
+      // inside an if: still g's
+      z;
+    }
+  }
+  h; // trailing h: the feature's
+  k() { w; }
+  /* above S */ state S {
+    initial a;
+  }
+}
+// after everything: nobody's
+`;
+const noted = (t: string) => { const tr = parse(t), ns = notes(tr); return Object.fromEntries(blocks(tr).map((b) => [b.id, ns.get(b.node)])); };
+assert.deepEqual(noted(NOTED), {
+  F: { above: ["// why the feature exists"], inside: ["// on the brace line: the feature's", "// a feature note", "// not above g: a blank line follows", "// trailing h: the feature's"] },
+  "F.g": { above: ["/* above g */", "// above g too"], inside: ["// trailing x, inside g", "// inside an if: still g's"] },
+  "F.k": { above: [], inside: [] },
+  "F.S": { above: ["/* above S */"], inside: [] },
+});
+assert.deepEqual(noted(format(NOTED)), noted(NOTED), "format keeps every note with its block");
+assert.deepEqual(noted("feature F {\n  x; // on x's line\n  g() { y; }\n}\n")["F.g"], { above: [], inside: [] }, "a comment sharing a line with a statement is not above the next block");
+
 // ── classification: exact forms, and sentences that only start like one ──
 const k = (text: string, parent: Parameters<typeof classify>[1] = "function") => classify(text, parent);
 assert.deepEqual(k("uses a, b"), { kind: "uses", names: ["a", "b"] });
@@ -154,6 +204,10 @@ assert.equal(k("example f(1) is fine").kind, "sentence");
 assert.deepEqual(k("check all(s in stock, s.qty >= 0)"), { kind: "check", expr: "all(s in stock, s.qty >= 0)" });
 assert.deepEqual(k("check total == sum(lines)"), { kind: "check", expr: "total == sum(lines)" });
 assert.equal(k("check the totals daily").kind, "sentence");
+assert.deepEqual(k("check result >= 0 and result <= 100"), { kind: "check", expr: "result >= 0 and result <= 100" }, "the rule language's word operators are not words");
+assert.deepEqual(k("check not threw implies x in 0..9"), { kind: "check", expr: "not threw implies x in 0..9" });
+assert.deepEqual(k('example new Cart(10).add("tea", 2) => 2'), { kind: "example", call: 'new Cart(10).add("tea", 2)', value: "2" });
+assert.deepEqual(k('example new Cart(1).add(3) throws "full"'), { kind: "example", call: "new Cart(1).add(3)", throws: "full" });
 assert.deepEqual(k('fail "out of stock"'), { kind: "fail", message: "out of stock" });
 assert.equal(k("fail loudly when the card is refused").kind, "sentence");
 assert.deepEqual(k("initial cart", "state"), { kind: "initial", names: ["cart"] });
@@ -214,7 +268,7 @@ const oa = (args: string[]) => new Promise<{ code: number | null; out: string; e
 });
 const write = (f: string, t: string) => (mkdirSync(dirname(join(dir, f)), { recursive: true }), writeFileSync(join(dir, f), t));
 const read = (f: string) => readFileSync(join(dir, f), "utf8");
-type Row = { id: string; status: string; linked: boolean; source: string[]; missing?: string[]; designSize: number; codeSize?: number; ratio?: number };
+type Row = { id: string; status: string; linked: boolean; source: string[]; missing?: string[]; designSize: number; noteSize: number; codeSize?: number; ratio?: number };
 const status = async () => {
   const r = await oa(["pdl", "status", "--json"]);
   assert.equal(r.code, 0, r.out + r.err);
@@ -251,8 +305,12 @@ try {
   assert.equal(s.summary.ratio, s.of("Checkout").designSize / allCode);
   let r = await oa(["pdl", "status"]);
   assert.equal(r.code, 0);
-  assert.match(r.out, /^Notes: new, not linked$/m);
-  assert.match(r.out, new RegExp(`^Checkout\\.confirm: new, design ${Math.round(conf.ratio! * 100)}% of code$`, "m"));
+  // a table: features with their blocks under them by short name; the ratio only where a block has its own source
+  assert.match(r.out, /^Notes {11}new  not linked$/m);
+  assert.match(r.out, new RegExp(`^Checkout {8}new  design ${Math.round(s.of("Checkout").ratio! * 100)}% of code$`, "m"));
+  assert.match(r.out, new RegExp(`^  confirm {7}new  design ${Math.round(conf.ratio! * 100)}% of code$`, "m"));
+  assert.match(r.out, /^ {2}applyCoupon {3}new$/m, "no ratio for a block measured against its whole feature");
+  assert.ok(r.out.indexOf("  confirm") > r.out.indexOf("Checkout ") && !/^Checkout\.confirm/m.test(r.out));
   assert.match(r.out, /^9 blocks: new 9, in step 0, design ahead 0, code ahead 0, both changed 0, not linked 1; design \d+% of code$/m);
   r = await oa(["pdl", "status", "Checkout", "--json"]);
   assert.equal((JSON.parse(r.out) as { blocks: Row[] }).blocks.length, 8, "a feature filter: its blocks");
@@ -268,6 +326,28 @@ try {
   r = await oa(["pdl", "sync", "--all"]);
   assert.equal(r.code, 0, r.out + r.err);
   assert.ok(Object.values(await statuses()).every((x) => x === "in step"));
+  // a block with no notes hashes as before notes counted: existing state does not turn design ahead
+  const hashes = (JSON.parse(read(".openarc/pdl.json")) as { blocks: Record<string, { design: string }> }).blocks;
+  const oldHash = (id: string) => `sha256:${createHash("sha256").update(designKey(ownText(blocks(parse(read(ARC))).find((b) => b.id === id)!.node))).digest("hex")}`;
+  for (const id of ["Checkout", "Checkout.confirm", "Checkout.Order", "Checkout.release"]) assert.equal(hashes[id]!.design, oldHash(id), id);
+  // a note is design: adding or editing one moves the block ahead, reformatting it does not; notes are not design size
+  const sizeBefore = (await status()).of("Checkout.release").designSize;
+  write(ARC, read(ARC).replace("  release() {", "  // releases run from a cron job too: keep this idempotent\n  release() {"));
+  s = await status();
+  assert.deepEqual([s.of("Checkout.release").status, s.of("Checkout.applyCoupon").status, s.of("Checkout").status], ["design ahead", "in step", "in step"]);
+  assert.equal(s.of("Checkout.release").designSize, sizeBefore);
+  assert.equal(s.of("Checkout.release").noteSize, "//releasesrunfromacronjobtoo:keepthisidempotent".length);
+  assert.equal(s.of("Checkout.confirm").noteSize, 0);
+  r = await oa(["pdl", "sync", "Checkout.release"]);
+  assert.equal(r.code, 0, r.err);
+  write(ARC, read(ARC).replace("// releases run from a cron job too: keep this idempotent", "//   releases run from a cron job too:\n  // keep this idempotent"));
+  assert.equal((await statuses())["Checkout.release"], "design ahead", "a note's text is design (a line comment split in two is an edit)");
+  write(ARC, read(ARC).replace("//   releases run from a cron job too:\n  // keep this idempotent", "//  releases   run from a cron job too: keep this idempotent"));
+  assert.equal((await statuses())["Checkout.release"], "in step", "whitespace inside a note is not");
+  write(ARC, read(ARC).replace("  a customer turns", "  // checkout is the only path that charges a card\n  a customer turns"));
+  assert.equal((await statuses())["Checkout"], "design ahead", "a feature's notes are its own");
+  r = await oa(["pdl", "sync", "--all"]);
+  assert.equal(r.code, 0, r.err);
 
   // the design moves ahead
   write(ARC, read(ARC).replace("the usual percentage coupon;", "the usual percentage coupon, rounded down;"));
@@ -318,7 +398,7 @@ try {
   assert.deepEqual([s.of("Checkout.ghost").status, s.of("Checkout.ghost").linked, s.of("Checkout.ghost").missing], ["new", true, ["src/nope.js"]]);
   assert.ok(!("codeSize" in s.of("Checkout.ghost")));
   r = await oa(["pdl", "status"]);
-  assert.match(r.out, /^Checkout\.ghost: new, missing src\/nope\.js$/m);
+  assert.match(r.out, /^ {2}ghost +new +missing src\/nope\.js$/m);
   const tinyDesign = s.of("Checkout.tiny").designSize;
   const tinyNote = async () => ((JSON.parse((await oa(["pdl", "check", "--json"])).out) as { findings: { id?: string; text: string }[] }).findings.find((f) => f.id === "Checkout.tiny"));
   write("src/tiny.js", "x".repeat(tinyDesign * 2)); // exactly 0.5: no note
@@ -338,15 +418,49 @@ try {
   r = await oa(["pdl", "show", "Checkout.confirm", "--json"]);
   assert.equal(r.code, 0, r.err);
   const show = JSON.parse(r.out) as Record<string, unknown>;
-  assert.deepEqual(Object.keys(show).sort(), ["assume", "codeSize", "designSize", "external", "file", "id", "kind", "line", "linked", "purpose", "ratio", "source", "status", "text", "uses"]);
+  assert.deepEqual(Object.keys(show).sort(), ["assume", "codeSize", "designSize", "exact", "external", "featureNotes", "file", "id", "kind", "line", "linked", "noteSize", "notes", "ownSource", "purpose", "ratio", "source", "status", "text", "uses"]);
+  assert.deepEqual(show.exact, { runnable: 0, notRunnable: 2 }, "visa and emptyCart are names, not literals");
+  assert.deepEqual([show.notes, show.featureNotes], [[], ["// checkout is the only path that charges a card"]]);
   assert.ok((show.text as string).startsWith("confirm(cart: Cart, card: Card): Order {") && (show.text as string).endsWith("}"));
   assert.ok(!(show.text as string).includes("applyCoupon"));
   assert.deepEqual(show.purpose, ["a customer turns a cart into a paid order", "the shop never charges for stock it does not have"]);
-  assert.match(show.assume as string, /^assume \{\n {4}money is whole cents/);
+  assert.equal(show.assume, "money is whole cents, never a float;\nOrder has the usual create, read and list-by-customer operations;", "the statements, not the wrapper");
   assert.deepEqual([show.uses, show.external, show.source, show.status], [["inventory", "pricing", "payments"], ["stripe", "postgres"], ["src/checkout/confirm.js"], "in step"]);
   assert.equal(show.ratio, (show.designSize as number) / (show.codeSize as number));
+  r = await oa(["pdl", "show", "Checkout.release"]);
+  assert.equal(r.out, `//  releases   run from a cron job too: keep this idempotent
+release() {
+  give the reserved units back;
+}
+
+purpose:
+  a customer turns a cart into a paid order
+  the shop never charges for stock it does not have
+
+notes:
+  // checkout is the only path that charges a card
+
+assume:
+  money is whole cents, never a float;
+  Order has the usual create, read and list-by-customer operations;
+
+uses:
+  inventory
+  pricing
+  payments
+  stripe (external)
+  postgres (external)
+
+source:
+  src/checkout/
+  src/pricing.js
+
+status:
+  in step
+`, "dedented, labelled sections, the notes above it with it and the feature's in notes, no ratio against the whole feature");
   r = await oa(["pdl", "show", "Checkout"]);
-  assert.match(r.out, /^blocks: Checkout\.assume, Checkout\.Order, /m);
+  assert.match(r.out, /^blocks:\n {2}Checkout\.assume\n {2}Checkout\.Order\n/m);
+  assert.match(r.out, /^notes:\n {2}\/\/ checkout is the only path that charges a card\n/m);
   assert.ok(!r.out.includes("reserve"), "a feature's show does not repeat its blocks");
   assert.equal((await oa(["pdl", "show", "Checkout.nope"])).code, 1);
   assert.equal((await oa(["pdl", "show"])).code, 2);

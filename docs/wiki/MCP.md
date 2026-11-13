@@ -29,6 +29,8 @@ Every tool also takes `root`, the project folder.
 | `pdl_show` | `pdl show <id> --json` | `id` |
 | `pdl_check` | `pdl check --json`: an error sets `isError`, the JSON report comes first | |
 | `pdl_sync` | `pdl sync <ids...>` | `ids` (one or more block ids) |
+| `pdl_verify` | `pdl verify [id] --json`: a failing line sets `isError` | `id` (a feature or block, optional) |
+| `pdl_draft` | `pdl draft <path> --json` (writes `arc/features/<name>.arc`) | `path` |
 
 Not exposed: `setup`, `decompile` without a flag (it writes many files and can run long), `pdl sync --all` and `pdl format` (they rewrite every design entry or file at once), and anything that calls a model. A value that would land as a positional argument may not start with `-`.
 

@@ -42,7 +42,7 @@ try {
   assert.deepStrictEqual((await rpc("ping")).result, {});
 
   const tools = (await rpc("tools/list")).result.tools as { name: string; description: string; inputSchema: { properties: object } }[];
-  for (const t of ["status", "decompile_report", "decompile_todo", "decompile_check", "arch", "arch_check", "concept", "concept_check", "inspect", "guard", "prompt", "accept", "pdl_status", "pdl_show", "pdl_check", "pdl_sync"]) assert.ok(tools.some((x) => x.name === t), t);
+  for (const t of ["status", "decompile_report", "decompile_todo", "decompile_check", "arch", "arch_check", "concept", "concept_check", "inspect", "guard", "prompt", "accept", "pdl_status", "pdl_show", "pdl_check", "pdl_sync", "pdl_verify", "pdl_draft"]) assert.ok(tools.some((x) => x.name === t), t);
   assert.ok(tools.every((t) => "root" in t.inputSchema.properties && t.description.length < 140), "every tool takes root; descriptions stay short");
   assert.ok(!tools.some((t) => t.name === "setup" || t.name === "decompile"));
 

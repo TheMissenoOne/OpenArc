@@ -10,9 +10,10 @@
 //
 // Keyword versus sentence: a statement is an exact form only when the WHOLE statement fits that form's pattern; a
 // sentence that merely starts with the keyword stays a sentence. `uses` takes a comma list of single names, `source`
-// and `fail` take string literals only, `example` takes `name(...)` then `=> value` or `throws "text"`, `check` takes an
-// expression with no two plain words in a row outside parentheses, brackets and strings (`check total >= 0` is a
-// check, `check the totals daily` a sentence). `initial`, `final` and transitions count only inside `state`; `on` and
+// and `fail` take string literals only, `example` takes `name(...)` (or `new Name(...).name(...)`) then `=> value` or
+// `throws "text"`, `check` takes an expression with no two plain words in a row outside parentheses, brackets and strings,
+// the rule operators `and or not in implies` not counting as words (`check total >= 0` is a check, `check the totals
+// daily` a sentence). `initial`, `final` and transitions count only inside `state`; `on` and
 // `visible when` only inside `screen`. Keywords are case-sensitive.
 
 // ── lexing: whitespace, comments, strings, single characters ──
@@ -46,7 +47,7 @@ export function clean(t: string): string {
 
 /** `s` with everything inside strings and inside ()[]{} groups blanked to spaces (same length), so a pattern run on it
  *  sees only the top level. A group's own delimiters and a string's quotes are kept. */
-function mask(s: string): string {
+export function mask(s: string): string {
   let out = "", depth = 0;
   for (const k of toks(s)) {
     const raw = s.slice(k.s, k.e);
@@ -118,6 +119,9 @@ function splitTop(s: string): string[] {
   return out.filter(Boolean);
 }
 
+/** The rule language's word operators (src/rules.ts): `check a >= 0 and a <= 9` is a check, not two words in a row. */
+const RULE_WORDS = /(?<![\w$])(?:and|or|not|in|implies)(?![\w$])/g;
+
 /** The exact form `text` fits inside a block of kind `parent`, else a sentence (see the header comment). */
 export function classify(text: string, parent: BlockKind | null): Omit<Stmt, "t" | "raw" | "start" | "line" | "terminated" | "text"> {
   let m: RegExpExecArray | null;
@@ -126,13 +130,13 @@ export function classify(text: string, parent: BlockKind | null): Omit<Stmt, "t"
   if ((m = new RegExp(`^source\\s+(${STR}(?:\\s*,\\s*${STR})*)$`).exec(text))) return { kind: "source", paths: strings(m[1]!) };
   if ((m = new RegExp(`^fail\\s+(${STR})$`).exec(text))) return { kind: "fail", message: strings(m[1]!)[0]! };
   if ((m = /^example\s+(.+)$/s.exec(text))) {
-    const r = m[1]!, c = /^[A-Za-z_$][\w$.]*\( *\)/.exec(mask(r));
+    const r = m[1]!, c = /^(?:new\s+[A-Za-z_$][\w$]*\( *\)\.)?[A-Za-z_$][\w$.]*\( *\)/.exec(mask(r));
     const after = c ? r.slice(c[0].length) : "";
     const v = /^\s*=>\s*(\S.*)$/s.exec(after), th = new RegExp(`^\\s*throws\\s+(${STR})$`).exec(after);
     if (c && v) return { kind: "example", call: r.slice(0, c[0].length), value: v[1]!.trim() };
     if (c && th) return { kind: "example", call: r.slice(0, c[0].length), throws: strings(th[1]!)[0]! };
   }
-  if ((m = /^check\s+(.+)$/s.exec(text)) && !/[A-Za-z_$][\w$]*\s+[A-Za-z_$]/.test(mask(m[1]!))) return { kind: "check", expr: m[1]!.trim() };
+  if ((m = /^check\s+(.+)$/s.exec(text)) && !/[A-Za-z_$][\w$]*\s+[A-Za-z_$]/.test(mask(m[1]!).replace(RULE_WORDS, " & "))) return { kind: "check", expr: m[1]!.trim() };
   if (parent === "state") {
     if ((m = new RegExp(`^initial\\s+(${ID})$`).exec(text))) return { kind: "initial", names: [m[1]!] };
     if ((m = new RegExp(`^final\\s+(${ID}(?:\\s*,\\s*${ID})*)$`).exec(text))) return { kind: "final", names: idList(m[1]!) };
@@ -256,18 +260,24 @@ function oneLine(raw: string, pad: string): string {
 }
 
 /** Canonical layout: 2-space indent, one statement per line, a blank line around each non-control block, comments kept
- *  (one on the line of what precedes it stays there), at most one blank line where the author had one, `} else {`.
+ *  (one on the line of what precedes it stays there, one right above a block stays right above it), at most one blank
+ *  line where the author had one, `} else {`, and a `state` block's transitions in columns (`from -> to : trigger`).
  *  Idempotent; statement tokens are never changed. A file with structural diagnostics is returned unchanged. */
 export function format(text: string): string {
   const tree = parse(text);
   if (tree.diagnostics.length) return text;
   const lines: string[] = [];
-  emit(tree.items, 0, lines, true);
+  emit(tree.items, 0, lines, true, null);
   return lines.length ? lines.join("\n") + "\n" : "";
 }
 
-function emit(items: Node[], depth: number, lines: string[], top: boolean): void {
+const hasComment = (raw: string) => [...toks(raw)].some((k) => k.k === "lc" || k.k === "bc");
+
+function emit(items: Node[], depth: number, lines: string[], top: boolean, kind: BlockKind | null): void {
   const pad = "  ".repeat(depth);
+  // a state's transitions in columns; one with a comment inside keeps the plain layout
+  const tr = kind === "state" ? items.filter((n): n is Stmt => n.t === "stmt" && n.kind === "transition" && !hasComment(n.raw)) : [];
+  const wf = Math.max(0, ...tr.map((n) => n.from!.length)), wt = Math.max(0, ...tr.map((n) => n.to!.length));
   let first = true, nl = 0, forceBlank = false, joinable = false, run = -1; // run: where the comment lines just above start
   const startLen = lines.length;
   const blank = () => { if (!first && lines[lines.length - 1] !== "") lines.push(""); };
@@ -291,7 +301,7 @@ function emit(items: Node[], depth: number, lines: string[], top: boolean): void
     if (n.t === "stray") continue; // only in files with diagnostics, which format leaves alone
     if (n.t === "stmt") {
       if (nl >= 2 || forceBlank) blank();
-      lines.push(pad + oneLine(n.raw, pad));
+      lines.push(pad + (tr.includes(n) ? `${n.from!.padEnd(wf)} -> ${n.to!.padEnd(wt)} : ${n.text.slice(n.text.indexOf(":") + 1).trim()};` : oneLine(n.raw, pad)));
       forceBlank = joinable = false;
       run = -1;
     } else {
@@ -303,7 +313,7 @@ function emit(items: Node[], depth: number, lines: string[], top: boolean): void
         lines.push(pad + head);
       } else { if (nl >= 2 || forceBlank || !control) blank(); lines.push(pad + head); }
       if (n.items.every((x) => x.t === "trivia" && !x.raw.trim())) lines[lines.length - 1] += "}";
-      else { emit(n.items, depth + 1, lines, false); lines.push(pad + "}"); }
+      else { emit(n.items, depth + 1, lines, false, n.kind); lines.push(pad + "}"); }
       forceBlank = !control;
       joinable = n.kind === "if" || n.kind === "else if";
       run = -1;
@@ -332,6 +342,40 @@ export function blocks(tree: Tree): BlockInfo[] {
   walk(tree.items, null);
   return out;
 }
+
+/** A block's notes: comments for the reader about what the code does not say. above: the run of comment lines right
+ *  above its header (no blank line between them and the header; a comment sharing a line with a statement or with the
+ *  enclosing `{` is not one). inside: the comments among its items, a control block's included, except those above a
+ *  nested block with an id (they are that block's) and those inside one. Comments inside a statement or a header are
+ *  part of it, not notes; comments outside every block and above none are nobody's. */
+export interface Notes { above: string[]; inside: string[] }
+
+export function notes(tree: Tree): Map<Block, Notes> {
+  const out = new Map<Block, Notes>(), of = (b: Block) => out.get(b) ?? out.set(b, { above: [], inside: [] }).get(b)!;
+  const walk = (ns: Node[], owner: Block | null) => ns.forEach((n, i) => {
+    if (n.t === "block") { if (n.name !== undefined) of(n); walk(n.items, n.name !== undefined ? n : owner); return; }
+    if (n.t !== "trivia") return;
+    const cs: { text: string; nl: number; lineStart: boolean }[] = [];
+    let nl = 0;
+    for (const k of toks(n.raw)) {
+      if (k.k === "ws") { nl += (n.raw.slice(k.s, k.e).match(/\n/g) ?? []).length; continue; }
+      cs.push({ text: n.raw.slice(k.s, k.e), nl, lineStart: nl > 0 || n.start + k.s === 0 });
+      nl = 0;
+    }
+    // above the next block: the longest run back from it with at most one line break between each, from its first
+    // comment that starts a line
+    const next = ns[i + 1];
+    let k = 0;
+    if (next?.t === "block" && next.name !== undefined) for (let j = cs.length - 1, gap = nl, run = 0; j >= 0 && gap <= 1; j--) { run++; if (cs[j]!.lineStart) k = run; gap = cs[j]!.nl; }
+    if (owner) of(owner).inside.push(...cs.slice(0, cs.length - k).map((c) => c.text));
+    if (k) of(next as Block).above.push(...cs.slice(cs.length - k).map((c) => c.text));
+  });
+  walk(tree.items, null);
+  return out;
+}
+
+/** Notes as hashed and measured: whitespace runs to one space. */
+export const noteKey = (ns: string[]): string => ns.join("\n").replace(/\s+/g, " ").trim();
 
 /** Every statement under `ns`, nested blocks included. */
 export const stmtsDeep = (ns: Node[]): Stmt[] => ns.flatMap((n) => (n.t === "stmt" ? [n] : n.t === "block" ? stmtsDeep(n.items) : []));
