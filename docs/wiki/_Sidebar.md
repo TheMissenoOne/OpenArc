@@ -14,6 +14,7 @@
 - [[Watch Mode]]
 - [[Agent Sync]]
 - [[Host Agent Mode]]
+- [[MCP]]
 - [[Decompile]]
 - [[Rules]]
 - [[Levels]]

@@ -33,6 +33,7 @@ import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools
 import { guardHook, hostPorts, hostPrompt, hostRefusal } from "./host.ts";
 import { parseCodeOutput } from "./output-format.ts";
 import { setupCommand } from "./setup.ts";
+import { serveMcp } from "./mcp.ts";
 
 const MESSAGES: Record<string, string> = {
   "OARC-W001": "'@openarc:' text that is not a valid marker",
@@ -314,7 +315,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc status [--json] [--part <name>] [--goal <name>]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
        openarc prompt <id> [--json] | accept <id> [--file <path>] [--json] | guard [files...] [--json] | guard --hook
-       openarc setup [--agents claude,codex,opencode] [--agent-root <dir>] [--dry-run] [--yes] [--remove] [--json]
+       openarc setup [--agents claude,codex,opencode] [--agent-root <dir>] [--dry-run] [--yes] [--remove] [--json] | mcp
        ${LINT_USAGE}`;
 
 /** What git doesn't need from .openarc/: adds the lines that are missing. True when it wrote. */
@@ -880,6 +881,7 @@ async function main(argv: string[]): Promise<number> {
   if (argv[0] === "guard") return guardCmd(root, ports, argv.slice(1));
   if (argv[0] === "status") return statusCmd(ports, argv.slice(1));
   if (argv[0] === "setup") return setupCmd(argv.slice(1));
+  if (argv[0] === "mcp") return argv.length === 1 ? serveMcp([process.execPath, ...process.execArgv, process.argv[1]!], process.cwd()) : (console.error(`openarc: bad-flag\n\n${USAGE}`), 2); // src/mcp.ts
   if (argv[0] === "lint") { // spec rules, offline: no model, no sandbox (src/lint.ts)
     const args = argv.slice(1).map((a, i, all) => (/[/\\]|\.tsx?$/.test(a) && all[i - 1] !== "--profile" && all[i - 1] !== "--format" ? relative(root, resolve(process.cwd(), a)).split(sep).join("/") : a));
     return lintCommand(ports, request(root, null, []), args, { out: (l) => console.log(l), err: (l) => console.error(l), message: (c) => MESSAGES[c] ?? "" });
