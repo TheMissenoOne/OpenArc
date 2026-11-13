@@ -89,7 +89,7 @@ Each function gets one status, stored in `.openarc/decompile.json`:
 
 | Status | Meaning |
 |---|---|
-| `failing` | a test file that uses it fails, or one of its `example` lines does not hold. `why` names the first: `example (3) => 6: the code returns 4` |
+| `failing` | a test file that uses it fails, one of its `example` lines does not hold, or a rule is broken or unparsable on the calls the run made ([[Rules]]). `why` names the first: `example (3) => 6: the code returns 4`, `rule bounded: broken by (-50) -> -50` |
 | `tested` | `--run-tests` ran every test file that uses it, and they passed |
 | `specified` | it has `example` lines and the code satisfies all of them |
 | `observed` | it has only observations |
