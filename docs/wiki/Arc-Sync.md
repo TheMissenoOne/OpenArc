@@ -81,7 +81,10 @@ It refuses, on stderr with exit 1:
 - a function that is in no `.arc` file;
 - a function with no `example` lines: nothing would verify the body. Promote an `observed` line (change the word to `example`) or write an example;
 - a body that repeats the signature, or that changes code outside the body (unbalanced braces);
-- a body with `import` lines: add the import to the file first.
+- a body with `import` lines: add the import to the file first;
+- an invalid `openarc.config.json`, or a configured isolation tier that is not available here (`OARC-E092`).
+
+`arc status`, `arc accept` and `arc compile` print the sandbox notice (`OARC-W046`, `OARC-W047`) once, on stderr. Every `arc` command stops on an invalid `openarc.config.json`; when the configured tier is unavailable, `arc status` goes on and reports the checks it cannot run as `unrunnable`.
 
 ## `arc compile`
 

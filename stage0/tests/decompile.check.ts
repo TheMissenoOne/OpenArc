@@ -614,6 +614,35 @@ try {
     assert.strictEqual(p.state().modules["src/x.js"]!.fns.guard!.status, "failing");
     assert.match(p.state().modules["src/x.js"]!.fns.guard!.why!, /^example \(.*: OARC-E090 harness crashed \(exit 3\): no output$/);
   }
+  // openarc.config.json: invalid stops every command that runs code, as `openarc doctor` does; missing means the defaults.
+  // The sandbox notice goes to stderr once per command (stdout stays JSON), and the tier is part of the reuse key
+  {
+    const p = project();
+    roots.push(p.root);
+    p.put("package.json", '{"name":"cfg","version":"1.0.0","private":true,"type":"module"}');
+    p.put("src/x.js", "/** @param {number} n */\nexport function inc(n) { return n + 1; }\n");
+    assert.strictEqual(p.run("decompile").code, 0); // no config file: the defaults
+    const cfg = (isolation: string) => p.put("openarc.config.json", JSON.stringify({ version: 1, backends: { local: { provider: "openai", baseUrl: "http://127.0.0.1:8080/v1", model: "m", maxContextTokens: 8192 } }, sandbox: { isolation } }));
+    cfg("bwarp");
+    const doctor = p.run("doctor");
+    assert.strictEqual(doctor.code, 1);
+    for (const args of [["decompile"], ["decompile", "--check"], ["decompile", "--fresh", "--json"], ["arc", "status"], ["arc", "prompt", "x.inc"], ["arc", "compile", "x.inc"], ["view", "--once"]])
+      assert.deepStrictEqual(p.run(...args), doctor, args.join(" "));
+    const split = (...args: string[]) => spawnSync(process.execPath, ["--no-warnings", MAIN, ...args], { cwd: p.root, encoding: "utf8" });
+    cfg("node");
+    for (const args of [["decompile", "--json"], ["decompile", "--check", "--json"], ["arc", "status", "--json"]]) {
+      const r = split(...args);
+      assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+      assert.strictEqual(r.stderr.match(/OARC-W046/g)?.length, 1, `${args.join(" ")}: ${r.stderr}`);
+      JSON.parse(r.stdout);
+    }
+    // a change of tier runs the module again
+    cfg("unsafe-none");
+    const r = p.run("decompile");
+    assert.match(r.out, /OARC-W047/);
+    assert.match(r.out, /^src\/x\.js: 1 functions$/m, r.out);
+    assert.match(p.run("decompile").out, /^src\/x\.js: 1 functions \(unchanged\)$/m);
+  }
 } finally {
   for (const d of roots) rmSync(d, { recursive: true, force: true });
 }

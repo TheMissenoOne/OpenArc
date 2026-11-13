@@ -193,20 +193,26 @@ try {
     tier("node");
     const r = t.oa(["decompile"]);
     assert.strictEqual(r.code, 0, r.out);
-    assert.match(r.out, /^OARC-E092 sandbox unavailable: Go code needs bwrap \(Linux\) or sandbox-exec \(macOS\), not node, so no Go function ran\. To run Go code with no sandbox at all, as you, with your files and your network, set "sandbox": \{ "isolation": "unsafe-none" \} in openarc\.config\.json, then run decompile --fresh$/m);
+    assert.match(r.out, /^OARC-E092 sandbox unavailable: Go code needs bwrap \(Linux\) or sandbox-exec \(macOS\), not node, so no Go function ran\. To run Go code with no sandbox at all, as you, with your files and your network, set "sandbox": \{ "isolation": "unsafe-none" \} in openarc\.config\.json$/m);
     assert.strictEqual(r.out.match(/OARC-E092/g)?.length, 1, "said once per run");
     assert.match(r.out, /observed 0, described 1,/);
     const kept = (JSON.parse(t.read(".openarc/decompile.json")) as { modules: Record<string, { fns: Record<string, { why: string }> }> }).modules["src/t.go"]!.fns.Inc!.why;
-    assert.strictEqual(kept, 'OARC-E092 sandbox unavailable: Go code needs bwrap (Linux) or sandbox-exec (macOS), not node; or sandbox.isolation "unsafe-none" (no sandbox), then decompile --fresh');
+    assert.strictEqual(kept, 'OARC-E092 sandbox unavailable: Go code needs bwrap (Linux) or sandbox-exec (macOS), not node; or sandbox.isolation "unsafe-none" (no sandbox)');
+    assert.match(t.oa(["decompile"]).out, /^src\/t\.go: 1 functions$/m, "a refused module is not reused, also on the same tier");
     if (process.platform === "win32") {
       tier("unsafe-none");
-      const u = t.oa(["decompile", "--fresh"]);
+      const u = t.oa(["decompile"]); // no --fresh: a refused module is never reused
       assert.match(u.out, /observed 1, described 0,/, u.out);
       assert.ok(t.read("arc/spec/t.arc").includes("  observed (0) => 1\n"), t.read("arc/spec/t.arc"));
       console.log("go.check ok: Windows has no sandbox for Go: checked the node tier's refusal and an unsafe-none run only");
       for (const d of roots) rmSync(d, { recursive: true, force: true });
       process.exit(0);
     }
+    // a sandbox that can run Go now: the refused module runs without --fresh
+    tier("auto");
+    const a = t.oa(["decompile"]);
+    assert.match(a.out, /^src\/t\.go: 1 functions$/m, a.out);
+    assert.ok(t.read("arc/spec/t.arc").includes("  observed (0) => 1\n"), t.read("arc/spec/t.arc"));
   }
 
   const p = project({ "go.mod": "module example.com/calc\n\ngo 1.22\n", "src/calc.go": CALC, "src/loop.go": LOOP, "src/calc_test.go": TESTS });

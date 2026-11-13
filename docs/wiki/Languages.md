@@ -103,8 +103,9 @@ not a private tmpfs.
 
 The node tier cannot confine a Go binary, so Go code needs `bwrap` or `sandbox-exec`. The refusal says how to proceed:
 `"sandbox": { "isolation": "unsafe-none" }` in `openarc.config.json` runs it with no sandbox at all, as you, with your
-files and your network; then `openarc decompile --fresh` (an unchanged module is otherwise not run again). The
-message is printed once per run, and each function keeps a short form of it as its reason.
+files and your network. The next `openarc decompile` runs the module again without `--fresh`: a module where no
+sandbox could run a function is never reused. The message is printed once per run, and each function keeps a short
+form of it as its reason.
 
 ### `arc accept`
 

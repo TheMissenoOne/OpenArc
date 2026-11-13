@@ -33,6 +33,8 @@ export interface DecompileCtx {
   testCmd?: string[];
   /** Run every module again, also unchanged ones. */
   fresh?: boolean;
+  /** The effective isolation tier (e.g. "bwrap", "node"): part of the reuse key, so a module recorded under another tier runs again. */
+  tier?: string;
   /** With testCmd: record the arguments the exported functions receive while the tests run (core/record.mjs). */
   record?: boolean;
   /** `--check`: at most this many generated inputs per function with rules (default 50). */
@@ -301,10 +303,12 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
         let old: ArcModule | null = null;
         try { old = before === null ? null : parseArc(before); } catch (e) { ctx.log(`${arcFile}: ${(e as Error).message}; left as it is`); state.modules[file] = prev?.modules[file] ?? { hash: "", arc: arcFile, fns: {}, skipped: {} }; continue; }
         const testsOf = (x: FoundFn) => x.tests;
-        // the reuse key: the module's text, its test mapping and command, its requirement lines, the files it imports
-        const hash = sha([text, m.found.map((x) => testsOf(x).join(",")).join(";"), ctx.testCmd?.join(" ") ?? "", requirements(old), ...importsOf(file).map((f) => `${f}\n${texts.get(f)}`)].join("\0"));
+        // the reuse key: the module's text, its test mapping and command, its requirement lines, the isolation tier, the
+        // files it imports. A module where no sandbox could run a function (E092) is never reused. ponytail: E092 is read
+        // from each function's `why`; a failing test's reason replaces it, and such a module is reused on the same tier
+        const hash = sha([text, m.found.map((x) => testsOf(x).join(",")).join(";"), ctx.testCmd?.join(" ") ?? "", requirements(old), ctx.tier ?? "", ...importsOf(file).map((f) => `${f}\n${texts.get(f)}`)].join("\0"));
         const known = prev?.modules[file];
-        const reuse = !ctx.fresh && !!old && known?.hash === hash;
+        const reuse = !ctx.fresh && !!old && known?.hash === hash && !Object.values(known.fns).some((f) => f.why?.includes("OARC-E092"));
         const fns: Record<string, FnState> = {};
         // the module's test files run first: what they record feeds its inputs
         if (ctx.testCmd) for (const t of new Set(m.found.flatMap(testsOf).sort())) await passes(t);
