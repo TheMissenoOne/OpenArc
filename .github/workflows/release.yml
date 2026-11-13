@@ -1,7 +1,7 @@
 name: Release
 
-# The standalone download (stage0/tools/build-binary.ts) for each POSIX runner, attached to the GitHub Release of the
-# tag with a SHA256SUMS file. npm stays the main channel; this workflow publishes nothing to npm.
+# The standalone download (stage0/tools/build-binary.ts, built and checked by binary.yml) for each platform, attached
+# to the GitHub Release of the tag with a SHA256SUMS file. npm stays the main channel; this workflow publishes nothing to npm.
 on:
   push:
     tags: ["v*"]
@@ -19,41 +19,10 @@ env:
 
 jobs:
   build:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: true
-      matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest] # linux-x64, linux-arm64, darwin-arm64; no Windows launcher
-    defaults:
-      run:
-        shell: bash
-        working-directory: stage0
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 25.x # the runtime the download ships
-
-      - name: Tag matches the package version
-        run: |
-          v="v$(node -p 'require("./core/package.json").version')"
-          [ "$v" = "$TAG" ] || { echo "tag $TAG but core/package.json says $v"; exit 1; }
-
-      - name: Install
-        run: npm ci
-
-      # builds build/openarc-<version>-<os>-<arch>.tar.gz, then runs it with no node on the PATH
-      - name: Build and check the standalone download
-        run: OPENARC_BINARY_CHECK=1 node --no-warnings tests/binary.check.ts
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: openarc-${{ matrix.os }}
-          path: stage0/build/openarc-*.tar.gz
-          if-no-files-found: error
+    uses: ./.github/workflows/binary.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+      upload: true
 
   release:
     needs: build
@@ -67,11 +36,11 @@ jobs:
           merge-multiple: true
       - name: Checksums
         working-directory: dist
-        run: sha256sum openarc-*.tar.gz | tee SHA256SUMS
+        run: sha256sum openarc-*.tar.gz openarc-*.zip | tee SHA256SUMS
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "$TAG" --notes "Standalone downloads: see the wiki's Install page. npm: \`npm i -D open-arc\`."
-          gh release upload "$TAG" dist/openarc-*.tar.gz dist/SHA256SUMS --clobber
+          gh release upload "$TAG" dist/openarc-* dist/SHA256SUMS --clobber

@@ -41,6 +41,16 @@ jobs:
           fi
           echo "bwrap works"
 
+      # tests/go.check.ts runs Go code in this OS's sandbox; macOS images keep Go in the tool cache, off PATH
+      - name: Go on PATH
+        run: |
+          if ! command -v go > /dev/null; then
+            d=$(ls -d "$RUNNER_TOOL_CACHE"/go/*/*/bin | sort -V | tail -1)
+            echo "$d" >> "$GITHUB_PATH"
+            PATH="$d:$PATH"
+          fi
+          go version
+
       - name: Install
         working-directory: stage0
         run: npm ci
@@ -105,3 +115,7 @@ jobs:
           # the Node-permission-only tier on every OS, too
           node -e 'const fs=require("fs"),f="openarc.config.json",c=JSON.parse(fs.readFileSync(f,"utf8"));c.sandbox={isolation:"node"};fs.writeFileSync(f,JSON.stringify(c))'
           npx openarc doctor
+
+  # the standalone download on every platform the release builds, without publishing anything
+  binary:
+    uses: ./.github/workflows/binary.yml
