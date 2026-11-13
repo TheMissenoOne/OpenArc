@@ -492,6 +492,16 @@ try {
     assert.ok(r.out.includes("lib/index.js: its .arc file is arc/spec/lib/index.arc: arc/spec/index.arc would be another module's too\n"), r.out);
     assert.strictEqual(p.get("arc/spec/index.arc"), srcArc);
     assert.ok(p.get("arc/spec/lib/index.arc").startsWith('module lib.index from "lib/index.js"\n\nfn dec(n: Num): Num\n'));
+    // the state file keeps both dirs; a module whose source is gone leaves it, in a scanned dir or not
+    assert.deepStrictEqual(Object.keys(p.state().modules).sort(), ["lib/index.js", "src/index.js"]);
+    assert.match(p.run("decompile", "--report").out, /^src\/index\.js: tested 0, failing 0, specified 0, observed 1,/m);
+    p.put("lib/extra.js", "export const x = () => 1;\n");
+    p.run("decompile", "lib");
+    assert.deepStrictEqual(Object.keys(p.state().modules).sort(), ["lib/extra.js", "lib/index.js", "src/index.js"]);
+    rmSync(join(p.root, "lib/extra.js"));
+    rmSync(join(p.root, "src/index.js"));
+    p.run("decompile", "lib");
+    assert.deepStrictEqual(Object.keys(p.state().modules), ["lib/index.js"]);
   }
 
   // a function the code no longer exports: its block stays when it holds lines written by hand, else it goes

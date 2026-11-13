@@ -380,7 +380,10 @@ export async function decompile(ctx: DecompileCtx): Promise<DecompileState & { c
     await box.close();
     if (ctx.testCmd && ctx.record) await ports.fs.remove(RECORDED);
   }
-  await ports.fs.write(STATE_FILE, JSON.stringify(state, null, 1) + "\n");
+  // the modules of other dirs stay while their source exists; in the scanned dirs only this run's
+  const others: Record<string, ModuleState> = {};
+  for (const [f, m] of Object.entries(prev?.modules ?? {})) if (!state.modules[f] && !ctx.dirs.some((d) => inDir(d, f)) && (await ports.fs.read(f)) !== null) others[f] = m;
+  await ports.fs.write(STATE_FILE, JSON.stringify({ ...state, modules: { ...others, ...state.modules } }, null, 1) + "\n");
   return { ...state, changed };
 }
 
