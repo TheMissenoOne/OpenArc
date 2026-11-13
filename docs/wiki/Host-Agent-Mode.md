@@ -92,6 +92,8 @@ It reads only the manifest and the edited file, runs no type check, and executes
 
 ## Agents
 
+`openarc setup` installs the guard hook and the skills for all three agents in one command, calling the project's `.openarc/bin/openarc` wrapper: see [[Setup]]. The table below is the plugins you install by hand.
+
 All three integrations run the binary as `$OPENARC_BIN` when that variable is set, so a project doesn't need the package installed. Otherwise they use `node_modules/.bin/openarc`, then `openarc` on the `PATH`. They wire `guard --hook` only in a project with `openarc.config.json`. A missing binary or a failing guard never blocks an edit.
 
 | Agent | Pre-edit hook |
