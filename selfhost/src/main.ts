@@ -36,6 +36,7 @@ import { parseCodeOutput } from "./output-format.ts";
 import { setupCommand } from "./setup.ts";
 import { serveMcp } from "./mcp.ts";
 import { view } from "./view.ts";
+import { pdlDraft, NEXT as DRAFT_NEXT } from "./pdldraft.ts";
 import { PDL_DIR, overall, pct, pdlCheck, pdlFormat, pdlShow, pdlStatus, pdlSync, type PdlRow } from "./pdlsync.ts";
 
 const MESSAGES: Record<string, string> = {
@@ -326,7 +327,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>] [--no-record]] [--fresh] [--json] | decompile --report|--todo [--json] | decompile --check [dirs...] [--out=<dir>] [--rule-inputs <n>] [--json]
        openarc arc status [<module>|<module.fn>] [--json] | arc prompt <module.fn> [--json] | arc accept <module.fn> [--file <path>] [--json] | arc compile <module.fn>|<module>|--stale [--json]
        openarc view [<module>] [--once] [--width <n>] [--out=<dir>]
-       openarc pdl status [<feature>|<id>] [--json] | pdl check [--json] | pdl show <id> [--json] | pdl sync <ids...>|--all | pdl format [--check] [files...]
+       openarc pdl status [<feature>|<id>] [--json] | pdl check [--json] | pdl show <id> [--json] | pdl sync <ids...>|--all | pdl format [--check] [files...] | pdl draft <file-or-dir>... [--name <Name>] [--json]
        openarc arch [dirs...] [--check] [--json] | concept [--check] [--json]
        openarc status [--json] [--part <name>] [--goal <name>]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
@@ -494,11 +495,13 @@ const pdlLine = (r: PdlRow) =>
  *  format --check exits 1 when a file would change. */
 async function pdlCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
-  const flags = rest.filter((a) => a.startsWith("--")), args = rest.filter((a) => !a.startsWith("--"));
-  const allowed: Record<string, string[]> = { status: ["--json"], check: ["--json"], show: ["--json"], sync: ["--all"], format: ["--check"] };
+  const ni = sub === "draft" ? rest.indexOf("--name") : -1, name = ni >= 0 ? rest[ni + 1] : undefined;
+  const flags = rest.filter((a) => a.startsWith("--")), args = rest.filter((a, i) => !a.startsWith("--") && (ni < 0 || i !== ni + 1));
+  const allowed: Record<string, string[]> = { status: ["--json"], check: ["--json"], show: ["--json"], sync: ["--all"], format: ["--check"], draft: ["--json", "--name"] };
   const bad = !allowed[sub ?? ""] || flags.some((f) => !allowed[sub!]!.includes(f))
     || (sub === "status" && args.length > 1) || (sub === "check" && args.length) || (sub === "show" && args.length !== 1)
-    || (sub === "sync" && (flags.includes("--all") ? args.length > 0 : !args.length));
+    || (sub === "sync" && (flags.includes("--all") ? args.length > 0 : !args.length))
+    || (sub === "draft" && (!args.length || (ni >= 0 && (!name || name.startsWith("--") || args.length > 1))));
   if (bad) return console.error(`openarc: bad-flag\n\n${USAGE}`), 2;
   const json = flags.includes("--json");
   if (sub === "status") {
@@ -542,6 +545,15 @@ async function pdlCmd(root: string, ports: Ports, argv: string[]): Promise<numbe
     const r = await pdlSync(ports, flags.includes("--all") ? "all" : args);
     if ("refused" in r) return r.refused.forEach((l) => console.error(l)), 1;
     console.log(`synced ${r.synced.length} blocks${r.synced.length ? `: ${r.synced.join(", ")}` : ""}`);
+    return 0;
+  }
+  if (sub === "draft") {
+    const ctx = { ports, root, out: "arc/spec", dirs: [], request: (p: engine.Project | null, ids: string[]) => request(root, p, ids), log: (l: string) => console.error(l) };
+    const r = await pdlDraft(ctx, args.map((a) => relative(root, resolve(process.cwd(), a)).split(sep).join("/")), name);
+    if ("refused" in r) return json ? console.log(JSON.stringify(r)) : r.refused.forEach((l) => console.error(l)), 1;
+    if (json) return console.log(JSON.stringify({ ...r, next: DRAFT_NEXT })), 0;
+    for (const d of r.drafted) console.log(`wrote ${d.file}: feature ${d.feature}, ${d.functions} function blocks${d.ratio !== null ? `, design ${pct(d.ratio)} of code` : ""}`);
+    console.log(DRAFT_NEXT);
     return 0;
   }
   const check = flags.includes("--check");

@@ -102,7 +102,7 @@ function classifyHead(h: string): Pick<Block, "kind" | "name" | "cond" | "params
   if (h === "assume") return { kind: "assume", name: "assume" };
   if ((m = new RegExp(`^state\\s+(${ID})$`).exec(h))) return { kind: "state", name: m[1]! };
   if ((m = new RegExp(`^(rule|screen)\\s+(${ID})(?:\\s*\\(\\s*\\))?$`).exec(h))) return { kind: m[1] as "rule" | "screen", name: m[2]! };
-  if ((m = new RegExp(`^(${ID})\\s*\\( *\\)\\s*(:\\s*\\S.*)?$`, "s").exec(mk))) {
+  if ((m = new RegExp(`^(${ID}(?:\\.${ID})*)\\s*\\( *\\)\\s*(:\\s*\\S.*)?$`, "s").exec(mk))) {
     const close = mk.indexOf(")"), params = h.slice(h.indexOf("(") + 1, close).trim();
     const paramList = params ? splitTop(params).map((p) => { const x = /^([^:]+?)\s*:\s*(.+)$/s.exec(p); return x ? { name: x[1]!, type: x[2]! } : { name: p }; }) : [];
     return { kind: "function", name: m[1]!, params, paramList, ...(m[2] ? { type: h.slice(mk.indexOf(":", close) + 1).trim() } : {}) };
