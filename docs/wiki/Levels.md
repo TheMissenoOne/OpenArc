@@ -14,6 +14,7 @@ openarc arch [dirs...] [--json]      derive arc/architecture.arc, or add to it
 openarc arch [dirs...] --check [--json]
 openarc concept [--json]             write a minimal arc/concept.arc, or reprint it in canonical form
 openarc concept --check [--json]
+openarc status [--json] [--part <name>] [--goal <name>]
 ```
 
 `dirs` are the source directories (default `src`), the same files decompile reads: code files that are not tests.
@@ -91,6 +92,27 @@ term Daemon
 With no file, `openarc concept` writes the header only and prints the architecture's parts, for a person or a coding agent to write goals against. With a file, it checks the syntax and reprints it in canonical form.
 
 `openarc concept --check` exits 1 when a goal names no part, or names a part `arc/architecture.arc` does not have. It warns about a part no goal names and an empty concept intent.
+
+## Status
+
+`openarc status` reads across the levels and says what backs each goal and each part. It reads `arc/concept.arc`, `arc/architecture.arc` and `.openarc/decompile.json`, runs no code and writes nothing.
+
+```
+goal voice: parts daemon, audio: 12 functions (tested 4, observed 5, bare 3); weakest bare; 1 skipped; not decompiled: src/audio/mic.js
+part daemon: 2 modules, 7 functions (tested 4, bare 3); weakest bare; 1 skipped
+part audio: 1 modules, 5 functions (observed 5); weakest observed; not decompiled: src/audio/mic.js
+unassigned: 1 modules, 1 functions (described 1); weakest described
+total: 4 modules, 13 functions (tested 4, observed 5, described 1, bare 3); weakest bare; 1 skipped
+```
+
+- A part counts the functions of the decompiled files its `module` lines match (the same matching as `arch --check`), per status, and its skipped exports. A `module` line with no file in the decompile state is listed as `not decompiled`; that includes a file that exports no function.
+- `unassigned` holds the decompiled files in no part. A goal counts the files of the parts it names, each file once; a part the architecture does not have is named on the goal's line.
+- `weakest` is the weakest status present, in this order, weakest first: `failing`, `bare`, `described`, `observed`, `examples`, `specified`, `tested`. A status name not in the list ranks just before `described`.
+- `--part <name>` or `--goal <name>` prints that one item, a line per module, and its `failing` and `bare` functions with the reason (the first 20).
+- `--json` prints `{ goals, parts, unassigned, totals, missing }` (or the one item), counts as `{ <status>: n }`.
+- A missing concept or architecture file is named with the command that writes it, and the rest is still reported. Exit 1 when there is no decompile state or the part or goal is unknown, 2 on a bad flag.
+
+The report never says a goal or part is verified: a goal is prose, and a machine can only report what was checked below it.
 
 ## Limits
 
