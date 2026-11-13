@@ -13,6 +13,7 @@
 - [[Watch Mode]]
 - [[Agent Sync]]
 - [[Decompile]]
+- [[Levels]]
 - [[CLI Reference]]
 - [[Bootstrap]]
 - [[Design Log]]

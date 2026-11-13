@@ -36,11 +36,11 @@ export interface ModuleState { hash: string; arc: string; fns: Record<string, Fn
 export interface DecompileState { version: 1; modules: Record<string, ModuleState> }
 export const STATE_FILE = ".openarc/decompile.json";
 
-const CODE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
-const isTest = (rel: string) => /(^|\/)(tests?|__tests__)\//.test(rel) || /\.(test|spec)\.[^/]+$/.test(rel);
+export const CODE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
+export const isTest = (rel: string) => /(^|\/)(tests?|__tests__)\//.test(rel) || /\.(test|spec)\.[^/]+$/.test(rel);
 const sha = (t: string) => createHash("sha256").update(t).digest("hex").slice(0, 16);
 
-async function walk(ports: Ports, dir: string, out: string[] = []): Promise<string[]> {
+export async function walk(ports: Ports, dir: string, out: string[] = []): Promise<string[]> {
   for (const name of (await ports.fs.list(dir)).sort()) {
     const rel = `${dir}/${name}`;
     if (name === "node_modules" || name.startsWith(".")) continue;

@@ -26,6 +26,7 @@ import { adopt, brief, syncOnce, type SyncCtx, type SyncStatus } from "./sync.ts
 import { SHEET_FILE } from "./sheet.ts";
 import { STATE_FILE, decompile, report, todo, type DecompileState } from "./decompile.ts";
 import { parseArc, type ArcModule } from "./arc.ts";
+import { ARCH_FILE, CONCEPT_FILE, checkArch, checkConcept, deriveArch, formatReport, importsOf, parseArch, parseConcept, printArch, printConcept, projectName, sources, updateArch, type Arch, type Concept } from "./levels.ts";
 import { LINT_USAGE, lintCommand } from "./lint.ts";
 import { HARNESS_ENTRY, chooseTier, nodeBlocksNetwork, nodeVersionOf, probeTools, type TierChoice } from "./isolation.ts";
 
@@ -305,6 +306,7 @@ const USAGE = `usage: openarc init [--example|--no-example] [--backend <preset> 
        openarc doctor
        openarc adopt [--brief] [--json] [--no-model] | sync [--watch] [--brief] [--json] [--no-model]
        openarc decompile [dirs...] [--out=<dir>] [--run-tests[=<command>]] [--fresh] [--json] | decompile --report|--todo [--json]
+       openarc arch [dirs...] [--check] [--json] | concept [--check] [--json]
        openarc deps suggest <id> [--max <n>] [--json] [--no-trial] [--query <text>] [--keep]
        ${LINT_USAGE}`;
 
@@ -355,6 +357,56 @@ async function decompileCmd(root: string, ports: Ports, argv: string[]): Promise
   if (has("--json")) return console.log(JSON.stringify({ totals: r.totals, modules: state.modules })), 0;
   if (has("--report")) for (const l of r.lines) console.log(l);
   console.log(`decompiled ${Object.keys(state.modules).length} modules: tested ${r.totals.tested}, failing ${r.totals.failing}, examples ${r.totals.examples}, described ${r.totals.described}, bare ${r.totals.bare}, skipped ${r.totals.skipped}`);
+  return 0;
+}
+
+/** `openarc arch [dirs...] [--check] [--json]`: the parts, which part uses which, and the packages, derived from the real
+ *  imports and checked against them (src/levels.ts). A later derive only adds. */
+async function archCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
+  const flags = argv.filter((a) => a.startsWith("--")), dirs = argv.filter((a) => !a.startsWith("--")).map((d) => d.replace(/\/+$/, ""));
+  if (flags.some((f) => f !== "--check" && f !== "--json") || dirs.some((d) => d.startsWith("/") || d.split("/").includes(".."))) {
+    console.error(`openarc: bad-flag\n\n${USAGE}`);
+    return 2;
+  }
+  const json = flags.includes("--json"), code = await sources(ports, dirs.length ? dirs : ["src"]), files = [...code.keys()], edges = importsOf(code);
+  const text = await ports.fs.read(ARCH_FILE);
+  let a: Arch | null;
+  try { a = text === null ? null : parseArch(text); } catch (e) { return console.error(`${ARCH_FILE}: ${(e as Error).message}`), 1; }
+  if (flags.includes("--check")) {
+    if (!a) return console.error(`openarc: no ${ARCH_FILE} yet; run \`openarc arch\` first`), 1;
+    const r = checkArch(a, files, edges);
+    return console.log(formatReport(r, json)), r.ok ? 0 : 1;
+  }
+  const added = a ? updateArch(a, files, edges) : [];
+  a ??= deriveArch(await projectName(ports, root), files, edges);
+  const out = printArch(a);
+  if (out !== text) await ports.fs.write(ARCH_FILE, out);
+  if (json) return console.log(JSON.stringify({ added, parts: a.parts.length, modules: files.length, externals: a.externals.length })), 0;
+  for (const l of added) console.log(`added ${l}`);
+  console.log(`${ARCH_FILE}: ${a.parts.length} parts, ${files.length} modules, ${a.externals.length} externals`);
+  return 0;
+}
+
+/** `openarc concept [--check] [--json]`: what the project is for, its goals traced to the architecture's parts. Without a
+ *  file it writes a minimal one; with one it reprints it in canonical form. */
+async function conceptCmd(root: string, ports: Ports, argv: string[]): Promise<number> {
+  if (argv.some((f) => f !== "--check" && f !== "--json")) {
+    console.error(`openarc: bad-flag\n\n${USAGE}`);
+    return 2;
+  }
+  const json = argv.includes("--json"), [archText, text] = await Promise.all([ports.fs.read(ARCH_FILE), ports.fs.read(CONCEPT_FILE)]);
+  let parts: string[] = [], c: Concept;
+  try { if (archText !== null) parts = parseArch(archText).parts.map((p) => p.name); } catch (e) { return console.error(`${ARCH_FILE}: ${(e as Error).message}`), 1; }
+  try { c = text === null ? { name: await projectName(ports, root), intent: [], goals: [], nongoals: [], terms: [] } : parseConcept(text); } catch (e) { return console.error(`${CONCEPT_FILE}: ${(e as Error).message}`), 1; }
+  if (argv.includes("--check")) {
+    const r = checkConcept(c, parts);
+    return console.log(formatReport(r, json)), r.ok ? 0 : 1;
+  }
+  const out = printConcept(c);
+  if (out !== text) await ports.fs.write(CONCEPT_FILE, out);
+  if (json) return console.log(JSON.stringify({ goals: c.goals.length, parts })), 0;
+  console.log(`${CONCEPT_FILE}: ${c.goals.length} goals, ${c.nongoals.length} nongoals, ${c.terms.length} terms`);
+  console.log(archText === null ? `no ${ARCH_FILE} yet; run \`openarc arch\` for the parts goals trace to` : `parts goals can trace to: ${parts.join(", ")}`);
   return 0;
 }
 
@@ -701,6 +753,7 @@ async function main(argv: string[]): Promise<number> {
   if (argv[0] === "migrate") return migrateCmd(root, ports, argv.slice(1));
   if (argv[0] === "adopt" || argv[0] === "sync") return syncCmd(root, ports, argv);
   if (argv[0] === "decompile") return decompileCmd(root, ports, argv.slice(1));
+  if (argv[0] === "arch" || argv[0] === "concept") return (argv[0] === "arch" ? archCmd : conceptCmd)(root, ports, argv.slice(1));
   if (argv[0] === "lint") { // spec rules, offline: no model, no sandbox (src/lint.ts)
     const args = argv.slice(1).map((a, i, all) => (/[/\\]|\.tsx?$/.test(a) && all[i - 1] !== "--profile" && all[i - 1] !== "--format" ? relative(root, resolve(process.cwd(), a)).split(sep).join("/") : a));
     return lintCommand(ports, request(root, null, []), args, { out: (l) => console.log(l), err: (l) => console.error(l), message: (c) => MESSAGES[c] ?? "" });
